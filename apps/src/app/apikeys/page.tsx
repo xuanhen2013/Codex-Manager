@@ -49,7 +49,6 @@ import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useI18n } from "@/lib/i18n/provider";
 import { accountClient } from "@/lib/api/account-client";
 import { appClient } from "@/lib/api/app-client";
-import { isTauriRuntime } from "@/lib/api/transport";
 import {
   buildGeminiGatewayEndpoint,
   buildOpenAiGatewayEndpoint,
@@ -466,11 +465,7 @@ export default function ApiKeysPage() {
   };
 
   const openCcSwitchImportUrl = async (url: string) => {
-    if (isTauriRuntime()) {
-      await appClient.openInBrowser(url);
-      return;
-    }
-    window.location.href = url;
+    await appClient.openExternalUrl(url);
   };
 
   const importToCcSwitch = async (key: (typeof apiKeys)[number]) => {
