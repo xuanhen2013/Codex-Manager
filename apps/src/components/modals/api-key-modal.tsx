@@ -11,6 +11,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -40,7 +41,7 @@ import {
 } from "@/lib/utils/api-key-quota";
 import { toast } from "sonner";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
-import { Key, Clipboard, ShieldCheck } from "lucide-react";
+import { Key, Clipboard, ShieldCheck, Info } from "lucide-react";
 import type { ApiKey, ApiKeyOwner, AppUser } from "@/types";
 
 const PROTOCOL_LABELS: Record<string, string> = {
@@ -412,9 +413,10 @@ export function ApiKeyModal({
 
         <div className="grid gap-5 py-4">
           {!isServiceReady ? (
-            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-              {unavailableMessage}
-            </div>
+            <Alert>
+              <Info />
+              <AlertDescription>{unavailableMessage}</AlertDescription>
+            </Alert>
           ) : null}
           <div className="grid grid-cols-2 gap-4 items-start">
             <div className="grid gap-2 content-start">

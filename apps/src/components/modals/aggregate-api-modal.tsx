@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Clipboard, Database, ShieldCheck } from "lucide-react";
+import { Clipboard, Database, Info, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -14,6 +14,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -528,9 +530,10 @@ export function AggregateApiModal({
           <div className="overflow-y-auto px-5 py-3">
             <div className="grid gap-4">
               {!isServiceReady ? (
-                <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-                  {unavailableMessage}
-                </div>
+                <Alert>
+                  <Info />
+                  <AlertDescription>{unavailableMessage}</AlertDescription>
+                </Alert>
               ) : null}
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -712,7 +715,8 @@ export function AggregateApiModal({
               )}
 
               <div className="grid gap-4 xl:grid-cols-2">
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                <Card size="sm">
+                  <CardContent className="grid gap-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label className="text-sm">{t("自定义认证参数")}</Label>
@@ -867,9 +871,11 @@ export function AggregateApiModal({
                       ) : null}
                     </div>
                   ) : null}
-                </div>
+                  </CardContent>
+                </Card>
 
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                <Card size="sm">
+                  <CardContent className="grid gap-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label className="text-sm">{t("自定义 action")}</Label>
@@ -896,10 +902,12 @@ export function AggregateApiModal({
                       />
                     </div>
                   ) : null}
-                </div>
+                  </CardContent>
+                </Card>
               </div>
 
-              <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+              <Card size="sm">
+                <CardContent className="grid gap-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <Label className="text-sm">{t("余额检测")}</Label>
@@ -1190,7 +1198,8 @@ export function AggregateApiModal({
                     ) : null}
                   </div>
                 ) : null}
-              </div>
+                </CardContent>
+              </Card>
 
               {generatedKey ? (
                 <div className="space-y-2 border-t pt-2">

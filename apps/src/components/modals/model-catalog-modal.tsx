@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -465,34 +466,38 @@ export function ModelCatalogModal({
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/35 px-4 py-3">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">{t("可用于 API")}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("开启后必须至少配置一个启用映射，否则只能保存为草稿。")}
-                  </p>
-                </div>
-                <Switch
-                  checked={draft.supportedInApi}
-                  onCheckedChange={(checked) =>
-                    updateDraft("supportedInApi", checked)
-                  }
-                />
-              </div>
-              <div className="flex items-center justify-between rounded-xl border border-border/60 bg-background/35 px-4 py-3">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">{t("保留本地覆写")}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("开启后，远端刷新不会直接覆盖当前本地版本。")}
-                  </p>
-                </div>
-                <Switch
-                  checked={draft.userEdited}
-                  onCheckedChange={(checked) =>
-                    updateDraft("userEdited", checked)
-                  }
-                />
-              </div>
+              <Card size="sm">
+                <CardContent className="flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{t("可用于 API")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("开启后必须至少配置一个启用映射，否则只能保存为草稿。")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.supportedInApi}
+                    onCheckedChange={(checked) =>
+                      updateDraft("supportedInApi", checked)
+                    }
+                  />
+                </CardContent>
+              </Card>
+              <Card size="sm">
+                <CardContent className="flex items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">{t("保留本地覆写")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("开启后，远端刷新不会直接覆盖当前本地版本。")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.userEdited}
+                    onCheckedChange={(checked) =>
+                      updateDraft("userEdited", checked)
+                    }
+                  />
+                </CardContent>
+              </Card>
             </div>
 
             <div className="space-y-2">

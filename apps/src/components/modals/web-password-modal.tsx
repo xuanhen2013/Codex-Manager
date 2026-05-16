@@ -11,6 +11,8 @@ import {
   DialogFooter
 } from "@/components/ui/dialog";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -262,29 +264,34 @@ export function WebPasswordModal({ open, onOpenChange }: WebPasswordModalProps) 
 
         <div className="grid gap-4 px-5 py-4">
           {!canAccessManagementRpc ? (
-            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-              {t("当前运行环境暂不支持读取或保存访问密码。")}
-            </div>
+            <Alert>
+              <ShieldAlert />
+              <AlertDescription>
+                {t("当前运行环境暂不支持读取或保存访问密码。")}
+              </AlertDescription>
+            </Alert>
           ) : null}
           {webAuthMode === "accounts" ? (
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-700 dark:text-blue-300 text-sm">
-              <UsersRound className="h-4 w-4" />
-              <span>
+            <Alert>
+              <UsersRound />
+              <AlertDescription>
                 {appSettings.appUsersConfigured
                   ? t("账号系统已启用")
                   : t("账号系统未初始化，首次打开 Web 登录页时会创建管理员")}
-              </span>
-            </div>
+              </AlertDescription>
+            </Alert>
           ) : appSettings.webAccessPasswordConfigured ? (
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 text-sm">
-              <ShieldCheck className="h-4 w-4" />
-              <span>{t("当前已启用访问密码保护")}</span>
-            </div>
+            <Alert>
+              <ShieldCheck />
+              <AlertDescription>{t("当前已启用访问密码保护")}</AlertDescription>
+            </Alert>
           ) : (
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-600 dark:text-yellow-400 text-sm">
-              <ShieldAlert className="h-4 w-4" />
-              <span>{t("当前未设置访问密码，Web 管理页处于公开状态")}</span>
-            </div>
+            <Alert>
+              <ShieldAlert />
+              <AlertDescription>
+                {t("当前未设置访问密码，Web 管理页处于公开状态")}
+              </AlertDescription>
+            </Alert>
           )}
 
           <div className="grid gap-2">
@@ -335,74 +342,79 @@ export function WebPasswordModal({ open, onOpenChange }: WebPasswordModalProps) 
             </p>
           </div>
 
-          <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
-            <div className="flex items-center gap-3">
-              <WalletCards className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium">{t("额度分发")}</div>
-                <div className="text-xs text-muted-foreground">
-                  {distributionRequiresAccounts
-                    ? t("请先启用账号系统，再开启额度分发。")
-                    : appSettings.distributionEnabled && distributionLocked
-                      ? t("已进入账号计费模式，不能从界面关闭额度分发。")
-                      : t("启用后平台 Key 需要归属到成员钱包")}
+          <Card size="sm">
+            <CardContent className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <WalletCards className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <div className="text-sm font-medium">{t("额度分发")}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {distributionRequiresAccounts
+                      ? t("请先启用账号系统，再开启额度分发。")
+                      : appSettings.distributionEnabled && distributionLocked
+                        ? t("已进入账号计费模式，不能从界面关闭额度分发。")
+                        : t("启用后平台 Key 需要归属到成员钱包")}
+                  </div>
                 </div>
               </div>
-            </div>
-            <Switch
-              checked={distributionEnabled}
-              disabled={distributionSwitchDisabled}
-              onCheckedChange={setDistributionEnabled}
-            />
-          </div>
+              <Switch
+                checked={distributionEnabled}
+                disabled={distributionSwitchDisabled}
+                onCheckedChange={setDistributionEnabled}
+              />
+            </CardContent>
+          </Card>
 
           {(accountModeLocked || distributionLocked) && lockReasonLabels.length > 0 ? (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
-              <div className="font-medium">
+            <Alert>
+              <ShieldAlert />
+              <AlertTitle>
                 {t("已进入账号计费模式。为避免权限归属错乱和账务断层，不能从界面关闭账号系统或额度分发。")}
-              </div>
-              <div className="mt-1 text-xs">
+              </AlertTitle>
+              <AlertDescription>
                 {t("锁定原因")}: {lockReasonLabels.join("、")}
-              </div>
-            </div>
+              </AlertDescription>
+            </Alert>
           ) : null}
 
           {webAuthMode === "password" ? (
-            <div className="grid gap-3 rounded-lg border border-border/60 bg-background/35 p-3">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <KeyRound className="h-4 w-4 text-muted-foreground" />
-                {t("访问密码")}
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="grid gap-2">
-                  <Label htmlFor="password">{t("新密码")}</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder={t("新密码")}
-                    value={password}
-                    disabled={!canAccessManagementRpc}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
+            <Card size="sm">
+              <CardContent className="grid gap-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <KeyRound className="h-4 w-4 text-muted-foreground" />
+                  {t("访问密码")}
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="confirm">{t("确认新密码")}</Label>
-                  <Input
-                    id="confirm"
-                    type="password"
-                    placeholder={t("确认新密码")}
-                    value={confirmPassword}
-                    disabled={!canAccessManagementRpc}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                  />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="password">{t("新密码")}</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      placeholder={t("新密码")}
+                      value={password}
+                      disabled={!canAccessManagementRpc}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="confirm">{t("确认新密码")}</Label>
+                    <Input
+                      id="confirm"
+                      type="password"
+                      placeholder={t("确认新密码")}
+                      value={confirmPassword}
+                      disabled={!canAccessManagementRpc}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                    />
+                  </div>
                 </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {appSettings.webAccessPasswordConfigured
-                  ? t("留空保存时会保留当前访问密码。")
-                  : t("首次启用访问密码模式必须填写密码。")}
-              </p>
-            </div>
+                <p className="text-xs text-muted-foreground">
+                  {appSettings.webAccessPasswordConfigured
+                    ? t("留空保存时会保留当前访问密码。")
+                    : t("首次启用访问密码模式必须填写密码。")}
+                </p>
+              </CardContent>
+            </Card>
           ) : null}
         </div>
 

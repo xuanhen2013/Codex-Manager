@@ -36,6 +36,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -1252,58 +1254,60 @@ function AdminSettingsPage() {
               <CardDescription>{t("控制应用启动和窗口行为")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="flex flex-col gap-3 rounded-xl border border-border/50 bg-background/45 p-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
-                  <Label>{updateActionLabel}</Label>
-                  <p className="text-xs text-muted-foreground">
-                    {updateActionDescription}
-                  </p>
-                  {lastUpdateCheck ? (
+              <Card size="sm">
+                <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1">
+                    <Label>{updateActionLabel}</Label>
                     <p className="text-xs text-muted-foreground">
-                      {preparedUpdate
-                        ? `${t("已下载")} ${preparedUpdate.latestVersion || preparedUpdate.releaseTag || t("新版本")}${t("，等待替换更新")}`
-                        : lastUpdateCheck.hasUpdate
-                          ? `${t("发现新版本")} ${lastUpdateCheck.latestVersion || lastUpdateCheck.releaseTag || t("可用")}`
-                          : lastUpdateCheck.reason ||
-                            `${t("当前版本")} ${lastUpdateCheck.currentVersion || t("未知")} ${t("已是最新")}`}
+                      {updateActionDescription}
                     </p>
-                  ) : null}
-                  {shouldShowUpdateLogsEntry ? (
-                    <div className="pt-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
-                        onClick={handleOpenUpdateLogsDir}
-                      >
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        {t("打开日志目录")}
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-                <Button
-                  variant="outline"
-                  className="gap-2 self-start md:self-auto"
-                  disabled={!canSelfUpdate || updateActionBusy}
-                  onClick={handleUpdateAction}
-                >
-                  {manualUpdateCheckPending ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                  ) : prepareUpdate.isPending ? (
-                    <Download className="h-4 w-4 animate-pulse" />
-                  ) : applyPreparedUpdate.isPending ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
-                  ) : hasPreparedUpdate ? (
-                    <Check className="h-4 w-4" />
-                  ) : canDownloadUpdate ? (
-                    <Download className="h-4 w-4" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
-                  )}
-                  {updateActionBusyLabel}
-                </Button>
-              </div>
+                    {lastUpdateCheck ? (
+                      <p className="text-xs text-muted-foreground">
+                        {preparedUpdate
+                          ? `${t("已下载")} ${preparedUpdate.latestVersion || preparedUpdate.releaseTag || t("新版本")}${t("，等待替换更新")}`
+                          : lastUpdateCheck.hasUpdate
+                            ? `${t("发现新版本")} ${lastUpdateCheck.latestVersion || lastUpdateCheck.releaseTag || t("可用")}`
+                            : lastUpdateCheck.reason ||
+                              `${t("当前版本")} ${lastUpdateCheck.currentVersion || t("未知")} ${t("已是最新")}`}
+                      </p>
+                    ) : null}
+                    {shouldShowUpdateLogsEntry ? (
+                      <div className="pt-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
+                          onClick={handleOpenUpdateLogsDir}
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                          {t("打开日志目录")}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="gap-2 self-start md:self-auto"
+                    disabled={!canSelfUpdate || updateActionBusy}
+                    onClick={handleUpdateAction}
+                  >
+                    {manualUpdateCheckPending ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : prepareUpdate.isPending ? (
+                      <Download className="h-4 w-4 animate-pulse" />
+                    ) : applyPreparedUpdate.isPending ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : hasPreparedUpdate ? (
+                      <Check className="h-4 w-4" />
+                    ) : canDownloadUpdate ? (
+                      <Download className="h-4 w-4" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    {updateActionBusyLabel}
+                  </Button>
+                </CardContent>
+              </Card>
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>{t("关闭时最小化到托盘")}</Label>
@@ -1385,13 +1389,15 @@ function AdminSettingsPage() {
                 </Select>
               </div>
 
-              <div className="rounded-xl border border-border/50 bg-background/45 p-4 text-sm">
+              <Card size="sm">
+                <CardContent className="text-sm">
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">{t("当前访问地址")}</span>
                   <code className="text-xs text-primary">
                     {snapshot.serviceAddr}
                   </code>
                 </div>
+                <Separator className="my-2" />
                 <div className="mt-2 flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">{t("实际监听地址")}</span>
                   <code className="text-xs text-primary">
@@ -1401,7 +1407,8 @@ function AdminSettingsPage() {
                     )}
                   </code>
                 </div>
-              </div>
+                </CardContent>
+              </Card>
 
               <p className="text-[10px] text-muted-foreground">
                 {t("切换到")} <code>0.0.0.0</code>{" "}
@@ -1423,8 +1430,9 @@ function AdminSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex flex-col gap-3 rounded-xl border border-border/50 bg-background/45 p-4 md:flex-row md:items-center md:justify-between">
-                <div className="space-y-1">
+              <Card size="sm">
+                <CardContent className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <Label>{t("当前访问方式")}</Label>
                     <Badge variant="secondary">{t(webAuthModeLabel)}</Badge>
@@ -1434,17 +1442,18 @@ function AdminSettingsPage() {
                       ? t("额度分发已开启，平台 Key 会按归属钱包扣减额度。")
                       : t("额度分发未开启，平台 Key 不会扣减成员钱包额度。")}
                   </p>
-                </div>
-                <Button
-                  variant="outline"
-                  className="gap-2 self-start md:self-auto"
-                  disabled={!canAccessManagementRpc}
-                  onClick={() => setWebPasswordModalOpen(true)}
-                >
-                  <ShieldCheck className="h-4 w-4" />
-                  {t("访问控制")}
-                </Button>
-              </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="gap-2 self-start md:self-auto"
+                    disabled={!canAccessManagementRpc}
+                    onClick={() => setWebPasswordModalOpen(true)}
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    {t("访问控制")}
+                  </Button>
+                </CardContent>
+              </Card>
             </CardContent>
           </Card>
 
@@ -1946,7 +1955,8 @@ function AdminSettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+              <Card size="sm">
+                <CardContent>
                 <div className="grid gap-4 lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)] lg:items-end">
                   <div className="space-y-2">
                     <Label>{t("运行模式")}</Label>
@@ -2012,7 +2022,8 @@ function AdminSettingsPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 lg:flex-row lg:items-center lg:justify-between">
+                <Separator className="my-4" />
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <p className="text-xs leading-6 text-muted-foreground">
                     {activeWorkerSummary}
                   </p>
@@ -2027,7 +2038,8 @@ function AdminSettingsPage() {
                     {t("高级参数")}
                   </Button>
                 </div>
-              </div>
+                </CardContent>
+              </Card>
             </CardContent>
           </Card>
           <Dialog
@@ -2244,21 +2256,23 @@ function AdminSettingsPage() {
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-6">
-                    <div className="rounded-lg border bg-accent/30 p-4 text-sm leading-relaxed text-muted-foreground">
-                      <Info className="mr-2 inline-block h-4 w-4 text-primary" />
-                      {t(
-                        ENV_DESCRIPTION_MAP[selectedEnvKey] ||
-                          `${selectedEnvItem?.label} 对应环境变量，修改后会应用到相关模块。`,
-                      )}
-                    </div>
+                    <Alert>
+                      <Info />
+                      <AlertDescription>
+                        {t(
+                          ENV_DESCRIPTION_MAP[selectedEnvKey] ||
+                            `${selectedEnvItem?.label} 对应环境变量，修改后会应用到相关模块。`,
+                        )}
+                      </AlertDescription>
+                    </Alert>
                     {selectedEnvRiskLevel === "high" ? (
-                      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm leading-relaxed text-red-700 dark:text-red-300">
-                        {t(selectedEnvSafetyNote)}
-                      </div>
+                      <Alert variant="destructive">
+                        <AlertDescription>{t(selectedEnvSafetyNote)}</AlertDescription>
+                      </Alert>
                     ) : (
-                      <div className="rounded-lg border border-border/50 bg-muted/20 p-4 text-sm leading-relaxed text-muted-foreground">
-                        {t(selectedEnvSafetyNote)}
-                      </div>
+                      <Alert>
+                        <AlertDescription>{t(selectedEnvSafetyNote)}</AlertDescription>
+                      </Alert>
                     )}
 
                     <div className="space-y-2">
@@ -2283,7 +2297,8 @@ function AdminSettingsPage() {
                       </p>
                     </div>
 
-                    <div className="flex gap-3 border-t pt-4">
+                    <Separator />
+                    <div className="flex gap-3">
                       <Button onClick={handleSaveEnv} className="gap-2">
                         <Save className="h-4 w-4" /> {t("保存修改")}
                       </Button>
@@ -2351,13 +2366,15 @@ function AdminSettingsPage() {
           </DialogHeader>
 
           <div className="space-y-3 text-sm">
-            <div className="rounded-xl border border-border/50 bg-background/45 p-4">
+            <Card size="sm">
+              <CardContent>
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">{t("当前版本")}</span>
                 <span className="font-medium">
                   {updateDialogCheck?.currentVersion || t("未知")}
                 </span>
               </div>
+              <Separator className="my-2" />
               <div className="mt-2 flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">{t("目标版本")}</span>
                 <span className="font-medium">
@@ -2367,6 +2384,7 @@ function AdminSettingsPage() {
                     t("未知")}
                 </span>
               </div>
+              <Separator className="my-2" />
               <div className="mt-2 flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">{t("更新模式")}</span>
                 <span className="font-medium">
@@ -2376,23 +2394,31 @@ function AdminSettingsPage() {
                 </span>
               </div>
               {preparedUpdate?.assetName ? (
+                <>
+                <Separator className="my-2" />
                 <div className="mt-2 flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">{t("更新文件")}</span>
                   <span className="max-w-[240px] truncate font-mono text-xs">
                     {preparedUpdate.assetName}
                   </span>
                 </div>
+                </>
               ) : null}
-            </div>
+              </CardContent>
+            </Card>
 
             {preparedUpdate ? null : updateDialogCheck?.reason ? (
-              <div className="rounded-xl border border-border/50 bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
-                {updateDialogCheck.reason}
-              </div>
+              <Alert>
+                <AlertDescription className="text-xs leading-5">
+                  {updateDialogCheck.reason}
+                </AlertDescription>
+              </Alert>
             ) : (
-              <div className="rounded-xl border border-border/50 bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
-                {t("建议先下载更新包，下载完成后再执行安装或重启更新。")}
-              </div>
+              <Alert>
+                <AlertDescription className="text-xs leading-5">
+                  {t("建议先下载更新包，下载完成后再执行安装或重启更新。")}
+                </AlertDescription>
+              </Alert>
             )}
           </div>
 
