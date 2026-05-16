@@ -509,7 +509,7 @@ export function CodexCliOnboardingDialog({
             </section>
           </div>
 
-          <DialogFooter className="mx-0 mb-0 mt-auto rounded-b-xl border-t border-border/60 bg-background/90 px-6 py-4 shadow-[0_-8px_24px_rgba(15,23,42,0.06)] supports-backdrop-filter:backdrop-blur-sm sm:flex-nowrap sm:items-center sm:justify-between">
+          <DialogFooter className="mx-0 mb-0 mt-auto rounded-b-xl border-t border-border/60 bg-background px-6 py-4 sm:flex-nowrap sm:items-center sm:justify-between">
             <label className="flex items-center gap-3 pr-4 text-sm text-muted-foreground">
               <Checkbox
                 checked={dismissPermanently}

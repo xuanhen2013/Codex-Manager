@@ -1499,8 +1499,8 @@ function AdminSettingsPage() {
                           className={cn(
                             "h-14 flex-1 rounded-xl border",
                             item.id === "modern"
-                              ? "border-primary/20 bg-[linear-gradient(160deg,rgba(255,255,255,0.88),rgba(37,99,235,0.1)),linear-gradient(180deg,rgba(191,219,254,0.6),rgba(255,255,255,0.85))]"
-                              : "border-slate-300/70 bg-[radial-gradient(at_0%_0%,#bfdbfe_0px,transparent_50%),radial-gradient(at_100%_0%,#cffafe_0px,transparent_50%),radial-gradient(at_50%_100%,#ffffff_0px,transparent_50%),rgba(255,255,255,0.86)]",
+                              ? "border-primary/20 bg-accent/50"
+                              : "border-border/70 bg-muted/70",
                           )}
                         />
                         <div className="flex w-16 flex-col gap-1.5">
@@ -1508,16 +1508,16 @@ function AdminSettingsPage() {
                             className={cn(
                               "h-4 rounded-lg border",
                               item.id === "modern"
-                                ? "border-primary/15 bg-white/80 shadow-sm"
-                                : "border-slate-300/70 bg-white/70",
+                                ? "border-primary/15 bg-card shadow-sm"
+                                : "border-border/70 bg-card",
                             )}
                           />
                           <div
                             className={cn(
                               "h-4 rounded-lg border",
                               item.id === "modern"
-                                ? "border-primary/15 bg-white/70 shadow-sm"
-                                : "border-slate-300/70 bg-white/60",
+                                ? "border-primary/15 bg-card/80 shadow-sm"
+                                : "border-border/70 bg-card/80",
                             )}
                           />
                         </div>

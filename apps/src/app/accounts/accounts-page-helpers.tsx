@@ -254,7 +254,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
         side="right"
         align="center"
         sideOffset={10}
-        className="max-w-[340px] rounded-xl bg-background p-3 text-foreground shadow-2xl"
+        className="max-w-[340px] rounded-lg bg-popover p-3 text-popover-foreground shadow-md"
       >
         <div className="space-y-3">
           <div className="space-y-1">
@@ -405,7 +405,7 @@ export function AccountStatusCell({ account }: { account: Account }) {
       <TooltipContent
         side="left"
         align="center"
-        className="max-w-[320px] bg-background p-3 text-foreground shadow-2xl"
+        className="max-w-[320px] bg-popover p-3 text-popover-foreground shadow-md"
       >
         <div className="space-y-2 text-left">
           <div className="space-y-0.5">

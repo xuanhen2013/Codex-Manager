@@ -27,7 +27,7 @@ export function ShellTabs() {
   }
 
   return (
-    <div className="sticky top-0 z-10 -mx-6 -mt-6 border-b bg-background/80 px-6 py-3 backdrop-blur-sm">
+    <div className="sticky top-0 z-10 -mx-6 -mt-6 border-b bg-background px-6 py-3">
       <div className="flex flex-wrap items-center gap-2">
         {openShellTabs.map((path) => {
           const isActive = path === currentShellPath;

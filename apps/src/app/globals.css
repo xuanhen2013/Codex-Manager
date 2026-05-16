@@ -303,27 +303,25 @@
 
 /* shadcn-aligned surfaces */
 .glass-card {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   background: var(--card);
   border: 1px solid var(--border);
-  box-shadow:
-    0 1px 2px rgb(15 23 42 / 0.04),
-    0 8px 24px -20px rgb(15 23 42 / 0.22);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
   transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
 .glass-sidebar {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  background: color-mix(in srgb, var(--card) 92%, var(--background));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--card) 96%, var(--background));
   border-right: 1px solid var(--border);
 }
 
 .glass-header {
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  background: color-mix(in srgb, var(--card) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--card) 94%, transparent);
   border-bottom: 1px solid var(--border);
 }
 
