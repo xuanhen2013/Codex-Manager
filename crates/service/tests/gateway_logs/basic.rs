@@ -216,10 +216,14 @@ fn gateway_reports_wallet_quota_exhaustion_in_chinese() {
             ("Authorization", &format!("Bearer {platform_key}")),
         ],
     );
-    assert_eq!(status, 429, "response body: {body}");
+    assert_eq!(status, 402, "response body: {body}");
     assert!(
         body.contains("额度不足，请联系管理员"),
         "gateway should report wallet quota exhaustion in Chinese, got {body}"
+    );
+    assert!(
+        !body.contains("Too Many Requests"),
+        "wallet quota exhaustion must not look like retryable upstream throttling, got {body}"
     );
 }
 
