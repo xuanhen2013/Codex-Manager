@@ -58,6 +58,7 @@ import { useMemberDashboardSummary } from "@/hooks/useMemberDashboardSummary";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import {
+  estimateChartYAxisWidth,
   formatCompactTokenAmount,
   formatPercent,
 } from "@/lib/dashboard/format";
@@ -357,6 +358,10 @@ function DailyTokenLineChart({
     estimatedCostUsd: item.usage.estimatedCostUsd,
     requestCount: item.usage.requestCount,
   }));
+  const yAxisWidth = estimateChartYAxisWidth(
+    [0, ...chartData.map((item) => item.totalTokens)],
+    formatCompactTokenAmount,
+  );
 
   return (
     <ChartContainer
@@ -395,7 +400,7 @@ function DailyTokenLineChart({
           tickLine={false}
           axisLine={false}
           tickMargin={10}
-          width={44}
+          width={yAxisWidth}
           tickFormatter={(value) => formatCompactTokenAmount(Number(value))}
         />
         <ChartTooltip
