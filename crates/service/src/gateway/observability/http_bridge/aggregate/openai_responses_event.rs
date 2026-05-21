@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 use super::output_text::{
     append_output_text, append_output_text_raw, collect_output_text_from_event_fields,
@@ -58,6 +59,7 @@ enum OpenAIResponsesOutputTextKind {
 #[derive(Debug, Clone, Default)]
 pub(in super::super) struct OpenAIResponsesOutputTextState {
     saw_delta: bool,
+    seen_snapshot_keys: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,7 @@ pub(in super::super) struct OpenAIResponsesEvent {
     pub(in super::super) event_type: Option<String>,
     pub(in super::super) usage: UpstreamResponseUsage,
     output_text_kind: Option<OpenAIResponsesOutputTextKind>,
+    output_text_snapshot_key: Option<String>,
     pub(in super::super) terminal: Option<SseTerminal>,
     pub(in super::super) upstream_error_hint: Option<String>,
 }
@@ -89,16 +92,20 @@ impl OpenAIResponsesEvent {
 
         let mut usage = parse_usage_from_json(&value);
         usage.output_text = None;
-        let output_text_kind =
-            collect_event_output_text(&value, kind).map(|(extra_output_text, output_text_kind)| {
+        let mut output_text_snapshot_key = None;
+        let output_text_kind = collect_event_output_text(&value, kind).map(
+            |(extra_output_text, output_text_kind, snapshot_key)| {
                 usage.output_text = Some(extra_output_text);
+                output_text_snapshot_key = snapshot_key;
                 output_text_kind
-            });
+            },
+        );
 
         Some(Self {
             event_type,
             usage,
             output_text_kind,
+            output_text_snapshot_key,
             terminal,
             upstream_error_hint,
         })
@@ -127,7 +134,11 @@ impl OpenAIResponsesEvent {
                 text_state.saw_delta = true;
             }
             Some(OpenAIResponsesOutputTextKind::Snapshot) => {
-                if !text_state.saw_delta {
+                let snapshot_key = self
+                    .output_text_snapshot_key
+                    .clone()
+                    .unwrap_or_else(|| output_text.trim().to_string());
+                if !text_state.saw_delta && text_state.seen_snapshot_keys.insert(snapshot_key) {
                     let target_text = target.output_text.get_or_insert_with(String::new);
                     append_output_text_raw(target_text, output_text.as_str());
                 }
@@ -210,10 +221,47 @@ fn collect_completed_response_text(value: &Value, text_out: &mut String) {
     }
 }
 
+fn collect_event_string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            value
+                .get("item")
+                .and_then(|item| item.get(field))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+        .or_else(|| {
+            value
+                .get("output_item")
+                .and_then(|item| item.get(field))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+}
+
+fn snapshot_dedupe_key(value: &Value, text: &str) -> String {
+    let text = text.trim();
+    if let Some(output_index) = value.get("output_index").and_then(Value::as_i64) {
+        return format!("output_index={output_index};text={text}");
+    }
+    if let Some(item_id) = collect_event_string_field(value, "item_id")
+        .or_else(|| collect_event_string_field(value, "id"))
+    {
+        return format!("item_id={item_id};text={text}");
+    }
+    format!("text={text}")
+}
+
 fn collect_event_output_text(
     value: &Value,
     kind: OpenAIResponsesEventKind,
-) -> Option<(String, OpenAIResponsesOutputTextKind)> {
+) -> Option<(String, OpenAIResponsesOutputTextKind, Option<String>)> {
     let mut text_out = String::new();
     let mut output_text_kind = None;
 
@@ -259,7 +307,12 @@ fn collect_event_output_text(
     if text.is_empty() {
         None
     } else {
-        output_text_kind.map(|kind| (text_out, kind))
+        let snapshot_key = matches!(
+            output_text_kind,
+            Some(OpenAIResponsesOutputTextKind::Snapshot)
+        )
+        .then(|| snapshot_dedupe_key(value, text));
+        output_text_kind.map(|kind| (text_out, kind, snapshot_key))
     }
 }
 

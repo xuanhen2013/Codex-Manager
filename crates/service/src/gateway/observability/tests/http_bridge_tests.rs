@@ -2281,6 +2281,50 @@ fn openai_responses_passthrough_reader_usage_text_not_duplicated_across_delta_it
 }
 
 #[test]
+fn openai_responses_passthrough_reader_usage_text_dedupes_snapshot_only_events() {
+    let json_text = r#"{"answer":true}"#;
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[(
+            "event: response.output_text.done\n\
+             data: {\"response_id\":\"resp_snapshot_single\",\"output_index\":0,\"content_index\":0,\"text\":\"{\\\"answer\\\":true}\"}\n\n\
+             event: response.content_part.done\n\
+             data: {\"response_id\":\"resp_snapshot_single\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"{\\\"answer\\\":true}\"}}\n\n\
+             event: response.output_item.done\n\
+             data: {\"response_id\":\"resp_snapshot_single\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"answer\\\":true}\"}]}}\n\n\
+             event: response.completed\n\
+             data: {\"response\":{\"id\":\"resp_snapshot_single\",\"created\":3,\"model\":\"gpt-5.3-codex\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"answer\\\":true}\"}]}],\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}}\n\n",
+            0,
+        )],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        SseKeepAliveFrame::OpenAIResponses,
+        std::time::Instant::now(),
+    );
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read snapshot-only openai responses stream");
+    server
+        .join()
+        .expect("join snapshot-only openai responses upstream");
+
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(mapped.contains("event: response.output_item.done"));
+    assert_eq!(collector.usage.output_text.as_deref(), Some(json_text));
+    assert_eq!(collector.usage.input_tokens, Some(3));
+    assert_eq!(collector.usage.output_tokens, Some(2));
+    assert_eq!(collector.usage.total_tokens, Some(5));
+    assert!(collector.saw_terminal);
+}
+
+#[test]
 fn openai_responses_passthrough_reader_marks_incomplete_terminal_error_from_status_details() {
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
