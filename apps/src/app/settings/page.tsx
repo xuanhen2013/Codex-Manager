@@ -50,7 +50,6 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -68,6 +67,7 @@ import {
   FolderOpen,
   Globe,
   Info,
+  Plus,
   Palette,
   RefreshCw,
   RotateCcw,
@@ -75,6 +75,7 @@ import {
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
+  Trash2,
   Variable,
   UserRound,
   LockKeyhole,
@@ -101,14 +102,18 @@ import {
   WORKER_PRESETS,
   asRecord,
   buildReleaseUrl,
+  createEmptyModelForwardRule,
   type CheckUpdateRequest,
   compareEnvOverrideItems,
+  ensureModelForwardRuleRows,
   formatFreeAccountModelLabel,
   inferServiceBindPreview,
   matchesRecommendedWorkerSettings,
   normalizeEnvRiskLevel,
+  parseModelForwardRules,
   normalizeWorkerRecommendation,
   parseIntegerInput,
+  serializeModelForwardRules,
   readInitialSettingsTab,
   stringifyNumber,
   type SettingsTab,
@@ -311,6 +316,8 @@ function AdminSettingsPage() {
   >(null);
   const [modelForwardRulesDraft, setModelForwardRulesDraft] =
     useState<string | null>(null);
+  const [compactModelForwardRulesDraft, setCompactModelForwardRulesDraft] =
+    useState<string | null>(null);
   const [lastUpdateCheck, setLastUpdateCheck] =
     useState<UpdateCheckResult | null>(null);
   const [updateDialogCheck, setUpdateDialogCheck] =
@@ -400,6 +407,14 @@ function AdminSettingsPage() {
   const snapshot = fetchedSnapshot ?? storedSettings;
   const modelForwardRulesInput =
     modelForwardRulesDraft ?? (snapshot?.modelForwardRules || "");
+  const modelForwardRuleRows = ensureModelForwardRuleRows(
+    parseModelForwardRules(modelForwardRulesInput),
+  );
+  const compactModelForwardRulesInput =
+    compactModelForwardRulesDraft ?? (snapshot?.compactModelForwardRules || "");
+  const compactModelForwardRuleRows = ensureModelForwardRuleRows(
+    parseModelForwardRules(compactModelForwardRulesInput),
+  );
   usePageTransitionReady(
     "/settings/",
     !canAccessManagementRpc || Boolean(snapshot) || isSnapshotError,
@@ -732,6 +747,51 @@ function AdminSettingsPage() {
   const gatewayOriginatorInput =
     gatewayOriginatorDraft ??
     (snapshot?.gatewayOriginator || gatewayOriginatorDefault);
+  const updateModelForwardRuleRows = (
+    updater: (rows: ReturnType<typeof parseModelForwardRules>) => ReturnType<
+      typeof parseModelForwardRules
+    >,
+  ) => {
+    const nextRows = updater(parseModelForwardRules(modelForwardRulesInput));
+    setModelForwardRulesDraft(serializeModelForwardRules(nextRows));
+  };
+  const commitModelForwardRulesDraft = () => {
+    if (modelForwardRulesDraft == null) return;
+    if (modelForwardRulesInput.trim() === (snapshot?.modelForwardRules || "").trim()) {
+      setModelForwardRulesDraft(null);
+      return;
+    }
+    void updateSettings
+      .mutateAsync({
+        modelForwardRules: modelForwardRulesInput,
+      })
+      .then(() => setModelForwardRulesDraft(null))
+      .catch(() => undefined);
+  };
+  const updateCompactModelForwardRuleRows = (
+    updater: (rows: ReturnType<typeof parseModelForwardRules>) => ReturnType<
+      typeof parseModelForwardRules
+    >,
+  ) => {
+    const nextRows = updater(parseModelForwardRules(compactModelForwardRulesInput));
+    setCompactModelForwardRulesDraft(serializeModelForwardRules(nextRows));
+  };
+  const commitCompactModelForwardRulesDraft = () => {
+    if (compactModelForwardRulesDraft == null) return;
+    if (
+      compactModelForwardRulesInput.trim() ===
+      (snapshot?.compactModelForwardRules || "").trim()
+    ) {
+      setCompactModelForwardRulesDraft(null);
+      return;
+    }
+    void updateSettings
+      .mutateAsync({
+        compactModelForwardRules: compactModelForwardRulesInput,
+      })
+      .then(() => setCompactModelForwardRulesDraft(null))
+      .catch(() => undefined);
+  };
   const transportInputValues = {
     sseKeepaliveIntervalMs:
       transportDraft.sseKeepaliveIntervalMs ??
@@ -1799,34 +1859,206 @@ function AdminSettingsPage() {
 
               <div className="grid gap-2">
                 <Label>{t("模型转发规则")}</Label>
-                <Textarea
-                  className="min-h-[132px] max-w-2xl font-mono text-xs"
-                  placeholder={"spark*=gpt-5.4-mini\nclaude-sonnet-4*=gpt-5.4"}
-                  value={modelForwardRulesInput}
-                  onChange={(event) =>
-                    setModelForwardRulesDraft(event.target.value)
-                  }
-                  onBlur={() => {
-                    if (modelForwardRulesDraft == null) return;
-                    if (
-                      modelForwardRulesInput.trim() ===
-                      (snapshot.modelForwardRules || "").trim()
-                    ) {
-                      setModelForwardRulesDraft(null);
+                <div
+                  className="grid max-w-3xl gap-3 rounded-lg border border-border/60 bg-background/40 p-3"
+                  onBlur={(event) => {
+                    const nextTarget = event.relatedTarget;
+                    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
                       return;
                     }
-                    void updateSettings
-                      .mutateAsync({
-                        modelForwardRules: modelForwardRulesInput,
-                      })
-                      .then(() => setModelForwardRulesDraft(null))
-                      .catch(() => undefined);
+                    commitModelForwardRulesDraft();
                   }}
-                />
+                >
+                  <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 px-1 text-[10px] font-medium text-muted-foreground md:grid">
+                    <span>{t("源模型")}</span>
+                    <span>{t("目标模型")}</span>
+                    <span />
+                  </div>
+                  <div className="grid gap-2">
+                    {modelForwardRuleRows.map((rule, index) => (
+                      <div
+                        key={index}
+                        className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                      >
+                        <Input
+                          className="h-10 font-mono text-xs"
+                          aria-label={t("源模型")}
+                          placeholder={t("例如：spark*")}
+                          value={rule.pattern}
+                          onChange={(event) =>
+                            updateModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows);
+                              nextRows[index] = {
+                                ...nextRows[index],
+                                pattern: event.target.value,
+                              };
+                              return nextRows;
+                            })
+                          }
+                        />
+                        <Input
+                          className="h-10 font-mono text-xs"
+                          aria-label={t("目标模型")}
+                          placeholder={t("例如：gpt-5.4-openai-compact")}
+                          value={rule.target}
+                          onChange={(event) =>
+                            updateModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows);
+                              nextRows[index] = {
+                                ...nextRows[index],
+                                target: event.target.value,
+                              };
+                              return nextRows;
+                            })
+                          }
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-10 w-10 shrink-0"
+                          aria-label={t("删除条目")}
+                          onClick={() =>
+                            updateModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows).filter(
+                                (_, rowIndex) => rowIndex !== index,
+                              );
+                              return nextRows.length > 0
+                                ? nextRows
+                                : [createEmptyModelForwardRule()];
+                            })
+                          }
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() =>
+                        updateModelForwardRuleRows((rows) => [
+                          ...ensureModelForwardRuleRows(rows).filter(
+                            (item) => item.pattern.length > 0 || item.target.length > 0,
+                          ),
+                          createEmptyModelForwardRule(),
+                        ])
+                      }
+                    >
+                      <Plus className="h-4 w-4" />
+                      {t("新增规则")}
+                    </Button>
+                  </div>
+                </div>
                 <p className="text-[10px] text-muted-foreground">
-                  {t("一行一条，格式为")} <code>{t("源模型=目标模型")}</code>，{t("支持")}
-                  <code>*</code>{" "}
+                  {t("左边匹配请求模型，右边填写转发目标；支持")} <code>*</code>{" "}
                   {t("通配。平台 Key 没有强绑模型时，会先按这里把请求模型改写，再进入账号路由。")}
+                </p>
+              </div>
+
+              <div className="grid gap-2">
+                <Label>{t("压缩模型转发规则")}</Label>
+                <div
+                  className="grid max-w-3xl gap-3 rounded-lg border border-border/60 bg-background/40 p-3"
+                  onBlur={(event) => {
+                    const nextTarget = event.relatedTarget;
+                    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+                      return;
+                    }
+                    commitCompactModelForwardRulesDraft();
+                  }}
+                >
+                  <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 px-1 text-[10px] font-medium text-muted-foreground md:grid">
+                    <span>{t("源模型")}</span>
+                    <span>{t("目标模型")}</span>
+                    <span />
+                  </div>
+                  <div className="grid gap-2">
+                    {compactModelForwardRuleRows.map((rule, index) => (
+                      <div
+                        key={index}
+                        className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                      >
+                        <Input
+                          className="h-10 font-mono text-xs"
+                          aria-label={t("源模型")}
+                          placeholder={t("例如：gpt-5.4")}
+                          value={rule.pattern}
+                          onChange={(event) =>
+                            updateCompactModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows);
+                              nextRows[index] = {
+                                ...nextRows[index],
+                                pattern: event.target.value,
+                              };
+                              return nextRows;
+                            })
+                          }
+                        />
+                        <Input
+                          className="h-10 font-mono text-xs"
+                          aria-label={t("目标模型")}
+                          placeholder={t("例如：gpt-5.4-openai-compact")}
+                          value={rule.target}
+                          onChange={(event) =>
+                            updateCompactModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows);
+                              nextRows[index] = {
+                                ...nextRows[index],
+                                target: event.target.value,
+                              };
+                              return nextRows;
+                            })
+                          }
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-10 w-10 shrink-0"
+                          aria-label={t("删除条目")}
+                          onClick={() =>
+                            updateCompactModelForwardRuleRows((rows) => {
+                              const nextRows = ensureModelForwardRuleRows(rows).filter(
+                                (_, rowIndex) => rowIndex !== index,
+                              );
+                              return nextRows.length > 0
+                                ? nextRows
+                                : [createEmptyModelForwardRule()];
+                            })
+                          }
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() =>
+                        updateCompactModelForwardRuleRows((rows) => [
+                          ...ensureModelForwardRuleRows(rows).filter(
+                            (item) => item.pattern.length > 0 || item.target.length > 0,
+                          ),
+                          createEmptyModelForwardRule(),
+                        ])
+                      }
+                    >
+                      <Plus className="h-4 w-4" />
+                      {t("新增规则")}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  {t("仅对 /v1/responses/compact 生效；命中后会在 compact 请求里优先改写模型。")}
                 </p>
               </div>
 

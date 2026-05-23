@@ -1457,6 +1457,7 @@ export function normalizeRequestLog(item: unknown): RequestLog | null {
     adaptedPath: asString(source.adaptedPath ?? source.adapted_path),
     method,
     requestType: asString(source.requestType ?? source.request_type) || "http",
+    gatewayMode: asString(source.gatewayMode ?? source.gateway_mode),
     path: requestPath,
     model: asString(source.model),
     upstreamModel: asString(source.upstreamModel ?? source.upstream_model),
@@ -1813,6 +1814,9 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
       asString(item)
     ),
     modelForwardRules: asString(source.modelForwardRules ?? source.model_forward_rules),
+    compactModelForwardRules: asString(
+      source.compactModelForwardRules ?? source.compact_model_forward_rules
+    ),
     accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
     quotaGuard: normalizeQuotaGuard(source.quotaGuard ?? source.quota_guard),
     gatewayOriginator:

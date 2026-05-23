@@ -999,8 +999,17 @@ function RequestRouteInfoCell({ log }: { log: RequestLog }) {
   const recordedPath = String(log.path || log.requestPath || "").trim();
   const originalPath = String(log.originalPath || "").trim();
   const adaptedPath = String(log.adaptedPath || "").trim();
+  const gatewayMode = String(log.gatewayMode || "").trim().toLowerCase();
+  const isCompactGatewayMode = gatewayMode === "compact";
   const upstreamUrl = String(log.upstreamUrl || "").trim();
   const upstreamDisplay = resolveUpstreamDisplay(upstreamUrl, t);
+  const forwardedPath = adaptedPath && adaptedPath !== displayPath ? adaptedPath : "";
+  const friendlyDisplayPath =
+    isCompactGatewayMode
+      ? t("上下文压缩")
+      : displayPathLabel && displayPathLabel !== displayPath
+        ? displayPathLabel
+        : "";
   const requestType = normalizeRequestType(log.requestType);
   const canonicalSource = String(log.canonicalSource || "native_codex").trim();
   const sizeRejectStage = String(log.sizeRejectStage || "-").trim();
@@ -1011,11 +1020,31 @@ function RequestRouteInfoCell({ log }: { log: RequestLog }) {
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1.5">
             <RequestTypeBadge requestType={requestType} />
+            {isCompactGatewayMode ? (
+              <Badge className="h-5 rounded-full border-amber-500/20 bg-amber-500/10 px-1.5 text-[10px] font-medium text-amber-500">
+                {t("压缩")}
+              </Badge>
+            ) : null}
             <span className="font-bold text-primary">{log.method || "-"}</span>
           </div>
-          <span className="max-w-[200px] truncate text-muted-foreground">
-            {displayPathLabel}
+          <span className="max-w-[220px] truncate font-mono text-[11px] text-foreground">
+            {displayPath}
           </span>
+          {friendlyDisplayPath ? (
+            <span className="max-w-[220px] truncate text-[10px] text-muted-foreground">
+              {friendlyDisplayPath}
+            </span>
+          ) : null}
+          {forwardedPath ? (
+            <span className="max-w-[220px] truncate font-mono text-[10px] text-amber-500">
+              -&gt; {forwardedPath}
+            </span>
+          ) : null}
+          {upstreamDisplay ? (
+            <span className="max-w-[220px] truncate font-mono text-[10px] text-cyan-500">
+              =&gt; {upstreamDisplay}
+            </span>
+          ) : null}
         </div>
       </TooltipTrigger>
       <TooltipContent className="max-w-md">
@@ -1024,6 +1053,12 @@ function RequestRouteInfoCell({ log }: { log: RequestLog }) {
             <div className="text-[10px] text-background/70">{t("请求类型")}</div>
             <div className="font-mono text-[11px] uppercase">{requestType}</div>
           </div>
+          {gatewayMode ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-background/70">{t("网关模式")}</div>
+              <div className="font-mono text-[11px]">{gatewayMode}</div>
+            </div>
+          ) : null}
           <div className="space-y-0.5">
             <div className="text-[10px] text-background/70">
               {t("规范来源")}
@@ -1068,11 +1103,11 @@ function RequestRouteInfoCell({ log }: { log: RequestLog }) {
               </div>
             </div>
           ) : null}
-          {adaptedPath && adaptedPath !== displayPath ? (
+          {forwardedPath ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("转发地址")}</div>
+              <div className="text-[10px] text-background/70">{t("转发路径")}</div>
               <div className="break-all font-mono text-[11px]">
-                {adaptedPath}
+                {forwardedPath}
               </div>
             </div>
           ) : null}
@@ -1210,17 +1245,18 @@ function ModelEffortCell({
   const badgeServiceTier =
     effectiveServiceTier !== "auto" ? effectiveServiceTier : clientServiceTier;
   const display = formatModelEffortDisplay(log);
+  const forwardedModel = upstreamModel && upstreamModel !== model ? upstreamModel : "";
 
   return (
     <Tooltip>
       <TooltipTrigger render={<div />} className="block text-left">
         <div className="flex flex-col gap-1">
-          <span className="block max-w-[160px] truncate font-medium text-foreground">
+          <span className="block max-w-[200px] truncate font-medium text-foreground">
             {display}
           </span>
-          {upstreamModel && upstreamModel !== model ? (
-            <span className="block max-w-[160px] truncate font-mono text-[10px] text-muted-foreground">
-              -&gt; {upstreamModel}
+          {forwardedModel ? (
+            <span className="block max-w-[200px] truncate font-mono text-[10px] text-amber-500">
+              {t("转发")} {forwardedModel}
             </span>
           ) : null}
           <ServiceTierBadge serviceTier={badgeServiceTier} />
@@ -1922,19 +1958,19 @@ function LogsPageContent() {
               </div>
             </CardHeader>
             <CardContent className="px-0">
-              <Table className="min-w-[1320px] table-fixed">
+              <Table className="min-w-[1500px] table-fixed">
             <TableHeader>
               <TableRow>
                 <TableHead className="h-12 w-[150px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
                   {t("时间")}
                 </TableHead>
-                <TableHead className="w-[120px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                <TableHead className="w-[240px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
                   {t("类型 / 方法 / 路径")}
                 </TableHead>
                 <TableHead className="w-[224px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
                   {t("账号 / 密钥")}
                 </TableHead>
-                <TableHead className="w-[180px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
+                <TableHead className="w-[220px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
                   {t("模型 / 推理 / 等级")}
                 </TableHead>
                 <TableHead className="w-[92px] px-4 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">

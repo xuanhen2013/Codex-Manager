@@ -56,6 +56,7 @@ export interface AppSettings {
   freeAccountMaxModel: string;
   freeAccountMaxModelOptions: string[];
   modelForwardRules: string;
+  compactModelForwardRules: string;
   accountMaxInflight: number;
   quotaGuard: QuotaGuardSettings;
   gatewayOriginator: string;

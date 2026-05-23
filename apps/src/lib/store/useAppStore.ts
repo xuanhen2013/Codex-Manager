@@ -87,6 +87,7 @@ export const useAppStore = create<AppState>((set) => ({
       "gpt-5.4",
     ],
     modelForwardRules: "",
+    compactModelForwardRules: "",
     accountMaxInflight: 1,
     quotaGuard: {
       enabled: true,

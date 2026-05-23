@@ -7,6 +7,35 @@ use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
 use codexmanager_core::storage::Storage;
 use serde_json::Value;
 
+const COMPACT_API_PATH_ENV: &str = "CODEXMANAGER_COMPACT_API_PATH";
+
+struct RuntimeEnvGuard {
+    name: &'static str,
+    previous_value: Option<String>,
+}
+
+impl RuntimeEnvGuard {
+    fn set(name: &'static str, value: &str) -> Self {
+        let previous_value = std::env::var(name).ok();
+        std::env::set_var(name, value);
+        crate::gateway::reload_runtime_config_from_env();
+        Self {
+            name,
+            previous_value,
+        }
+    }
+}
+
+impl Drop for RuntimeEnvGuard {
+    fn drop(&mut self) {
+        match self.previous_value.as_deref() {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+        crate::gateway::reload_runtime_config_from_env();
+    }
+}
+
 /// 函数 `sample_api_key`
 ///
 /// 作者: gaohongshun
@@ -256,6 +285,7 @@ fn sample_incoming_headers(
         originator,
         session_affinity,
         None,
+        None,
     )
 }
 
@@ -266,6 +296,7 @@ fn sample_incoming_headers_with_session_id(
     originator: Option<&str>,
     session_affinity: Option<&str>,
     session_id: Option<&str>,
+    subagent: Option<&str>,
 ) -> super::super::super::IncomingHeaderSnapshot {
     let mut headers = HeaderMap::new();
     if let Some(conversation_id) = conversation_id {
@@ -302,6 +333,12 @@ fn sample_incoming_headers_with_session_id(
         headers.insert(
             "session_id",
             HeaderValue::from_str(session_id).expect("header"),
+        );
+    }
+    if let Some(subagent) = subagent {
+        headers.insert(
+            "x-openai-subagent",
+            HeaderValue::from_str(subagent).expect("header"),
         );
     }
     super::super::super::IncomingHeaderSnapshot::from_http_headers(&headers)
@@ -418,7 +455,7 @@ fn aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_with
         effective_service_tier_for_log,
         _has_prompt_cache_key,
         _request_shape,
-    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
 
     assert_eq!(
@@ -454,7 +491,7 @@ fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_sse() {
     let body = br#"{"model":"gpt-5.4","input":"hi"}"#.to_vec();
 
     let (rewritten_body, ..) =
-        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let defaulted_body = default_omitted_responses_stream_to_true(rewritten_body);
     let payload: Value = serde_json::from_slice(&defaulted_body).expect("json body");
     let is_stream = resolve_client_is_stream(
@@ -480,7 +517,7 @@ fn hybrid_passthrough_fallback_body_uses_aggregate_override_shape() {
     let body = br#"{"model":"gpt-4.1","input":"hi","reasoning":{"effort":"low"}}"#.to_vec();
 
     let mut passthrough_body =
-        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None).0;
+        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None).0;
     passthrough_body = default_omitted_responses_stream_to_true(passthrough_body);
     let payload: Value = serde_json::from_slice(&passthrough_body).expect("json body");
 
@@ -883,8 +920,89 @@ fn opencode_headers_with_only_session_id_are_not_treated_as_native_codex_clients
         Some("opencode"),
         Some("affinity-1"),
         Some("session-1"),
+        None,
     );
     assert!(!is_native_codex_client_request(&opencode_headers));
+}
+
+#[test]
+fn compact_subagent_marks_standard_responses_request_as_compact() {
+    let headers = sample_incoming_headers_with_session_id(
+        None,
+        None,
+        Some("codex_cli_rs/0.1.0"),
+        Some("codex-cli"),
+        None,
+        Some("session-compact"),
+        Some("compact"),
+    );
+
+    assert!(is_compact_subagent_request("/v1/responses", &headers));
+    assert!(!is_compact_subagent_request("/v1/chat/completions", &headers));
+}
+
+#[test]
+fn compact_subagent_rewrites_standard_responses_path_to_compact_path() {
+    let headers = sample_incoming_headers_with_session_id(
+        None,
+        None,
+        Some("codex_cli_rs/0.1.0"),
+        Some("codex-cli"),
+        None,
+        Some("session-compact"),
+        Some("compact"),
+    );
+
+    assert_eq!(
+        resolve_logical_gateway_request_path("/v1/responses", &headers),
+        "/v1/responses/compact"
+    );
+}
+
+#[test]
+fn compact_subagent_uses_compact_model_forward_rules_on_standard_responses_path() {
+    let original_rules = crate::gateway::current_compact_model_forward_rules();
+    let _ = crate::gateway::set_compact_model_forward_rules("");
+    crate::gateway::set_compact_model_forward_rules(
+        "gpt-5.4=gpt-5.4-openai-compact",
+    )
+    .expect("set compact model forward rules");
+
+    let headers = sample_incoming_headers_with_session_id(
+        None,
+        None,
+        Some("codex_cli_rs/0.1.0"),
+        Some("codex-cli"),
+        None,
+        Some("session-compact"),
+        Some("compact"),
+    );
+
+    assert_eq!(
+        resolve_compact_model_override_for_request(
+            "/v1/responses",
+            &headers,
+            Some("gpt-5.4"),
+        )
+        .as_deref(),
+        Some("gpt-5.4-openai-compact")
+    );
+
+    let _ = crate::gateway::set_compact_model_forward_rules(original_rules.as_str());
+}
+
+#[test]
+fn compact_request_uses_chat_completions_response_adapter_when_configured() {
+    let _guard = crate::test_env_guard();
+    let _compact_api_path = RuntimeEnvGuard::set(COMPACT_API_PATH_ENV, "/v1/chat/completions");
+
+    assert_eq!(
+        maybe_wrap_compact_response_adapter(
+            "/v1/responses/compact",
+            crate::gateway::ResponseAdapter::Passthrough,
+        ),
+        crate::gateway::ResponseAdapter::CompactFromChatCompletions
+    );
 }
 
 #[test]
@@ -987,6 +1105,7 @@ fn aggregate_passthrough_preserves_fast_service_tier_for_log_when_request_is_rew
         body,
         &api_key,
         Some("fast".to_string()),
+        None,
     );
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
 
@@ -1019,7 +1138,7 @@ fn codex_backend_passthrough_maps_fast_to_priority_but_keeps_fast_for_log() {
         effective_service_tier_for_log,
         _has_prompt_cache_key,
         _request_shape,
-    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
     let request_meta = crate::gateway::parse_request_metadata(&rewritten_body);
 

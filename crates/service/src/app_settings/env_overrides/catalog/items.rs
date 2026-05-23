@@ -103,6 +103,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "gpt-image-2",
     ),
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_COMPACT_API_PATH",
+        "Compact 上游路径",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "/v1/responses/compact",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES",
         "前置代理最大请求体（字节）",
         ENV_OVERRIDE_SCOPE_SERVICE,

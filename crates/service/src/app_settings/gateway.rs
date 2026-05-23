@@ -27,6 +27,7 @@ struct CodexNpmLatestResponse {
 use super::{
     normalize_optional_text, save_persisted_app_setting, save_persisted_bool_setting,
     APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+    APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
@@ -197,6 +198,23 @@ pub fn set_gateway_model_forward_rules(raw: &str) -> Result<String, String> {
 /// 返回函数执行结果
 pub fn current_gateway_model_forward_rules() -> String {
     gateway::current_model_forward_rules()
+}
+
+pub fn set_gateway_compact_model_forward_rules(raw: &str) -> Result<String, String> {
+    let applied = gateway::set_compact_model_forward_rules(raw)?;
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
+        if applied.trim().is_empty() {
+            None
+        } else {
+            Some(applied.as_str())
+        },
+    )?;
+    Ok(applied)
+}
+
+pub fn current_gateway_compact_model_forward_rules() -> String {
+    gateway::current_compact_model_forward_rules()
 }
 
 /// 函数 `set_gateway_account_max_inflight`
