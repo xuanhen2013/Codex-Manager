@@ -4,27 +4,28 @@ Date: 2026-05-24
 
 ## Summary
 
-This change fixes the request gate head-of-line blocking path observed when many
-streaming `/v1/responses` requests use the same API key and model. Before the
-fix, an unset `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS` meant a contending
-request could wait until the full stream request deadline, which defaults to
-300000 ms. Under high concurrency this made queued requests appear as 100s to
-300s first-token latency and could end as 504 without ever reaching an upstream
-account.
+This change adds an opt-in mitigation and diagnostics for the request gate
+head-of-line blocking path observed when many streaming `/v1/responses`
+requests use the same API key and model. An unset
+`CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS` keeps the legacy behavior: a
+contending request may wait until the full stream request deadline, which
+defaults to 300000 ms. Under high concurrency this can make queued requests
+appear as 100s to 300s first-token latency and may end as 504 without ever
+reaching an upstream account.
 
-The fix makes the default request gate wait bounded at 5000 ms while preserving
-the existing environment override. If the gate is still busy after that bounded
-wait, the request records `REQUEST_GATE_SKIP reason=gate_wait_timeout` and
-continues execution instead of consuming the full request deadline inside the
-gate.
+Operators that observe this behavior can set
+`CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=5000` to bound the gate wait. If the
+gate is still busy after that bounded wait, the request records
+`REQUEST_GATE_SKIP reason=gate_wait_timeout` and continues execution instead of
+consuming the full request deadline inside the gate.
 
 ## Root Cause
 
 - The request gate scope is keyed by API key, request path, and model.
 - `/v1/responses` streaming requests have a default stream deadline of 300000
   ms.
-- With `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=0`, the gate wait was
-  unbounded and capped only by the request deadline.
+- With `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS` unset or set to `0`, the
+  gate wait is unbounded and capped only by the request deadline.
 - In 12-concurrency reproduction runs before the fix, requests showed
   stair-step first-token latencies around 1s, 80s, 159s, and 240s, followed by
   multiple 300s 504s. Logs showed `REQUEST_GATE_SKIP reason=total_timeout
@@ -37,8 +38,11 @@ the code-level request-gate wait as the source of 300s first-token/504 behavior.
 ## Code Changes
 
 - `crates/service/src/gateway/core/runtime_config.rs`
-  - Changed `DEFAULT_REQUEST_GATE_WAIT_TIMEOUT_MS` from `0` to `5000`.
-  - Kept `0` as an explicit override value meaning unbounded, preserving the
+  - Keeps `DEFAULT_REQUEST_GATE_WAIT_TIMEOUT_MS=0` so the upstream-default
+    behavior remains unchanged.
+  - Keeps non-zero `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS` as the opt-in
+    bounded-wait setting.
+  - Keeps `0` as an explicit override value meaning unbounded, preserving the
     existing environment-variable contract.
 - `crates/service/src/gateway/upstream/proxy_pipeline/request_gate.rs`
   - Keeps the request-gate wait capped by `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS`.
@@ -52,7 +56,8 @@ the code-level request-gate wait as the source of 300s first-token/504 behavior.
   - Adds `CODEXMANAGER_GATEWAY_TRACE_STDOUT_SLOW_MS` so slow successful traces
     can be flushed into Docker logs during diagnostics.
 - Docker files and compose templates
-  - Set `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=5000`.
+  - Document `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=5000` as an optional
+    mitigation instead of enabling it by default.
   - Enable gateway trace/error stdout logging for container diagnostics.
 
 ## Local Validation
@@ -61,7 +66,7 @@ Commands run from repository root:
 
 | Command | Result |
 | --- | --- |
-| `cargo fmt -- --check` | exit 0 |
+| `cargo fmt -- --check` | attempted on the rebased branch; latest `upstream/main` has unrelated compact-model formatting diffs outside this PR scope |
 | `cargo test -p codexmanager-service request_gate --lib` | exit 0, 7 passed, 0 failed, 0 ignored |
 | `cargo test -p codexmanager-service trace_log --lib` | exit 0, 8 passed, 0 failed, 0 ignored |
 | `cargo check -p codexmanager-service --all-targets` | exit 0 |
@@ -93,7 +98,7 @@ Container:
 - Active API keys in test DB: 1
 - Proxy:
   `CODEXMANAGER_UPSTREAM_PROXY_URL=http://host.docker.internal:7890`
-- Gate config:
+- Gate config used for the pressure test:
   `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=5000`
 
 The test container used the host Stash proxy. This differs from the previous
@@ -163,6 +168,8 @@ they are needed for a short investigation window.
     `wait_ms>=100000`.
   - Network/upstream problem: gate wait is bounded, then `ATTEMPT_RESULT` or
     `BRIDGE_RESULT first_response_ms` shows upstream delay/error.
+- Because the default remains legacy-compatible, operators must explicitly set a
+  non-zero `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS` value to enable bounded
+  gate waits in high-concurrency deployments.
 - `CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS=0` still intentionally means
-  unbounded wait. Operators should not set it to `0` in high-concurrency
-  deployments unless they explicitly want serialized requests.
+  unbounded wait.

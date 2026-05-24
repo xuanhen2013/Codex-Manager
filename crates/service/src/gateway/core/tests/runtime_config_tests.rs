@@ -112,7 +112,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     );
 }
 
-/// 函数 `reload_from_env_defaults_keep_request_gate_bounded`
+/// 函数 `reload_from_env_defaults_keep_request_gate_legacy_unbounded`
 ///
 /// 作者: gaohongshun
 ///
@@ -124,7 +124,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
 /// # 返回
 /// 无
 #[test]
-fn reload_from_env_defaults_keep_request_gate_bounded() {
+fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
     let _guard = crate::test_env_guard();
     let _account_guard = EnvGuard::clear(ENV_ACCOUNT_MAX_INFLIGHT);
     let _strict_guard = EnvGuard::clear(ENV_STRICT_REQUEST_PARAM_ALLOWLIST);
@@ -141,10 +141,7 @@ fn reload_from_env_defaults_keep_request_gate_bounded() {
 
     assert_eq!(account_max_inflight_limit(), 0);
     assert!(!strict_request_param_allowlist_enabled());
-    assert_eq!(
-        request_gate_wait_timeout(),
-        Some(Duration::from_millis(5_000))
-    );
+    assert_eq!(request_gate_wait_timeout(), None);
     assert_eq!(front_proxy_max_body_bytes(), 0);
     assert_eq!(
         upstream_stream_timeout(),
