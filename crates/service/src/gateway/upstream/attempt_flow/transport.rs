@@ -1226,6 +1226,22 @@ fn is_websocket_upstream_terminal_text(text: &str) -> bool {
     )
 }
 
+fn websocket_upstream_request_text_from_http_body(
+    request_body: &Bytes,
+) -> Result<Option<String>, String> {
+    if request_body.is_empty() {
+        return Ok(None);
+    }
+
+    let request: crate::http::codex_source::ResponseCreateWsRequest =
+        serde_json::from_slice(request_body.as_ref()).map_err(|err| {
+            format!("request body is not a valid WebSocket response.create payload: {err}")
+        })?;
+    serde_json::to_string(&crate::http::codex_source::ResponsesWsRequest::ResponseCreate(request))
+        .map(Some)
+        .map_err(|err| format!("serialize WebSocket response.create payload failed: {err}"))
+}
+
 fn send_websocket_upstream_request(
     target_url: &str,
     account_id: &str,
@@ -1233,21 +1249,7 @@ fn send_websocket_upstream_request(
     request_headers: &[(String, String)],
     request_body: &Bytes,
 ) -> Result<super::super::GatewayStreamResponse, String> {
-    // Validate body is valid UTF-8 before attempting handshake so that a non-UTF-8
-    // body returns Err (triggering HTTP fallback) rather than silently failing
-    // mid-stream after the handshake has already succeeded.
-    let body_text: Option<String> = if request_body.is_empty() {
-        None
-    } else {
-        match std::str::from_utf8(request_body.as_ref()) {
-            Ok(s) => Some(s.to_string()),
-            Err(_) => {
-                return Err(
-                    "request body not valid UTF-8; cannot use WebSocket upstream".to_string(),
-                )
-            }
-        }
-    };
+    let body_text = websocket_upstream_request_text_from_http_body(request_body)?;
 
     let ws_url = if target_url.starts_with("https://") {
         format!("wss://{}", &target_url["https://".len()..])
@@ -2022,6 +2024,56 @@ mod tests {
     }
 
     #[test]
+    fn websocket_upstream_request_text_from_http_body_wraps_response_create() {
+        let body = Bytes::from_static(
+            br#"{"model":"codex","input":"hello","stream":true,"reasoning":{"effort":"high"}}"#,
+        );
+
+        let text = super::websocket_upstream_request_text_from_http_body(&body)
+            .expect("wrap valid HTTP body")
+            .expect("non-empty body produces websocket frame");
+        let value: serde_json::Value =
+            serde_json::from_str(text.as_str()).expect("parse wrapped websocket frame");
+
+        assert_eq!(
+            value.get("type").and_then(serde_json::Value::as_str),
+            Some("response.create")
+        );
+        assert_eq!(
+            value.get("model").and_then(serde_json::Value::as_str),
+            Some("codex")
+        );
+        assert_eq!(
+            value.get("input").and_then(serde_json::Value::as_str),
+            Some("hello")
+        );
+        assert_eq!(
+            value.get("stream").and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("reasoning")
+                .and_then(|reasoning| reasoning.get("effort"))
+                .and_then(serde_json::Value::as_str),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn websocket_upstream_request_text_from_http_body_rejects_invalid_payload() {
+        let body = Bytes::from_static(br#"{"model":"codex"}"#);
+
+        let err = super::websocket_upstream_request_text_from_http_body(&body)
+            .expect_err("missing input is not a valid response.create payload");
+
+        assert!(
+            err.contains("valid WebSocket response.create payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_done() {
         let _env_lock = crate::test_env_guard();
         let _reload_guard = RuntimeConfigReloadGuard;
@@ -2073,11 +2125,22 @@ mod tests {
             Some("responses_websockets=2026-02-06")
         );
         assert!(captured_header(&headers, "content-type").is_none());
+        let frame = frame_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture request frame");
+        let frame: serde_json::Value =
+            serde_json::from_str(frame.as_str()).expect("parse request frame");
         assert_eq!(
-            frame_rx
-                .recv_timeout(Duration::from_secs(2))
-                .expect("capture request frame"),
-            r#"{"model":"codex","input":"hello"}"#
+            frame.get("type").and_then(serde_json::Value::as_str),
+            Some("response.create")
+        );
+        assert_eq!(
+            frame.get("model").and_then(serde_json::Value::as_str),
+            Some("codex")
+        );
+        assert_eq!(
+            frame.get("input").and_then(serde_json::Value::as_str),
+            Some("hello")
         );
         handle.join().expect("join websocket upstream");
     }
@@ -2100,7 +2163,7 @@ mod tests {
         let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
         crate::gateway::reload_runtime_config_from_env();
 
-        let body = Bytes::from(r#"{"model":"codex"}"#);
+        let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
         let response = super::send_websocket_upstream_request(
             "ws://example.invalid/v1/responses",
             "acct_ws_proxy",
@@ -2131,23 +2194,23 @@ mod tests {
     }
 
     #[test]
-    fn send_websocket_upstream_request_returns_err_for_non_utf8_body() {
+    fn send_websocket_upstream_request_returns_err_for_invalid_body_before_handshake() {
         let _env_lock = crate::test_env_guard();
-        // Non-UTF-8 bodies must return Err immediately (before handshake) so the
+        // Invalid bodies must return Err immediately (before handshake) so the
         // caller can fall back to HTTP streaming.
-        let non_utf8 = Bytes::from(vec![0xFF, 0xFE, 0x00]);
+        let invalid_body = Bytes::from_static(br#"{"model":"codex"}"#);
         let result = super::send_websocket_upstream_request(
             "wss://chatgpt.com/backend-api/codex/responses",
-            "acct_ws_non_utf8",
+            "acct_ws_invalid_body",
             None,
             &[],
-            &non_utf8,
+            &invalid_body,
         );
-        assert!(result.is_err(), "expected Err for non-UTF-8 body");
+        assert!(result.is_err(), "expected Err for invalid body");
         let msg = result.unwrap_err();
         assert!(
-            msg.contains("UTF-8"),
-            "error message should mention UTF-8, got: {msg}"
+            msg.contains("valid WebSocket response.create payload"),
+            "error message should mention response.create payload, got: {msg}"
         );
     }
 
@@ -2162,7 +2225,7 @@ mod tests {
         // (i.e., the handshake_timeout path works and does not block indefinitely).
         // We use a deadline 2 seconds from now so the test completes quickly.
         let deadline = Instant::now() + Duration::from_secs(2);
-        let body = Bytes::from(r#"{"model":"codex"}"#);
+        let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);
         let result = super::send_websocket_upstream_request(
             "wss://127.0.0.1:1", // port 1 is not open
             "acct_ws_unreachable",
