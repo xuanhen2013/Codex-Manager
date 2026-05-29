@@ -948,6 +948,62 @@ fn member_cannot_read_or_mutate_other_user_api_key() {
 }
 
 #[test]
+fn member_api_key_usage_stats_filter_to_owned_keys() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-member-apikey-usage-filter");
+    let day_start = 1_700_000_000;
+    let user_one = create_test_member("apikey-usage-one", Some(2_000_000));
+    let user_two = create_test_member("apikey-usage-two", Some(2_000_000));
+    let key_one = create_owned_test_api_key(&user_one.id, "usage one key", "gpt-5-mini");
+    let key_two = create_owned_test_api_key(&user_two.id, "usage two key", "gpt-5");
+
+    insert_test_request_log(
+        &key_one,
+        "trace-usage-one",
+        "gpt-5-mini",
+        200,
+        80,
+        10,
+        40,
+        0.08,
+        day_start + 10,
+    );
+    insert_test_request_log(
+        &key_two,
+        "trace-usage-two",
+        "gpt-5",
+        200,
+        800,
+        0,
+        500,
+        0.8,
+        day_start + 20,
+    );
+
+    let member_stats = response_result(handle_request_with_actor(
+        rpc_request("apikey/usageStats", serde_json::json!({})),
+        RpcActor::from_parts(Some(ROLE_MEMBER), Some(&user_one.id)),
+    ));
+    assert!(
+        member_stats.result.get("error").is_none(),
+        "{:?}",
+        member_stats.result
+    );
+    let member_items = member_stats.result["items"].as_array().unwrap();
+    assert_eq!(member_items.len(), 1);
+    assert_eq!(member_items[0]["keyId"], key_one);
+    assert_eq!(member_items[0]["totalTokens"], 120);
+
+    let admin_stats = response_result(handle_request_with_actor(
+        rpc_request("apikey/usageStats", serde_json::json!({})),
+        RpcActor::system_admin(),
+    ));
+    assert_eq!(admin_stats.result["items"].as_array().unwrap().len(), 2);
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn member_created_api_key_ignores_admin_only_routing_fields() {
     let _guard = test_env_guard();
     let db_path = setup_dashboard_test_db("codexmanager-member-apikey-create-sanitizes");

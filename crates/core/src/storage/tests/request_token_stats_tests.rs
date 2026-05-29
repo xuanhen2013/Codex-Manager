@@ -164,7 +164,43 @@ fn summaries_for_selected_keys_include_rollups_and_respect_time_ranges() {
     assert_float_close(by_key_and_model[0].estimated_cost_usd, 0.10);
 }
 
-/// 函数 `summaries_for_large_key_lists_are_chunked`
+#[test]
+fn summaries_for_empty_key_lists_return_empty_results() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id: 1,
+            key_id: Some("key-a".to_string()),
+            account_id: Some("acc-a".to_string()),
+            model: Some("gpt-5".to_string()),
+            input_tokens: Some(10),
+            cached_input_tokens: Some(0),
+            output_tokens: Some(5),
+            total_tokens: Some(15),
+            reasoning_output_tokens: Some(0),
+            estimated_cost_usd: Some(0.10),
+            created_at: 100,
+        })
+        .expect("insert raw key a");
+
+    let empty = Vec::<String>::new();
+    assert!(storage
+        .summarize_request_token_stats_by_key_for_keys(&empty)
+        .expect("summarize by key")
+        .is_empty());
+    assert!(storage
+        .summarize_request_token_stats_by_model_for_keys(None, None, &empty)
+        .expect("summarize by model")
+        .is_empty());
+    assert!(storage
+        .summarize_request_token_stats_by_key_and_model_for_keys(None, None, &empty)
+        .expect("summarize by key and model")
+        .is_empty());
+}
+
+/// 函数 `summaries_for_large_key_lists_use_temp_filter`
 ///
 /// 作者: gaohongshun
 ///
@@ -176,7 +212,7 @@ fn summaries_for_selected_keys_include_rollups_and_respect_time_ranges() {
 /// # 返回
 /// 无
 #[test]
-fn summaries_for_large_key_lists_are_chunked() {
+fn summaries_for_large_key_lists_use_temp_filter() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
 

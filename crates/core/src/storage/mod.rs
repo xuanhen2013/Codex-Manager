@@ -12,6 +12,7 @@ mod api_key_quota_limits;
 mod api_keys;
 mod conversation_bindings;
 mod events;
+mod key_id_filters;
 mod model_groups;
 mod model_options;
 mod model_price_rules;

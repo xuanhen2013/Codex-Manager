@@ -1,9 +1,7 @@
-use rusqlite::{params_from_iter, types::Value, Result, Row};
+use rusqlite::{params_from_iter, Result, Row};
 
+use super::key_id_filters::{key_id_in_clause, normalize_key_ids, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{now_ts, ApiKey, Storage};
-
-// SQLite 默认的 host parameter 上限是 999，这里保留一点余量，避免大 key 列表把单条语句撑爆。
-const SQLITE_IN_CLAUSE_BATCH_SIZE: usize = 900;
 
 const API_KEY_SELECT_SQL: &str = "SELECT
     k.id,
@@ -708,16 +706,14 @@ impl Storage {
 }
 
 fn list_api_keys_for_ids_chunk(storage: &Storage, key_ids: &[String]) -> Result<Vec<ApiKey>> {
-    let placeholders = std::iter::repeat("?")
-        .take(key_ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let Some((clause, params)) = key_id_in_clause("k.id", key_ids) else {
+        return Ok(Vec::new());
+    };
     let sql = format!(
         "{API_KEY_SELECT_SQL}
-         WHERE k.id IN ({placeholders})
+         WHERE {clause}
          ORDER BY k.created_at DESC, k.id ASC"
     );
-    let params = key_ids.iter().cloned().map(Value::Text).collect::<Vec<_>>();
     let mut stmt = storage.conn.prepare(&sql)?;
     let mut rows = stmt.query(params_from_iter(params.iter()))?;
     let mut out = Vec::new();
@@ -725,18 +721,6 @@ fn list_api_keys_for_ids_chunk(storage: &Storage, key_ids: &[String]) -> Result<
         out.push(map_api_key_row(row)?);
     }
     Ok(out)
-}
-
-fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {
-    let mut normalized = key_ids
-        .iter()
-        .map(|key_id| key_id.trim())
-        .filter(|key_id| !key_id.is_empty())
-        .map(|key_id| key_id.to_string())
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized.dedup();
-    normalized
 }
 
 /// 函数 `map_api_key_row`

@@ -1,7 +1,7 @@
 use rusqlite::{params, params_from_iter, types::Value, Result, Row};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use super::key_id_filters::TempKeyIdFilter;
 use super::{
     now_ts, ApiKeyModelTokenUsageSummary, ApiKeyTokenUsageSummary, DailyTokenUsageRollup,
     RequestLogTodaySummary, RequestTokenStat, SourceTokenUsageRollup, Storage, TokenUsageRollup,
@@ -15,8 +15,6 @@ const OBSERVABILITY_MAINTENANCE_INTERVAL_SECS_ENV: &str =
     "CODEXMANAGER_OBSERVABILITY_MAINTENANCE_INTERVAL_SECS";
 
 static LAST_OBSERVABILITY_MAINTENANCE_AT: AtomicI64 = AtomicI64::new(0);
-// SQLite 默认的 host parameter 上限是 999，这里保留一点余量，避免大 key 列表把单条语句撑爆。
-const SQLITE_IN_CLAUSE_BATCH_SIZE: usize = 900;
 
 pub(super) fn request_token_stats_retain_days() -> i64 {
     std::env::var(REQUEST_TOKEN_STATS_RETAIN_DAYS_ENV)
@@ -132,34 +130,37 @@ fn source_id_expr(source_kind: &str) -> Option<&'static str> {
     }
 }
 
-fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {
-    let mut normalized = key_ids
-        .iter()
-        .map(|key_id| key_id.trim())
-        .filter(|key_id| !key_id.is_empty())
-        .map(|key_id| key_id.to_string())
-        .collect::<Vec<_>>();
-    normalized.sort();
-    normalized.dedup();
-    normalized
+fn map_api_key_token_usage_summary(row: &Row<'_>) -> Result<ApiKeyTokenUsageSummary> {
+    Ok(ApiKeyTokenUsageSummary {
+        key_id: row.get(0)?,
+        total_tokens: row.get(1)?,
+        estimated_cost_usd: row.get(2)?,
+    })
 }
 
-fn key_id_filter_clause(
-    column: &str,
-    key_ids: &[String],
-    params: &mut Vec<Value>,
-) -> Option<String> {
-    let key_ids = normalize_key_ids(key_ids);
-    if key_ids.is_empty() {
-        return None;
-    }
+fn map_token_usage_summary(row: &Row<'_>) -> Result<TokenUsageSummary> {
+    Ok(TokenUsageSummary {
+        model: row.get(0)?,
+        input_tokens: row.get::<_, i64>(1)?.max(0),
+        cached_input_tokens: row.get::<_, i64>(2)?.max(0),
+        output_tokens: row.get::<_, i64>(3)?.max(0),
+        reasoning_output_tokens: row.get::<_, i64>(4)?.max(0),
+        total_tokens: row.get::<_, i64>(5)?.max(0),
+        estimated_cost_usd: row.get::<_, f64>(6)?.max(0.0),
+    })
+}
 
-    let placeholders = std::iter::repeat("?")
-        .take(key_ids.len())
-        .collect::<Vec<_>>()
-        .join(", ");
-    params.extend(key_ids.into_iter().map(Value::Text));
-    Some(format!(" AND {column} IN ({placeholders})"))
+fn map_api_key_model_token_usage_summary(row: &Row<'_>) -> Result<ApiKeyModelTokenUsageSummary> {
+    Ok(ApiKeyModelTokenUsageSummary {
+        key_id: row.get(0)?,
+        model: row.get(1)?,
+        input_tokens: row.get::<_, i64>(2)?.max(0),
+        cached_input_tokens: row.get::<_, i64>(3)?.max(0),
+        output_tokens: row.get::<_, i64>(4)?.max(0),
+        reasoning_output_tokens: row.get::<_, i64>(5)?.max(0),
+        total_tokens: row.get::<_, i64>(6)?.max(0),
+        estimated_cost_usd: row.get::<_, f64>(7)?.max(0.0),
+    })
 }
 
 impl Storage {
@@ -333,23 +334,22 @@ impl Storage {
         &self,
         key_ids: Option<&[String]>,
     ) -> Result<Vec<ApiKeyTokenUsageSummary>> {
-        if let Some(key_ids) = key_ids {
-            let normalized_key_ids = normalize_key_ids(key_ids);
-            if normalized_key_ids.is_empty() {
-                return Ok(Vec::new());
-            }
-            let mut items = Vec::new();
-            for chunk in normalized_key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
-                items.extend(self.summarize_request_token_stats_by_key_chunk(chunk)?);
-            }
-            items.sort_by(|a, b| {
-                b.total_tokens
-                    .cmp(&a.total_tokens)
-                    .then_with(|| a.key_id.cmp(&b.key_id))
-            });
-            return Ok(items);
-        }
+        let Some(key_ids) = key_ids else {
+            return self.query_request_token_stats_by_key(None);
+        };
+        let Some(key_filter) = TempKeyIdFilter::create(self, key_ids)? else {
+            return Ok(Vec::new());
+        };
+        self.query_request_token_stats_by_key(Some(&key_filter))
+    }
 
+    fn query_request_token_stats_by_key(
+        &self,
+        key_filter: Option<&TempKeyIdFilter<'_>>,
+    ) -> Result<Vec<ApiKeyTokenUsageSummary>> {
+        let key_filter_clause = key_filter
+            .map(|filter| filter.exists_clause("s.key_id"))
+            .unwrap_or_default();
         let mut stmt = self.conn.prepare(&format!(
             "WITH all_stats AS (
                 SELECT
@@ -371,73 +371,19 @@ impl Storage {
                 FROM request_token_stat_rollups
              )
              SELECT
-                key_id,
+                s.key_id,
                 IFNULL(SUM({token_total}), 0) AS total_tokens,
-                IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM all_stats
-             WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''
-             GROUP BY key_id
-             ORDER BY total_tokens DESC, key_id ASC",
+                IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+             FROM all_stats s
+             WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''{key_filter_clause}
+             GROUP BY s.key_id
+             ORDER BY total_tokens DESC, s.key_id ASC",
             token_total = token_total_sql_expr(),
         ))?;
         let mut rows = stmt.query([])?;
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
-            items.push(ApiKeyTokenUsageSummary {
-                key_id: row.get(0)?,
-                total_tokens: row.get(1)?,
-                estimated_cost_usd: row.get(2)?,
-            });
-        }
-        Ok(items)
-    }
-
-    fn summarize_request_token_stats_by_key_chunk(
-        &self,
-        key_ids: &[String],
-    ) -> Result<Vec<ApiKeyTokenUsageSummary>> {
-        let mut params = Vec::new();
-        let Some(clause) = key_id_filter_clause("key_id", key_ids, &mut params) else {
-            return Ok(Vec::new());
-        };
-        let mut stmt = self.conn.prepare(&format!(
-            "WITH all_stats AS (
-                SELECT
-                    key_id,
-                    input_tokens,
-                    cached_input_tokens,
-                    output_tokens,
-                    total_tokens,
-                    estimated_cost_usd
-                FROM request_token_stats
-                UNION ALL
-                SELECT
-                    NULLIF(key_id, '') AS key_id,
-                    input_tokens,
-                    cached_input_tokens,
-                    output_tokens,
-                    total_tokens,
-                    estimated_cost_usd
-                FROM request_token_stat_rollups
-             )
-             SELECT
-                key_id,
-                IFNULL(SUM({token_total}), 0) AS total_tokens,
-                IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM all_stats
-             WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''{clause}
-             GROUP BY key_id
-             ORDER BY total_tokens DESC, key_id ASC",
-            token_total = token_total_sql_expr(),
-        ))?;
-        let mut rows = stmt.query(params_from_iter(params.iter()))?;
-        let mut items = Vec::new();
-        while let Some(row) = rows.next()? {
-            items.push(ApiKeyTokenUsageSummary {
-                key_id: row.get(0)?,
-                total_tokens: row.get(1)?,
-                estimated_cost_usd: row.get(2)?,
-            });
+            items.push(map_api_key_token_usage_summary(row)?);
         }
         Ok(items)
     }
@@ -465,147 +411,25 @@ impl Storage {
         end_ts: Option<i64>,
         key_ids: Option<&[String]>,
     ) -> Result<Vec<TokenUsageSummary>> {
-        let include_rollups = start_ts.is_none() && end_ts.is_none();
-        if let Some(key_ids) = key_ids {
-            let normalized_key_ids = normalize_key_ids(key_ids);
-            if normalized_key_ids.is_empty() {
-                return Ok(Vec::new());
-            }
-            let mut aggregated = HashMap::<String, TokenUsageSummary>::new();
-            for chunk in normalized_key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
-                for item in self.summarize_request_token_stats_by_model_chunk(
-                    start_ts,
-                    end_ts,
-                    chunk,
-                    include_rollups,
-                )? {
-                    let TokenUsageSummary {
-                        model,
-                        input_tokens,
-                        cached_input_tokens,
-                        output_tokens,
-                        reasoning_output_tokens,
-                        total_tokens,
-                        estimated_cost_usd,
-                    } = item;
-                    let entry =
-                        aggregated
-                            .entry(model.clone())
-                            .or_insert_with(|| TokenUsageSummary {
-                                model,
-                                ..TokenUsageSummary::default()
-                            });
-                    entry.input_tokens = entry.input_tokens.saturating_add(input_tokens.max(0));
-                    entry.cached_input_tokens = entry
-                        .cached_input_tokens
-                        .saturating_add(cached_input_tokens.max(0));
-                    entry.output_tokens = entry.output_tokens.saturating_add(output_tokens.max(0));
-                    entry.reasoning_output_tokens = entry
-                        .reasoning_output_tokens
-                        .saturating_add(reasoning_output_tokens.max(0));
-                    entry.total_tokens = entry.total_tokens.saturating_add(total_tokens.max(0));
-                    entry.estimated_cost_usd += estimated_cost_usd.max(0.0);
-                }
-            }
-            let mut items = aggregated.into_values().collect::<Vec<_>>();
-            items.sort_by(|a, b| {
-                b.total_tokens
-                    .cmp(&a.total_tokens)
-                    .then_with(|| a.model.cmp(&b.model))
-            });
-            return Ok(items);
-        }
-
-        let sql = if include_rollups {
-            format!(
-                "WITH all_stats AS (
-                    SELECT
-                        model,
-                        input_tokens,
-                        cached_input_tokens,
-                        output_tokens,
-                        reasoning_output_tokens,
-                        total_tokens,
-                        estimated_cost_usd
-                    FROM request_token_stats
-                    UNION ALL
-                    SELECT
-                        NULLIF(model, '') AS model,
-                        input_tokens,
-                        cached_input_tokens,
-                        output_tokens,
-                        reasoning_output_tokens,
-                        total_tokens,
-                        estimated_cost_usd
-                    FROM request_token_stat_rollups
-                 )
-                 SELECT
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                    IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM all_stats
-                 GROUP BY normalized_model
-                 ORDER BY total_tokens DESC, normalized_model ASC",
-                token_total = token_total_sql_expr(),
-            )
-        } else {
-            format!(
-                "SELECT
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                    IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM request_token_stats
-                 WHERE (?1 IS NULL OR created_at >= ?1)
-                   AND (?2 IS NULL OR created_at < ?2)
-                 GROUP BY normalized_model
-                 ORDER BY total_tokens DESC, normalized_model ASC",
-                token_total = token_total_sql_expr(),
-            )
+        let Some(key_ids) = key_ids else {
+            return self.query_request_token_stats_by_model(start_ts, end_ts, None);
         };
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = if include_rollups {
-            stmt.query([])?
-        } else {
-            let params = [
-                start_ts.map(Value::Integer).unwrap_or(Value::Null),
-                end_ts.map(Value::Integer).unwrap_or(Value::Null),
-            ];
-            stmt.query(params_from_iter(params.iter()))?
+        let Some(key_filter) = TempKeyIdFilter::create(self, key_ids)? else {
+            return Ok(Vec::new());
         };
-        let mut items = Vec::new();
-        while let Some(row) = rows.next()? {
-            items.push(TokenUsageSummary {
-                model: row.get(0)?,
-                input_tokens: row.get::<_, i64>(1)?.max(0),
-                cached_input_tokens: row.get::<_, i64>(2)?.max(0),
-                output_tokens: row.get::<_, i64>(3)?.max(0),
-                reasoning_output_tokens: row.get::<_, i64>(4)?.max(0),
-                total_tokens: row.get::<_, i64>(5)?.max(0),
-                estimated_cost_usd: row.get::<_, f64>(6)?.max(0.0),
-            });
-        }
-        Ok(items)
+        self.query_request_token_stats_by_model(start_ts, end_ts, Some(&key_filter))
     }
 
-    fn summarize_request_token_stats_by_model_chunk(
+    fn query_request_token_stats_by_model(
         &self,
         start_ts: Option<i64>,
         end_ts: Option<i64>,
-        key_ids: &[String],
-        include_rollups: bool,
+        key_filter: Option<&TempKeyIdFilter<'_>>,
     ) -> Result<Vec<TokenUsageSummary>> {
-        let mut key_params = Vec::new();
-        let Some(key_clause) = key_id_filter_clause("key_id", key_ids, &mut key_params) else {
-            return Ok(Vec::new());
-        };
+        let include_rollups = start_ts.is_none() && end_ts.is_none();
+        let key_filter_clause = key_filter
+            .map(|filter| filter.exists_clause("s.key_id"))
+            .unwrap_or_default();
         let sql = if include_rollups {
             format!(
                 "WITH all_stats AS (
@@ -632,15 +456,15 @@ impl Storage {
                     FROM request_token_stat_rollups
                  )
                  SELECT
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                    COALESCE(NULLIF(TRIM(s.model), ''), 'unknown') AS normalized_model,
+                    IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+                    IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+                    IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+                    IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
                     IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM all_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''{key_clause}
+                    IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+                 FROM all_stats s
+                 WHERE 1 = 1{key_filter_clause}
                  GROUP BY normalized_model
                  ORDER BY total_tokens DESC, normalized_model ASC",
                 token_total = token_total_sql_expr(),
@@ -648,17 +472,16 @@ impl Storage {
         } else {
             format!(
                 "SELECT
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                    COALESCE(NULLIF(TRIM(s.model), ''), 'unknown') AS normalized_model,
+                    IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+                    IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+                    IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+                    IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
                     IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM request_token_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''
-                   AND (?1 IS NULL OR created_at >= ?1)
-                   AND (?2 IS NULL OR created_at < ?2){key_clause}
+                    IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+                 FROM request_token_stats s
+                 WHERE (?1 IS NULL OR s.created_at >= ?1)
+                   AND (?2 IS NULL OR s.created_at < ?2){key_filter_clause}
                  GROUP BY normalized_model
                  ORDER BY total_tokens DESC, normalized_model ASC",
                 token_total = token_total_sql_expr(),
@@ -666,27 +489,17 @@ impl Storage {
         };
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = if include_rollups {
-            stmt.query(params_from_iter(key_params.iter()))?
+            stmt.query([])?
         } else {
-            let mut params = Vec::new();
-            params.extend([
+            let params = [
                 start_ts.map(Value::Integer).unwrap_or(Value::Null),
                 end_ts.map(Value::Integer).unwrap_or(Value::Null),
-            ]);
-            params.extend(key_params);
+            ];
             stmt.query(params_from_iter(params.iter()))?
         };
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
-            items.push(TokenUsageSummary {
-                model: row.get(0)?,
-                input_tokens: row.get::<_, i64>(1)?.max(0),
-                cached_input_tokens: row.get::<_, i64>(2)?.max(0),
-                output_tokens: row.get::<_, i64>(3)?.max(0),
-                reasoning_output_tokens: row.get::<_, i64>(4)?.max(0),
-                total_tokens: row.get::<_, i64>(5)?.max(0),
-                estimated_cost_usd: row.get::<_, f64>(6)?.max(0.0),
-            });
+            items.push(map_token_usage_summary(row)?);
         }
         Ok(items)
     }
@@ -718,30 +531,25 @@ impl Storage {
         end_ts: Option<i64>,
         key_ids: Option<&[String]>,
     ) -> Result<Vec<ApiKeyModelTokenUsageSummary>> {
-        let include_rollups = start_ts.is_none() && end_ts.is_none();
-        if let Some(key_ids) = key_ids {
-            let normalized_key_ids = normalize_key_ids(key_ids);
-            if normalized_key_ids.is_empty() {
-                return Ok(Vec::new());
-            }
-            let mut items = Vec::new();
-            for chunk in normalized_key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
-                items.extend(self.summarize_request_token_stats_by_key_and_model_chunk(
-                    start_ts,
-                    end_ts,
-                    chunk,
-                    include_rollups,
-                )?);
-            }
-            items.sort_by(|a, b| {
-                b.total_tokens
-                    .cmp(&a.total_tokens)
-                    .then_with(|| a.key_id.cmp(&b.key_id))
-                    .then_with(|| a.model.cmp(&b.model))
-            });
-            return Ok(items);
-        }
+        let Some(key_ids) = key_ids else {
+            return self.query_request_token_stats_by_key_and_model(start_ts, end_ts, None);
+        };
+        let Some(key_filter) = TempKeyIdFilter::create(self, key_ids)? else {
+            return Ok(Vec::new());
+        };
+        self.query_request_token_stats_by_key_and_model(start_ts, end_ts, Some(&key_filter))
+    }
 
+    fn query_request_token_stats_by_key_and_model(
+        &self,
+        start_ts: Option<i64>,
+        end_ts: Option<i64>,
+        key_filter: Option<&TempKeyIdFilter<'_>>,
+    ) -> Result<Vec<ApiKeyModelTokenUsageSummary>> {
+        let include_rollups = start_ts.is_none() && end_ts.is_none();
+        let key_filter_clause = key_filter
+            .map(|filter| filter.exists_clause("s.key_id"))
+            .unwrap_or_default();
         let sql = if include_rollups {
             format!(
                 "WITH all_stats AS (
@@ -768,37 +576,37 @@ impl Storage {
                     FROM request_token_stat_rollups
                  )
                  SELECT
-                    key_id,
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                    s.key_id,
+                    COALESCE(NULLIF(TRIM(s.model), ''), 'unknown') AS normalized_model,
+                    IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+                    IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+                    IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+                    IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
                     IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM all_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''
-                 GROUP BY key_id, normalized_model
-                 ORDER BY total_tokens DESC, key_id ASC, normalized_model ASC",
+                    IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+                 FROM all_stats s
+                 WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''{key_filter_clause}
+                 GROUP BY s.key_id, normalized_model
+                 ORDER BY total_tokens DESC, s.key_id ASC, normalized_model ASC",
                 token_total = token_total_sql_expr(),
             )
         } else {
             format!(
                 "SELECT
-                    key_id,
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                    s.key_id,
+                    COALESCE(NULLIF(TRIM(s.model), ''), 'unknown') AS normalized_model,
+                    IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+                    IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+                    IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+                    IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
                     IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM request_token_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''
-                   AND (?1 IS NULL OR created_at >= ?1)
-                   AND (?2 IS NULL OR created_at < ?2)
-                 GROUP BY key_id, normalized_model
-                 ORDER BY total_tokens DESC, key_id ASC, normalized_model ASC",
+                    IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+                 FROM request_token_stats s
+                 WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''
+                   AND (?1 IS NULL OR s.created_at >= ?1)
+                   AND (?2 IS NULL OR s.created_at < ?2){key_filter_clause}
+                 GROUP BY s.key_id, normalized_model
+                 ORDER BY total_tokens DESC, s.key_id ASC, normalized_model ASC",
                 token_total = token_total_sql_expr(),
             )
         };
@@ -814,115 +622,7 @@ impl Storage {
         };
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
-            items.push(ApiKeyModelTokenUsageSummary {
-                key_id: row.get(0)?,
-                model: row.get(1)?,
-                input_tokens: row.get::<_, i64>(2)?.max(0),
-                cached_input_tokens: row.get::<_, i64>(3)?.max(0),
-                output_tokens: row.get::<_, i64>(4)?.max(0),
-                reasoning_output_tokens: row.get::<_, i64>(5)?.max(0),
-                total_tokens: row.get::<_, i64>(6)?.max(0),
-                estimated_cost_usd: row.get::<_, f64>(7)?.max(0.0),
-            });
-        }
-        Ok(items)
-    }
-
-    fn summarize_request_token_stats_by_key_and_model_chunk(
-        &self,
-        start_ts: Option<i64>,
-        end_ts: Option<i64>,
-        key_ids: &[String],
-        include_rollups: bool,
-    ) -> Result<Vec<ApiKeyModelTokenUsageSummary>> {
-        let mut key_params = Vec::new();
-        let Some(key_clause) = key_id_filter_clause("key_id", key_ids, &mut key_params) else {
-            return Ok(Vec::new());
-        };
-        let sql = if include_rollups {
-            format!(
-                "WITH all_stats AS (
-                    SELECT
-                        key_id,
-                        model,
-                        input_tokens,
-                        cached_input_tokens,
-                        output_tokens,
-                        reasoning_output_tokens,
-                        total_tokens,
-                        estimated_cost_usd
-                    FROM request_token_stats
-                    UNION ALL
-                    SELECT
-                        NULLIF(key_id, '') AS key_id,
-                        NULLIF(model, '') AS model,
-                        input_tokens,
-                        cached_input_tokens,
-                        output_tokens,
-                        reasoning_output_tokens,
-                        total_tokens,
-                        estimated_cost_usd
-                    FROM request_token_stat_rollups
-                 )
-                 SELECT
-                    key_id,
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                    IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM all_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''{key_clause}
-                 GROUP BY key_id, normalized_model
-                 ORDER BY total_tokens DESC, key_id ASC, normalized_model ASC",
-                token_total = token_total_sql_expr(),
-            )
-        } else {
-            format!(
-                "SELECT
-                    key_id,
-                    COALESCE(NULLIF(TRIM(model), ''), 'unknown') AS normalized_model,
-                    IFNULL(SUM(input_tokens), 0) AS input_tokens,
-                    IFNULL(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-                    IFNULL(SUM(output_tokens), 0) AS output_tokens,
-                    IFNULL(SUM(reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                    IFNULL(SUM({token_total}), 0) AS total_tokens,
-                    IFNULL(SUM(estimated_cost_usd), 0.0) AS estimated_cost_usd
-                 FROM request_token_stats
-                 WHERE key_id IS NOT NULL AND TRIM(key_id) <> ''
-                   AND (?1 IS NULL OR created_at >= ?1)
-                   AND (?2 IS NULL OR created_at < ?2){key_clause}
-                 GROUP BY key_id, normalized_model
-                 ORDER BY total_tokens DESC, key_id ASC, normalized_model ASC",
-                token_total = token_total_sql_expr(),
-            )
-        };
-        let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = if include_rollups {
-            stmt.query(params_from_iter(key_params.iter()))?
-        } else {
-            let mut params = Vec::new();
-            params.extend([
-                start_ts.map(Value::Integer).unwrap_or(Value::Null),
-                end_ts.map(Value::Integer).unwrap_or(Value::Null),
-            ]);
-            params.extend(key_params);
-            stmt.query(params_from_iter(params.iter()))?
-        };
-        let mut items = Vec::new();
-        while let Some(row) = rows.next()? {
-            items.push(ApiKeyModelTokenUsageSummary {
-                key_id: row.get(0)?,
-                model: row.get(1)?,
-                input_tokens: row.get::<_, i64>(2)?.max(0),
-                cached_input_tokens: row.get::<_, i64>(3)?.max(0),
-                output_tokens: row.get::<_, i64>(4)?.max(0),
-                reasoning_output_tokens: row.get::<_, i64>(5)?.max(0),
-                total_tokens: row.get::<_, i64>(6)?.max(0),
-                estimated_cost_usd: row.get::<_, f64>(7)?.max(0.0),
-            });
+            items.push(map_api_key_model_token_usage_summary(row)?);
         }
         Ok(items)
     }
