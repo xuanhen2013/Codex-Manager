@@ -349,6 +349,30 @@ export function ModelCatalogModal({
       updatedAt: model?.updatedAt ?? 0,
     };
 
+    const ip = draft.inputPricePer1m.trim();
+    const cp = draft.cachedInputPricePer1m.trim();
+    const op = draft.outputPricePer1m.trim();
+    const hasUserInput = ip !== "" || cp !== "" || op !== "";
+    const hasExisting = priceRule != null;
+
+    if (hasUserInput || hasExisting) {
+      const inputNum = ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null);
+      const cachedNum = cp !== "" ? Number(cp) : (priceRule?.cachedInputPricePer1m ?? null);
+      const outputNum = op !== "" ? Number(op) : (priceRule?.outputPricePer1m ?? null);
+      if (
+        (inputNum !== null && (!Number.isFinite(inputNum) || inputNum < 0)) ||
+        (cachedNum !== null && (!Number.isFinite(cachedNum) || cachedNum < 0)) ||
+        (outputNum !== null && (!Number.isFinite(outputNum) || outputNum < 0))
+      ) {
+        setPriceError("价格必须为非负有效数字");
+        return;
+      }
+      if (inputNum == null || outputNum == null) {
+        setPriceError("输入价格和输出价格必须同时填写");
+        return;
+      }
+    }
+
     const saved = await onSave({
       previousSlug: model?.slug || null,
       sourceKind: nextModel.sourceKind,
@@ -357,45 +381,23 @@ export function ModelCatalogModal({
       model: nextModel,
     });
     if (saved) {
-      if (onSavePriceRule && slug) {
-        const ip = draft.inputPricePer1m.trim();
-        const cp = draft.cachedInputPricePer1m.trim();
-        const op = draft.outputPricePer1m.trim();
-        const hasUserInput = ip !== "" || cp !== "" || op !== "";
-        const hasExisting = priceRule != null;
-        if (hasUserInput || hasExisting) {
-          if (!hasExisting && (ip !== "" || op !== "") && (ip === "" || op === "")) {
-            setPriceError("输入价格和输出价格必须同时填写");
-            return;
-          }
-          try {
-            const inputNum = ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null);
-            const cachedNum = cp !== "" ? Number(cp) : (priceRule?.cachedInputPricePer1m ?? null);
-            const outputNum = op !== "" ? Number(op) : (priceRule?.outputPricePer1m ?? null);
-            if (
-              (inputNum !== null && (!Number.isFinite(inputNum) || inputNum < 0)) ||
-              (cachedNum !== null && (!Number.isFinite(cachedNum) || cachedNum < 0)) ||
-              (outputNum !== null && (!Number.isFinite(outputNum) || outputNum < 0))
-            ) {
-              setPriceError("价格必须为非负有效数字");
-              return;
-            }
-            setSavingPrice(true);
-            await onSavePriceRule({
-              modelPattern: slug,
-              inputPricePer1m: inputNum,
-              cachedInputPricePer1m: cachedNum,
-              outputPricePer1m: outputNum,
-            });
-          } catch (error) {
-            setPriceError(
-              error instanceof Error ? error.message : String(error),
-            );
-            setSavingPrice(false);
-            return;
-          }
+      if (onSavePriceRule && slug && (hasUserInput || hasExisting)) {
+        try {
+          setSavingPrice(true);
+          await onSavePriceRule({
+            modelPattern: slug,
+            inputPricePer1m: hasUserInput ? (ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null)) : null,
+            cachedInputPricePer1m: hasUserInput ? (cp !== "" ? Number(cp) : (priceRule?.cachedInputPricePer1m ?? null)) : null,
+            outputPricePer1m: hasUserInput ? (op !== "" ? Number(op) : (priceRule?.outputPricePer1m ?? null)) : null,
+          });
+        } catch (error) {
+          setPriceError(
+            `模型已保存，但价格保存失败: ${error instanceof Error ? error.message : String(error)}`,
+          );
           setSavingPrice(false);
+          return;
         }
+        setSavingPrice(false);
       }
       onOpenChange(false);
     }
