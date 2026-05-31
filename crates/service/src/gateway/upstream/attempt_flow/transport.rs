@@ -1868,6 +1868,11 @@ mod tests {
 
     #[test]
     fn anthropic_codex_compat_disables_request_compression_without_touching_codex() {
+        let _env_lock = crate::test_env_guard();
+        let _reload_guard = RuntimeConfigReloadGuard;
+        let _compression_guard = EnvGuard::set("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION", "1");
+        crate::gateway::reload_runtime_config_from_env();
+
         assert_eq!(
             resolve_request_compression(
                 crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
