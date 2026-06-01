@@ -42,8 +42,14 @@ pub fn run() {
                 args,
                 cwd
             );
-            request_show_main_window(app);
-            log::info!("secondary instance focus request handled without blocking dialog");
+            match request_show_main_window(app) {
+                Ok(()) => {
+                    log::info!("secondary instance focus request queued without blocking dialog");
+                }
+                Err(err) => {
+                    log::warn!("secondary instance focus request skipped: {}", err);
+                }
+            }
         }))
         .setup(|app| {
             load_env_from_exe_dir();

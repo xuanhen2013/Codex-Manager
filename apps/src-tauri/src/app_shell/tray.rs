@@ -34,7 +34,9 @@ pub(crate) fn setup_tray(app: &tauri::AppHandle) -> Result<(), tauri::Error> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             TRAY_MENU_SHOW_MAIN => {
-                request_show_main_window(app);
+                if let Err(err) = request_show_main_window(app) {
+                    log::warn!("request show main window from tray failed: {}", err);
+                }
             }
             TRAY_MENU_QUIT_APP => {
                 if has_unsaved_settings_draft_sections() {

@@ -225,7 +225,9 @@ pub(crate) fn handle_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) 
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => {
-            request_show_main_window(app);
+            if let Err(err) = request_show_main_window(app) {
+                log::warn!("request show main window from reopen failed: {}", err);
+            }
         }
         _ => {}
     }

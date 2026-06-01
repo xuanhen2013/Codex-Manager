@@ -67,6 +67,5 @@ pub fn app_window_unsaved_draft_sections_set(sections: Vec<String>) -> Result<()
 
 #[tauri::command]
 pub fn app_show_main_window(app: tauri::AppHandle) -> Result<(), String> {
-    request_show_main_window(&app);
-    Ok(())
+    request_show_main_window(&app)
 }
