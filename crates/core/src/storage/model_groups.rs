@@ -112,6 +112,7 @@ impl Storage {
                AND TRIM(slug) <> ''",
             params![DEFAULT_MODEL_GROUP_ID, now],
         )?;
+        self.prune_default_model_group_models_not_in_catalog()?;
         self.conn.execute(
             "INSERT OR IGNORE INTO user_model_groups (
                 user_id, group_id, status, expires_at, created_at, updated_at
@@ -121,6 +122,34 @@ impl Storage {
              WHERE role = 'member'
                AND status = 'active'",
             params![DEFAULT_MODEL_GROUP_ID, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn prune_default_model_group_models_not_in_catalog(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM model_group_models
+             WHERE group_id IN (SELECT id FROM model_groups WHERE is_default = 1)
+               AND platform_model_slug NOT IN (
+                   SELECT slug
+                   FROM model_catalog_models
+                   WHERE scope = 'default'
+                     AND COALESCE(supported_in_api, 1) = 1
+                     AND TRIM(slug) <> ''
+               )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_model_group_model_references(&self, platform_model_slug: &str) -> Result<()> {
+        let slug = platform_model_slug.trim();
+        if slug.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "DELETE FROM model_group_models WHERE platform_model_slug = ?1",
+            params![slug],
         )?;
         Ok(())
     }
