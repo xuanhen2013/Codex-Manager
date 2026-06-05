@@ -352,7 +352,7 @@ export function ModelCatalogModal({
     const ip = draft.inputPricePer1m.trim();
     const cp = draft.cachedInputPricePer1m.trim();
     const op = draft.outputPricePer1m.trim();
-    const hasUserInput = ip !== "" || cp !== "" || op !== "";
+    const hasUserInput = ip !== "" || cp !== "" || op !== "" || !!priceRule?.id;
 
     if (hasUserInput) {
       const inputNum = ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null);
@@ -384,10 +384,12 @@ export function ModelCatalogModal({
         try {
           setSavingPrice(true);
           await onSavePriceRule({
+            id: priceRule?.id,
+            provider: priceRule?.provider ?? undefined,
             modelPattern: slug,
-            inputPricePer1m: ip !== "" ? Number(ip) : (priceRule?.inputPricePer1m ?? null),
-            cachedInputPricePer1m: cp !== "" ? Number(cp) : (priceRule?.cachedInputPricePer1m ?? null),
-            outputPricePer1m: op !== "" ? Number(op) : (priceRule?.outputPricePer1m ?? null),
+            inputPricePer1m: ip !== "" ? Number(ip) : 0,
+            cachedInputPricePer1m: cp !== "" ? Number(cp) : 0,
+            outputPricePer1m: op !== "" ? Number(op) : 0,
           });
         } catch (error) {
           setPriceError(

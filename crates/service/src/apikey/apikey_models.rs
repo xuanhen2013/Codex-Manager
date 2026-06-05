@@ -956,7 +956,7 @@ fn ensure_model_price_rules_for_aggregate_api(
         storage
             .upsert_model_price_rule(&ModelPriceRule {
                 id: format!("agg-sync-{source_id}-{slug}"),
-                provider: "openai".to_string(),
+                provider: crate::quota::model_pricing::infer_provider(slug).to_string(),
                 model_pattern: slug.to_string(),
                 match_type: "exact".to_string(),
                 billing_mode: "standard".to_string(),

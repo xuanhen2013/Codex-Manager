@@ -1524,7 +1524,7 @@ pub(crate) fn upsert_model_price_rule(
         id,
         provider: input
             .provider
-            .unwrap_or_else(|| "openai".to_string()),
+            .unwrap_or_else(|| crate::quota::model_pricing::infer_provider(&model_pattern).to_string()),
         model_pattern,
         match_type: input
             .match_type
