@@ -1,13 +1,14 @@
 "use client";
 
 import type { MessageCatalog } from "./types";
+import { EN_PLATFORM_MODE_MESSAGES } from "./sections/en-platform-mode";
 
 export const EN_MESSAGES: MessageCatalog = {
   仪表盘: "Dashboard",
   概览: "Overview",
   平台接入: "Platform Access",
   平台配置: "Platform Configuration",
-  平台模式选择: "Platform Mode",
+  ...EN_PLATFORM_MODE_MESSAGES,
   模型与路由: "Models & Routing",
   成员管理: "Member Management",
   运行观测: "Observability",
@@ -201,7 +202,13 @@ export const EN_MESSAGES: MessageCatalog = {
   "导入 ccswitch": "Import to ccswitch",
   "已唤起 ccswitch，请在确认窗口完成导入":
     "ccswitch has been opened. Confirm the import in its dialog.",
-  "唤起 ccswitch 失败": "Failed to open ccswitch",
+"唤起 ccswitch 失败": "Failed to open ccswitch",
+  "当前为账号直连，Codex CLI 直连 OpenAI，CodexManager 无法统计 CLI 请求日志和用量。":
+    "Direct account mode is active. Codex CLI connects to OpenAI directly, so CodexManager cannot collect CLI request logs or usage.",
+  "当前为本地网关，Codex CLI 经过 CodexManager 转发，请求日志、Token 和费用统计可用。":
+    "Local gateway mode is active. Codex CLI is routed through CodexManager, so request logs, tokens, and cost analytics are available.",
+  "选择账号直连或本地网关后，CodexManager 会接管该 Codex profile 的 auth.json / config.toml。":
+    "After you choose direct account or local gateway mode, CodexManager will take over auth.json and config.toml for that Codex profile.",
   删除密钥: "Delete key",
   全部: "All",
   低配额: "Low quota",
@@ -1524,4 +1531,40 @@ export const EN_MESSAGES: MessageCatalog = {
   "暂无已启用余额检测的聚合 API":
     "No aggregate APIs with balance query enabled",
   刷新余额: "Refresh balance",
+"个人资料已更新": "Profile updated",
+  "密码已更新": "Password updated",
+  "个人设置": "Personal settings",
+  "管理你的账号资料、登录密码和界面偏好": "Manage your account profile, login password, and interface preferences",
+  "账号资料": "Account profile",
+  "当前登录账号": "Signed-in account",
+  "保存资料": "Save profile",
+  "登录密码": "Login password",
+  "修改当前账号的登录密码": "Change the password for the current account",
+  "当前密码": "Current password",
+  "修改密码": "Change password",
+  "界面偏好": "Interface preferences",
+  "这些偏好只影响当前浏览器会话": "These preferences only affect the current browser session",
+  "请输入 0-100 之间的百分比": "Enter a percentage between 0 and 100",
+  "Cron 表达式需要 5 段，或带秒的 6 段": "Cron expressions must have 5 fields, or 6 fields when including seconds",
+  "额度保护": "Quota protection",
+  "低于保留百分比的账号会从网关路由和远端模型刷新候选中跳过。": "Accounts below the reserved percentage are skipped by gateway routing and remote model refresh candidate selection.",
+  "5 小时窗口保留 (%)": "5-hour window reserve (%)",
+  "周窗口保留 (%)": "Weekly window reserve (%)",
+  "全部低额度时兜底": "Fallback when all quotas are low",
+  "关闭后如果所有账号都低于阈值，网关会返回无可用账号。": "If disabled and all accounts fall below the threshold, the gateway returns no available account.",
+  "请先填写 Cron 表达式": "Fill in the Cron expression first",
+  "定时账号预热": "Scheduled account warmup",
+  "Cron 表达式": "Cron expression",
+  "网关模式": "Gateway mode",
+  "转发路径": "Forwarded path",
+  "上游模型": "Upstream model",
+  "实际来源": "Actual source",
+  "账号直连模式不会产生新的 CodexManager 请求日志": "Direct account mode does not create new CodexManager request logs",
+  "这里仅展示历史网关请求；如需记录请求，请切换到本地网关模式。": "Only historical gateway requests are shown here; switch to local gateway mode if you need request logging.",
+  "去切换为本地网关": "Switch to local gateway",
+  "仅网关流量": "Gateway traffic only",
+  "账号直连模式下不会产生请求日志，如需记录请求请切换到本地网关模式。": "Direct account mode does not generate request logs. Switch to local gateway mode if you need logging.",
+  未分配: "Unassigned",
+  "按我的平台密钥累计": "Accumulated by my platform keys",
+  归属成员: "Owner member",
 };

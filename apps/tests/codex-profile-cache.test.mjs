@@ -28,14 +28,14 @@ test("账号池页面变更会刷新 Codex profile 候选账号", async () => {
 });
 
 test("平台模式页面可见时会主动刷新候选列表", async () => {
-  const source = await readSource("src/app/platform-mode/page.tsx");
+  const source = `${await readSource("src/app/platform-mode/page.tsx")}\n${await readSource("src/app/platform-mode/page-sections.tsx")}\n${await readSource("src/app/platform-mode/use-platform-mode-state.ts")}`;
   assert.match(source, /useDesktopPageActive\("\/platform-mode\/"\)/);
   assert.match(source, /refetchInterval:\s*isServiceReady && isPageActive \? 5_000 : false/);
   assert.match(source, /pickAvailableCandidateId/);
 });
 
 test("平台模式页面采用当前模式优先的切换结构", async () => {
-  const source = await readSource("src/app/platform-mode/page.tsx");
+  const source = `${await readSource("src/app/platform-mode/page.tsx")}\n${await readSource("src/app/platform-mode/page-sections.tsx")}`;
   assert.match(source, /平台模式选择/);
   assert.match(source, /当前模式/);
   assert.match(source, /账号直连/);
