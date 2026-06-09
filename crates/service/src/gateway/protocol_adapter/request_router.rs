@@ -89,7 +89,10 @@ pub(crate) fn adapt_openai_responses_to_anthropic_messages(
     }
     if let Some(tools) = responses_tools_to_anthropic(obj.get("tools"))? {
         rewritten.insert("tools".to_string(), tools);
-        if let Some(tool_choice) = responses_tool_choice_to_anthropic(obj.get("tool_choice")) {
+        if let Some(tool_choice) = responses_tool_choice_to_anthropic(
+            obj.get("tool_choice"),
+            responses_parallel_tool_calls(obj.get("parallel_tool_calls")),
+        ) {
             rewritten.insert("tool_choice".to_string(), tool_choice);
         }
     }
@@ -644,8 +647,25 @@ fn responses_tools_to_anthropic(tools: Option<&Value>) -> Result<Option<Value>, 
     Ok((!out.is_empty()).then(|| Value::Array(out)))
 }
 
-fn responses_tool_choice_to_anthropic(tool_choice: Option<&Value>) -> Option<Value> {
-    match tool_choice {
+fn responses_parallel_tool_calls(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_bool).unwrap_or(true)
+}
+
+fn with_anthropic_disable_parallel_tool_use(mut value: Value, parallel_tool_calls: bool) -> Value {
+    if parallel_tool_calls {
+        return value;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("disable_parallel_tool_use".to_string(), Value::Bool(true));
+    }
+    value
+}
+
+fn responses_tool_choice_to_anthropic(
+    tool_choice: Option<&Value>,
+    parallel_tool_calls: bool,
+) -> Option<Value> {
+    let mapped = match tool_choice {
         Some(Value::String(value)) if value == "none" => Some(json!({ "type": "none" })),
         Some(Value::String(value)) if value == "required" => Some(json!({ "type": "any" })),
         Some(Value::Object(obj)) => obj
@@ -659,7 +679,11 @@ fn responses_tool_choice_to_anthropic(tool_choice: Option<&Value>) -> Option<Val
             .and_then(normalize_text)
             .map(|name| json!({ "type": "tool", "name": name })),
         _ => Some(json!({ "type": "auto" })),
-    }
+    }?;
+    Some(with_anthropic_disable_parallel_tool_use(
+        mapped,
+        parallel_tool_calls,
+    ))
 }
 
 fn responses_reasoning_to_anthropic(reasoning: Option<&Value>, max_tokens: i64) -> Option<Value> {
@@ -2355,6 +2379,38 @@ mod tests {
         assert_eq!(payload["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(payload["tools"][0]["name"], "read_file");
         assert_eq!(payload["thinking"]["type"], "enabled");
+    }
+
+    #[test]
+    fn responses_anthropic_bridge_preserves_tool_choice_parallel_policy() {
+        let body = json!({
+            "model": "gpt-5.3",
+            "input": "read a file",
+            "tools": [{
+                "type": "function",
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "path": { "type": "string" } }
+                }
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": { "name": "read_file" }
+            },
+            "parallel_tool_calls": false
+        });
+
+        let adapted = adapt_openai_responses_to_anthropic_messages(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+            Some("claude-sonnet-4"),
+        )
+        .expect("adapt responses request");
+        let payload: Value = serde_json::from_slice(&adapted).expect("parse adapted body");
+
+        assert_eq!(payload["tool_choice"]["type"], "tool");
+        assert_eq!(payload["tool_choice"]["name"], "read_file");
+        assert_eq!(payload["tool_choice"]["disable_parallel_tool_use"], true);
     }
 
     #[test]

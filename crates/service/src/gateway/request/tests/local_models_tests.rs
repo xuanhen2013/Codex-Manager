@@ -1,5 +1,5 @@
 use super::*;
-use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
+use codexmanager_core::rpc::types::{ModelInfo, ModelServiceTier, ModelsResponse};
 use serde_json::Value;
 
 /// 函数 `serialize_models_response_outputs_codex_and_api_shapes`
@@ -113,6 +113,56 @@ fn serialize_models_response_preserves_description_for_codex_clients() {
     assert_eq!(
         data[0].get("description").and_then(Value::as_str),
         Some("Latest frontier agentic coding model.")
+    );
+}
+
+#[test]
+fn serialize_models_response_preserves_service_tier_capabilities_for_codex_clients() {
+    let items = ModelsResponse {
+        models: vec![ModelInfo {
+            slug: "gpt-5.5-codex".to_string(),
+            display_name: "GPT-5.5 Codex".to_string(),
+            supported_in_api: true,
+            service_tiers: vec![ModelServiceTier {
+                id: "flex".to_string(),
+                name: "Flex".to_string(),
+                description: "Lower priority capacity.".to_string(),
+                ..Default::default()
+            }],
+            default_service_tier: Some("flex".to_string()),
+            upgrade_info: Some(serde_json::json!({
+                "model": "gpt-5.5-codex",
+                "upgrade_copy": "Use the newer coding model"
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let output = serialize_models_response(&items);
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .expect("models array");
+
+    assert_eq!(
+        models[0]["service_tiers"][0]
+            .get("id")
+            .and_then(Value::as_str),
+        Some("flex")
+    );
+    assert_eq!(
+        models[0]
+            .get("default_service_tier")
+            .and_then(Value::as_str),
+        Some("flex")
+    );
+    assert_eq!(
+        models[0]["upgrade_info"]
+            .get("model")
+            .and_then(Value::as_str),
+        Some("gpt-5.5-codex")
     );
 }
 

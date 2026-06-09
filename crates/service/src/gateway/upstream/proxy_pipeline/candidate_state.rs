@@ -288,6 +288,8 @@ mod tests {
             has_sticky_fallback_conversation: false,
             has_body_encrypted_content: false,
             conversation_routing: None,
+            route_strategy_for_log: "ordered",
+            route_source_for_log: "route_strategy",
         }
     }
 

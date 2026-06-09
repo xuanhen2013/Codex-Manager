@@ -109,13 +109,20 @@ fn insert_request_log_with_token_stat_is_visible_via_join() {
         adapted_path: Some("/v1/responses".to_string()),
         method: "POST".to_string(),
         request_type: Some("http".to_string()),
+        route_strategy: Some("balanced".to_string()),
+        route_source: Some("conversation_bound".to_string()),
+        client_model: Some("gpt-5-client".to_string()),
         model: Some("gpt-5".to_string()),
+        model_source: Some("gateway_override".to_string()),
         upstream_model: Some("gpt-provider-5".to_string()),
         actual_source_kind: Some("openai_account".to_string()),
         actual_source_id: Some("acc_1".to_string()),
+        client_reasoning_effort: Some("low".to_string()),
         reasoning_effort: Some("medium".to_string()),
+        reasoning_source: Some("api_key_profile".to_string()),
         service_tier: Some("fast".to_string()),
         effective_service_tier: Some("priority".to_string()),
+        service_tier_source: Some("gateway_override".to_string()),
         response_adapter: Some("OpenAIChatCompletionsJson".to_string()),
         upstream_url: Some("https://example.test".to_string()),
         aggregate_api_supplier_name: None,
@@ -168,12 +175,20 @@ fn insert_request_log_with_token_stat_is_visible_via_join() {
     assert_eq!(row.original_path.as_deref(), Some("/v1/chat/completions"));
     assert_eq!(row.adapted_path.as_deref(), Some("/v1/responses"));
     assert_eq!(row.request_type.as_deref(), Some("http"));
+    assert_eq!(row.route_strategy.as_deref(), Some("balanced"));
+    assert_eq!(row.route_source.as_deref(), Some("conversation_bound"));
+    assert_eq!(row.client_model.as_deref(), Some("gpt-5-client"));
     assert_eq!(row.model.as_deref(), Some("gpt-5"));
+    assert_eq!(row.model_source.as_deref(), Some("gateway_override"));
     assert_eq!(row.upstream_model.as_deref(), Some("gpt-provider-5"));
     assert_eq!(row.actual_source_kind.as_deref(), Some("openai_account"));
     assert_eq!(row.actual_source_id.as_deref(), Some("acc_1"));
+    assert_eq!(row.client_reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(row.reasoning_effort.as_deref(), Some("medium"));
+    assert_eq!(row.reasoning_source.as_deref(), Some("api_key_profile"));
     assert_eq!(row.service_tier.as_deref(), Some("fast"));
     assert_eq!(row.effective_service_tier.as_deref(), Some("priority"));
+    assert_eq!(row.service_tier_source.as_deref(), Some("gateway_override"));
     assert_eq!(row.first_response_ms, Some(456));
     assert_eq!(
         row.response_adapter.as_deref(),

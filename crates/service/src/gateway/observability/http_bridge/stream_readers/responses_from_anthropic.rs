@@ -94,6 +94,7 @@ impl ResponsesFromAnthropicSseReader {
                 Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
                     self.saw_upstream_frame = true;
+                    mark_first_response_ms_on_usage(&self.usage_collector, self.request_started_at);
                     let mapped = self.process_sse_frame(&frame);
                     if !mapped.is_empty() {
                         mark_first_response_ms_on_usage(
@@ -221,21 +222,38 @@ impl ResponsesFromAnthropicSseReader {
     }
 
     fn capture_usage(&mut self, usage: &Map<String, Value>) {
-        if let Some(value) = usage.get("input_tokens").and_then(Value::as_i64) {
+        if let Some(value) = usage_i64(usage, &["input_tokens", "prompt_tokens"]) {
             self.state.input_tokens = value;
         }
-        if let Some(value) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
+        if let Some(value) = usage_i64(
+            usage,
+            &[
+                "cache_read_input_tokens",
+                "cached_input_tokens",
+                "input_tokens_details.cached_tokens",
+                "prompt_tokens_details.cached_tokens",
+            ],
+        ) {
             self.state.cached_input_tokens = value;
         }
-        if let Some(value) = usage.get("output_tokens").and_then(Value::as_i64) {
+        if let Some(value) = usage_i64(usage, &["output_tokens", "completion_tokens"]) {
             self.state.output_tokens = value;
         }
-        if let Some(value) = usage.get("reasoning_output_tokens").and_then(Value::as_i64) {
+        if let Some(value) = usage_i64(
+            usage,
+            &[
+                "reasoning_output_tokens",
+                "output_tokens_details.reasoning_tokens",
+                "completion_tokens_details.reasoning_tokens",
+            ],
+        ) {
             self.state.reasoning_output_tokens = value;
         }
-        self.state.total_tokens = Some(
-            self.state.input_tokens + self.state.cached_input_tokens + self.state.output_tokens,
-        );
+        self.state.total_tokens = usage_i64(usage, &["total_tokens"]).or_else(|| {
+            Some(
+                self.state.input_tokens + self.state.cached_input_tokens + self.state.output_tokens,
+            )
+        });
     }
 
     fn start_content_block(&mut self, block: &Map<String, Value>) {
@@ -574,10 +592,96 @@ fn append_sse_event(buffer: &mut String, event: &str, payload: &Value) {
     buffer.push_str("\n\n");
 }
 
+fn usage_i64(usage: &Map<String, Value>, paths: &[&str]) -> Option<i64> {
+    for path in paths {
+        let mut current: Option<&Value> = None;
+        let mut found = true;
+        for (index, segment) in path.split('.').enumerate() {
+            current = if index == 0 {
+                usage.get(segment)
+            } else {
+                current
+                    .and_then(Value::as_object)
+                    .and_then(|object| object.get(segment))
+            };
+            if current.is_none() {
+                found = false;
+                break;
+            }
+        }
+        if !found {
+            continue;
+        }
+        if let Some(value) = current.and_then(Value::as_i64) {
+            return Some(value);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Cursor, Read};
+    use std::thread;
+    use std::time::Duration;
+
+    struct PausingReader {
+        payload: Cursor<Vec<u8>>,
+        paused: bool,
+    }
+
+    impl PausingReader {
+        fn new(payload: &str) -> Self {
+            Self {
+                payload: Cursor::new(payload.as_bytes().to_vec()),
+                paused: false,
+            }
+        }
+    }
+
+    impl Read for PausingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.payload.read(buf)?;
+            if read > 0 {
+                return Ok(read);
+            }
+            if !self.paused {
+                self.paused = true;
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn metadata_only_upstream_frame_records_first_response_before_keepalive() {
+        let previous = super::super::current_sse_keepalive_interval_ms();
+        super::super::set_sse_keepalive_interval_ms(1).expect("set keepalive interval");
+        let upstream = concat!(
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n",
+        );
+        let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
+        let mut reader = ResponsesFromAnthropicSseReader::from_reader(
+            PausingReader::new(upstream),
+            Arc::clone(&usage_collector),
+            Some("fallback-model"),
+            Instant::now(),
+        );
+        let mut buf = [0_u8; 128];
+
+        let read = reader.read(&mut buf).expect("read keepalive");
+
+        super::super::set_sse_keepalive_interval_ms(previous).expect("restore keepalive interval");
+        assert!(read > 0);
+        assert_eq!(
+            std::str::from_utf8(&buf[..read]).expect("utf8"),
+            std::str::from_utf8(SseKeepAliveFrame::OpenAIResponses.bytes()).expect("utf8")
+        );
+        let usage = usage_collector.lock().expect("usage lock").clone();
+        assert!(usage.first_response_ms.is_some());
+    }
 
     #[test]
     fn anthropic_text_sse_maps_to_responses_sse() {
@@ -613,6 +717,42 @@ mod tests {
         assert_eq!(usage.input_tokens, Some(3));
         assert_eq!(usage.output_tokens, Some(2));
         assert_eq!(usage.output_text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn anthropic_to_responses_reader_accepts_openai_usage_fields() {
+        let upstream = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_openai_usage\",\"model\":\"bridge-model\",\"usage\":{\"prompt_tokens\":11,\"prompt_tokens_details\":{\"cached_tokens\":5},\"completion_tokens\":2,\"completion_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":13}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let usage_collector = Arc::new(Mutex::new(UpstreamResponseUsage::default()));
+        let mut reader = ResponsesFromAnthropicSseReader::from_reader(
+            Cursor::new(upstream.as_bytes().to_vec()),
+            Arc::clone(&usage_collector),
+            Some("fallback-model"),
+            Instant::now(),
+        );
+        let mut out = String::new();
+
+        reader.read_to_string(&mut out).expect("read mapped stream");
+
+        assert!(out.contains("\"input_tokens\":11"));
+        assert!(out.contains("\"cached_tokens\":5"));
+        assert!(out.contains("\"output_tokens\":2"));
+        assert!(out.contains("\"reasoning_tokens\":1"));
+        assert!(out.contains("\"total_tokens\":13"));
+        let usage = usage_collector.lock().expect("usage lock").clone();
+        assert_eq!(usage.input_tokens, Some(11));
+        assert_eq!(usage.cached_input_tokens, Some(5));
+        assert_eq!(usage.output_tokens, Some(2));
+        assert_eq!(usage.total_tokens, Some(13));
+        assert_eq!(usage.reasoning_output_tokens, Some(1));
     }
 
     #[test]

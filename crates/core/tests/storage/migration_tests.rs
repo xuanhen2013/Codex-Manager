@@ -304,6 +304,33 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 064 migration");
     assert_eq!(applied_064, 1);
+    let applied_066: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '066_request_logs_service_tier_source'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 066 migration");
+    assert_eq!(applied_066, 1);
+    let applied_067: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '067_request_logs_model_reasoning_sources'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 067 migration");
+    assert_eq!(applied_067, 1);
+    let applied_068: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '068_request_logs_route_strategy_source'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 068 migration");
+    assert_eq!(applied_068, 1);
 
     assert!(!storage
         .has_column("accounts", "note")
@@ -362,6 +389,27 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("request_logs", "effective_service_tier")
         .expect("check request_logs.effective_service_tier"));
+    assert!(storage
+        .has_column("request_logs", "service_tier_source")
+        .expect("check request_logs.service_tier_source"));
+    assert!(storage
+        .has_column("request_logs", "client_model")
+        .expect("check request_logs.client_model"));
+    assert!(storage
+        .has_column("request_logs", "model_source")
+        .expect("check request_logs.model_source"));
+    assert!(storage
+        .has_column("request_logs", "client_reasoning_effort")
+        .expect("check request_logs.client_reasoning_effort"));
+    assert!(storage
+        .has_column("request_logs", "reasoning_source")
+        .expect("check request_logs.reasoning_source"));
+    assert!(storage
+        .has_column("request_logs", "route_strategy")
+        .expect("check request_logs.route_strategy"));
+    assert!(storage
+        .has_column("request_logs", "route_source")
+        .expect("check request_logs.route_source"));
     assert!(storage
         .has_column("app_settings", "value")
         .expect("check app_settings.value"));
@@ -1019,6 +1067,27 @@ fn request_logs_compact_migration_drops_legacy_usage_columns_and_preserves_rows(
     assert!(storage
         .has_column("request_logs", "effective_service_tier")
         .expect("check compact effective_service_tier"));
+    assert!(storage
+        .has_column("request_logs", "service_tier_source")
+        .expect("check compact service_tier_source"));
+    assert!(storage
+        .has_column("request_logs", "client_model")
+        .expect("check compact client_model"));
+    assert!(storage
+        .has_column("request_logs", "model_source")
+        .expect("check compact model_source"));
+    assert!(storage
+        .has_column("request_logs", "client_reasoning_effort")
+        .expect("check compact client_reasoning_effort"));
+    assert!(storage
+        .has_column("request_logs", "reasoning_source")
+        .expect("check compact reasoning_source"));
+    assert!(storage
+        .has_column("request_logs", "route_strategy")
+        .expect("check compact route_strategy"));
+    assert!(storage
+        .has_column("request_logs", "route_source")
+        .expect("check compact route_source"));
 
     let request_log_row: (i64, String, Option<String>, Option<String>, Option<i64>) = storage
         .conn

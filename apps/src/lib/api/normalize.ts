@@ -539,9 +539,9 @@ function normalizeModelReasoningLevels(payload: unknown): ModelReasoningLevel[] 
       const effort = asString(current.effort);
       if (!effort) return null;
       return {
+        ...current,
         effort,
         description: asString(current.description),
-        ...current,
       };
     })
     .filter((item): item is ModelReasoningLevel => Boolean(item));
@@ -552,10 +552,28 @@ function normalizeModelTruncationPolicy(payload: unknown): ModelTruncationPolicy
   const mode = asString(source.mode);
   if (!mode) return null;
   return {
+    ...source,
     mode,
     limit: toNullableNumber(source.limit) ?? 0,
-    ...source,
   };
+}
+
+function normalizeModelServiceTiers(payload: unknown): ModelInfo["serviceTiers"] {
+  const seen = new Set<string>();
+  return asArray(payload)
+    .map((item) => {
+      const current = asObject(item);
+      const id = asString(current.id);
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      return {
+        ...current,
+        id,
+        name: asString(current.name) || id,
+        description: asString(current.description),
+      };
+    })
+    .filter((item): item is ModelInfo["serviceTiers"][number] => Boolean(item));
 }
 
 function normalizeModelVisibility(value: unknown): string | null {
@@ -575,6 +593,7 @@ function normalizeModelInfo(payload: unknown): ModelInfo | null {
     source.input_modalities ?? source.inputModalities ?? ["text", "image"];
 
   return {
+    ...source,
     slug,
     displayName: asString(source.display_name ?? source.displayName) || slug,
     description: asString(source.description) || null,
@@ -590,8 +609,12 @@ function normalizeModelInfo(payload: unknown): ModelInfo | null {
     additionalSpeedTiers: asArray(
       source.additional_speed_tiers ?? source.additionalSpeedTiers,
     ).map((item) => asString(item)),
+    serviceTiers: normalizeModelServiceTiers(source.service_tiers ?? source.serviceTiers),
+    defaultServiceTier:
+      asString(source.default_service_tier ?? source.defaultServiceTier) || null,
     availabilityNux: toNullableObject(source.availability_nux ?? source.availabilityNux),
     upgrade: toNullableObject(source.upgrade),
+    upgradeInfo: toNullableObject(source.upgrade_info ?? source.upgradeInfo),
     baseInstructions:
       asString(source.base_instructions ?? source.baseInstructions) || null,
     modelMessages: toNullableObject(source.model_messages ?? source.modelMessages),
@@ -636,7 +659,6 @@ function normalizeModelInfo(payload: unknown): ModelInfo | null {
     availableInPlans: asArray(source.available_in_plans ?? source.availableInPlans).map((item) =>
       asString(item),
     ),
-    ...source,
   };
 }
 
@@ -1465,17 +1487,28 @@ export function normalizeRequestLog(item: unknown): RequestLog | null {
     method,
     requestType: asString(source.requestType ?? source.request_type) || "http",
     gatewayMode: asString(source.gatewayMode ?? source.gateway_mode),
+    routeStrategy: asString(source.routeStrategy ?? source.route_strategy),
+    routeSource: asString(source.routeSource ?? source.route_source),
     path: requestPath,
+    clientModel: asString(source.clientModel ?? source.client_model),
     model: asString(source.model),
+    modelSource: asString(source.modelSource ?? source.model_source),
     upstreamModel: asString(source.upstreamModel ?? source.upstream_model),
     actualSourceKind: asString(
       source.actualSourceKind ?? source.actual_source_kind
     ),
     actualSourceId: asString(source.actualSourceId ?? source.actual_source_id),
+    clientReasoningEffort: asString(
+      source.clientReasoningEffort ?? source.client_reasoning_effort
+    ),
     reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
+    reasoningSource: asString(source.reasoningSource ?? source.reasoning_source),
     serviceTier: asString(source.serviceTier ?? source.service_tier),
     effectiveServiceTier: asString(
       source.effectiveServiceTier ?? source.effective_service_tier
+    ),
+    serviceTierSource: asString(
+      source.serviceTierSource ?? source.service_tier_source
     ),
     responseAdapter: asString(source.responseAdapter ?? source.response_adapter),
     canonicalSource:

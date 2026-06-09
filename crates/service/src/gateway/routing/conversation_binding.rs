@@ -38,6 +38,7 @@ impl RouteConversationSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CandidateRotationSource {
     ConversationBinding,
+    ManualPreferredAccount,
     RouteStrategy,
 }
 
@@ -56,6 +57,7 @@ impl CandidateRotationSource {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ConversationBinding => "conversation_bound",
+            Self::ManualPreferredAccount => "manual_preferred_account",
             Self::RouteStrategy => "route_strategy",
         }
     }
@@ -354,7 +356,33 @@ pub(crate) fn apply_candidate_rotation(
             strategy_applied: false,
         };
     }
+    if routing
+        .as_ref()
+        .and_then(|routing| routing.manual_preferred_account_id.as_deref())
+        .is_some()
+    {
+        return CandidateRotationPlan {
+            source: CandidateRotationSource::ManualPreferredAccount,
+            strategy_label: "manual_preferred_account",
+            strategy_applied: false,
+        };
+    }
+    let manual_preferred_account_id = super::manual_preferred_account();
     super::apply_route_strategy(candidates, key_id, model_for_log);
+    if manual_preferred_account_id
+        .as_deref()
+        .is_some_and(|account_id| {
+            candidates
+                .iter()
+                .any(|(account, _)| account.id == account_id)
+        })
+    {
+        return CandidateRotationPlan {
+            source: CandidateRotationSource::ManualPreferredAccount,
+            strategy_label: "manual_preferred_account",
+            strategy_applied: false,
+        };
+    }
     CandidateRotationPlan {
         source: CandidateRotationSource::RouteStrategy,
         strategy_label: super::current_route_strategy(),
@@ -859,7 +887,7 @@ mod tests {
     #[test]
     fn apply_candidate_rotation_reports_binding_source_when_binding_selected() {
         let binding = sample_binding("acc-1");
-        let routing = prepare_conversation_routing(
+        let mut routing = prepare_conversation_routing(
             "key-hash-1",
             Some("conv-1"),
             Some(&binding),
@@ -869,6 +897,7 @@ mod tests {
             ],
         )
         .expect("routing context");
+        routing.manual_preferred_account_id = Some("acc-1".to_string());
         let mut candidates = vec![
             (sample_account("acc-2", 0), sample_token("acc-2")),
             (sample_account("acc-1", 1), sample_token("acc-1")),
@@ -885,6 +914,36 @@ mod tests {
         assert_eq!(plan.strategy_label, "conversation_bound");
         assert!(!plan.strategy_applied);
         assert_eq!(candidates[0].0.id, "acc-2");
+    }
+
+    #[test]
+    fn apply_candidate_rotation_reports_manual_preferred_source() {
+        let mut routing = prepare_conversation_routing(
+            "key-hash-1",
+            Some("conv-1"),
+            None,
+            &mut vec![
+                (sample_account("acc-2", 0), sample_token("acc-2")),
+                (sample_account("acc-1", 1), sample_token("acc-1")),
+            ],
+        )
+        .expect("routing context");
+        routing.manual_preferred_account_id = Some("acc-2".to_string());
+        let mut candidates = vec![
+            (sample_account("acc-2", 0), sample_token("acc-2")),
+            (sample_account("acc-1", 1), sample_token("acc-1")),
+        ];
+
+        let plan = apply_candidate_rotation(
+            &mut candidates,
+            Some(&routing),
+            "key-hash-1",
+            Some("gpt-5.4"),
+        );
+
+        assert_eq!(plan.source, CandidateRotationSource::ManualPreferredAccount);
+        assert_eq!(plan.strategy_label, "manual_preferred_account");
+        assert!(!plan.strategy_applied);
     }
 
     /// 函数 `terminal_response_creates_and_rebinds_conversation_binding_on_success`

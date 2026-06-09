@@ -1114,10 +1114,16 @@ pub struct ModelInfo {
     pub priority: i64,
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_service_tier: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub availability_nux: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgrade: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_info: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1173,8 +1179,11 @@ impl Default for ModelInfo {
             supported_in_api: default_supported_in_api(),
             priority: 0,
             additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
             availability_nux: None,
             upgrade: None,
+            upgrade_info: None,
             base_instructions: None,
             model_messages: None,
             supports_reasoning_summaries: None,
@@ -1197,6 +1206,18 @@ impl Default for ModelInfo {
             extra: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelServiceTier {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1233,15 +1254,22 @@ pub struct RequestLogSummary {
     pub method: String,
     pub request_type: Option<String>,
     pub gateway_mode: Option<String>,
+    pub route_strategy: Option<String>,
+    pub route_source: Option<String>,
     pub transparent_mode: Option<bool>,
     pub enhanced_mode: Option<bool>,
+    pub client_model: Option<String>,
     pub model: Option<String>,
+    pub model_source: Option<String>,
     pub upstream_model: Option<String>,
     pub actual_source_kind: Option<String>,
     pub actual_source_id: Option<String>,
+    pub client_reasoning_effort: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_source: Option<String>,
     pub service_tier: Option<String>,
     pub effective_service_tier: Option<String>,
+    pub service_tier_source: Option<String>,
     pub response_adapter: Option<String>,
     pub canonical_source: Option<String>,
     pub size_reject_stage: Option<String>,

@@ -77,8 +77,8 @@ impl Storage {
             "INSERT INTO request_logs (
                 trace_id, key_id, account_id, initial_account_id, attempted_account_ids_json, initial_aggregate_api_id, attempted_aggregate_api_ids_json,
                 request_path, original_path, adapted_path,
-                method, request_type, gateway_mode, transparent_mode, enhanced_mode, model, upstream_model, actual_source_kind, actual_source_id, reasoning_effort, service_tier, effective_service_tier, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+                method, request_type, gateway_mode, route_strategy, route_source, transparent_mode, enhanced_mode, client_model, model, model_source, upstream_model, actual_source_kind, actual_source_id, client_reasoning_effort, reasoning_effort, reasoning_source, service_tier, effective_service_tier, service_tier_source, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
             params![
                 &log.trace_id,
                 &log.key_id,
@@ -93,15 +93,22 @@ impl Storage {
                 &log.method,
                 &log.request_type,
                 &log.gateway_mode,
+                &log.route_strategy,
+                &log.route_source,
                 log.transparent_mode,
                 log.enhanced_mode,
+                &log.client_model,
                 &log.model,
+                &log.model_source,
                 &log.upstream_model,
                 &log.actual_source_kind,
                 &log.actual_source_id,
+                &log.client_reasoning_effort,
                 &log.reasoning_effort,
+                &log.reasoning_source,
                 &log.service_tier,
                 &log.effective_service_tier,
+                &log.service_tier_source,
                 &log.response_adapter,
                 &log.upstream_url,
                 &log.aggregate_api_supplier_name,
@@ -139,8 +146,8 @@ impl Storage {
             "INSERT INTO request_logs (
                 trace_id, key_id, account_id, initial_account_id, attempted_account_ids_json, initial_aggregate_api_id, attempted_aggregate_api_ids_json,
                 request_path, original_path, adapted_path,
-                method, request_type, gateway_mode, transparent_mode, enhanced_mode, model, upstream_model, actual_source_kind, actual_source_id, reasoning_effort, service_tier, effective_service_tier, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+                method, request_type, gateway_mode, route_strategy, route_source, transparent_mode, enhanced_mode, client_model, model, model_source, upstream_model, actual_source_kind, actual_source_id, client_reasoning_effort, reasoning_effort, reasoning_source, service_tier, effective_service_tier, service_tier_source, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
             params![
                 &log.trace_id,
                 &log.key_id,
@@ -155,15 +162,22 @@ impl Storage {
                 &log.method,
                 &log.request_type,
                 &log.gateway_mode,
+                &log.route_strategy,
+                &log.route_source,
                 log.transparent_mode,
                 log.enhanced_mode,
+                &log.client_model,
                 &log.model,
+                &log.model_source,
                 &log.upstream_model,
                 &log.actual_source_kind,
                 &log.actual_source_id,
+                &log.client_reasoning_effort,
                 &log.reasoning_effort,
+                &log.reasoning_source,
                 &log.service_tier,
                 &log.effective_service_tier,
+                &log.service_tier_source,
                 &log.response_adapter,
                 &log.upstream_url,
                 &log.aggregate_api_supplier_name,
@@ -273,7 +287,7 @@ impl Storage {
             "SELECT
                 r.trace_id, r.key_id, r.account_id, r.initial_account_id, r.attempted_account_ids_json, r.initial_aggregate_api_id, r.attempted_aggregate_api_ids_json,
                 r.request_path, r.original_path, r.adapted_path,
-                r.method, r.request_type, r.gateway_mode, r.transparent_mode, r.enhanced_mode, r.model, r.upstream_model, r.actual_source_kind, r.actual_source_id, r.reasoning_effort, r.service_tier, r.effective_service_tier, r.response_adapter, r.upstream_url, r.aggregate_api_supplier_name, r.aggregate_api_url, r.status_code, r.duration_ms, r.first_response_ms,
+                r.method, r.request_type, r.gateway_mode, r.route_strategy, r.route_source, r.transparent_mode, r.enhanced_mode, r.client_model, r.model, r.model_source, r.upstream_model, r.actual_source_kind, r.actual_source_id, r.client_reasoning_effort, r.reasoning_effort, r.reasoning_source, r.service_tier, r.effective_service_tier, r.service_tier_source, r.response_adapter, r.upstream_url, r.aggregate_api_supplier_name, r.aggregate_api_url, r.status_code, r.duration_ms, r.first_response_ms,
                 t.input_tokens, t.cached_input_tokens, t.output_tokens, t.total_tokens, t.reasoning_output_tokens, t.estimated_cost_usd,
                 r.error, r.created_at
              FROM request_logs r
@@ -327,7 +341,7 @@ impl Storage {
             "SELECT
                 r.trace_id, r.key_id, r.account_id, r.initial_account_id, r.attempted_account_ids_json, r.initial_aggregate_api_id, r.attempted_aggregate_api_ids_json,
                 r.request_path, r.original_path, r.adapted_path,
-                r.method, r.request_type, r.gateway_mode, r.transparent_mode, r.enhanced_mode, r.model, r.upstream_model, r.actual_source_kind, r.actual_source_id, r.reasoning_effort, r.service_tier, r.effective_service_tier, r.response_adapter, r.upstream_url, r.aggregate_api_supplier_name, r.aggregate_api_url, r.status_code, r.duration_ms, r.first_response_ms,
+                r.method, r.request_type, r.gateway_mode, r.route_strategy, r.route_source, r.transparent_mode, r.enhanced_mode, r.client_model, r.model, r.model_source, r.upstream_model, r.actual_source_kind, r.actual_source_id, r.client_reasoning_effort, r.reasoning_effort, r.reasoning_source, r.service_tier, r.effective_service_tier, r.service_tier_source, r.response_adapter, r.upstream_url, r.aggregate_api_supplier_name, r.aggregate_api_url, r.status_code, r.duration_ms, r.first_response_ms,
                 t.input_tokens, t.cached_input_tokens, t.output_tokens, t.total_tokens, t.reasoning_output_tokens, t.estimated_cost_usd,
                 r.error, r.created_at
              FROM request_logs r
@@ -682,15 +696,22 @@ impl Storage {
                 method TEXT NOT NULL,
                 request_type TEXT,
                 gateway_mode TEXT,
+                route_strategy TEXT,
+                route_source TEXT,
                 transparent_mode INTEGER,
                 enhanced_mode INTEGER,
+                client_model TEXT,
                 model TEXT,
+                model_source TEXT,
                 upstream_model TEXT,
                 actual_source_kind TEXT,
                 actual_source_id TEXT,
+                client_reasoning_effort TEXT,
                 reasoning_effort TEXT,
+                reasoning_source TEXT,
                 service_tier TEXT,
                 effective_service_tier TEXT,
+                service_tier_source TEXT,
                 response_adapter TEXT,
                 upstream_url TEXT,
                 aggregate_api_supplier_name TEXT,
@@ -877,8 +898,27 @@ impl Storage {
         Ok(())
     }
 
+    pub(super) fn ensure_request_log_route_strategy_columns(&self) -> Result<()> {
+        self.ensure_column("request_logs", "route_strategy", "TEXT")?;
+        self.ensure_column("request_logs", "route_source", "TEXT")?;
+        Ok(())
+    }
+
     pub(super) fn ensure_request_log_effective_service_tier_column(&self) -> Result<()> {
         self.ensure_column("request_logs", "effective_service_tier", "TEXT")?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_request_log_service_tier_source_column(&self) -> Result<()> {
+        self.ensure_column("request_logs", "service_tier_source", "TEXT")?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_request_log_model_reasoning_source_columns(&self) -> Result<()> {
+        self.ensure_column("request_logs", "client_model", "TEXT")?;
+        self.ensure_column("request_logs", "model_source", "TEXT")?;
+        self.ensure_column("request_logs", "client_reasoning_effort", "TEXT")?;
+        self.ensure_column("request_logs", "reasoning_source", "TEXT")?;
         Ok(())
     }
 
@@ -935,15 +975,22 @@ impl Storage {
                 method TEXT NOT NULL,
                 request_type TEXT,
                 gateway_mode TEXT,
+                route_strategy TEXT,
+                route_source TEXT,
                 transparent_mode INTEGER,
                 enhanced_mode INTEGER,
+                client_model TEXT,
                 model TEXT,
+                model_source TEXT,
                 upstream_model TEXT,
                 actual_source_kind TEXT,
                 actual_source_id TEXT,
+                client_reasoning_effort TEXT,
                 reasoning_effort TEXT,
+                reasoning_source TEXT,
                 service_tier TEXT,
                 effective_service_tier TEXT,
+                service_tier_source TEXT,
                 response_adapter TEXT,
                 upstream_url TEXT,
                 aggregate_api_supplier_name TEXT,
@@ -957,11 +1004,11 @@ impl Storage {
              INSERT INTO request_logs (
                 id, trace_id, key_id, account_id, initial_account_id, attempted_account_ids_json, initial_aggregate_api_id, attempted_aggregate_api_ids_json,
                 request_path, original_path, adapted_path,
-                method, request_type, gateway_mode, transparent_mode, enhanced_mode, model, upstream_model, actual_source_kind, actual_source_id, reasoning_effort, service_tier, effective_service_tier, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
+                method, request_type, gateway_mode, route_strategy, route_source, transparent_mode, enhanced_mode, client_model, model, model_source, upstream_model, actual_source_kind, actual_source_id, client_reasoning_effort, reasoning_effort, reasoning_source, service_tier, effective_service_tier, service_tier_source, response_adapter, upstream_url, aggregate_api_supplier_name, aggregate_api_url, status_code, duration_ms, first_response_ms, error, created_at
              )
              SELECT
                 id, trace_id, key_id, account_id, NULL, NULL, NULL, NULL, request_path, original_path, adapted_path,
-                method, NULL, NULL, NULL, NULL, model, NULL, NULL, NULL, reasoning_effort, NULL, NULL, response_adapter, upstream_url, NULL, NULL, status_code, NULL, NULL, error, created_at
+                method, NULL, NULL, NULL, NULL, NULL, NULL, NULL, model, NULL, NULL, NULL, NULL, NULL, reasoning_effort, NULL, NULL, NULL, NULL, response_adapter, upstream_url, NULL, NULL, status_code, NULL, NULL, error, created_at
              FROM request_logs_legacy_028;
              DROP TABLE request_logs_legacy_028;",
         )?;
@@ -998,30 +1045,37 @@ fn map_request_log_row(row: &Row<'_>) -> Result<RequestLog> {
         method: row.get(10)?,
         request_type: row.get(11)?,
         gateway_mode: row.get(12)?,
-        transparent_mode: row.get(13)?,
-        enhanced_mode: row.get(14)?,
-        model: row.get(15)?,
-        upstream_model: row.get(16)?,
-        actual_source_kind: row.get(17)?,
-        actual_source_id: row.get(18)?,
-        reasoning_effort: row.get(19)?,
-        service_tier: row.get(20)?,
-        effective_service_tier: row.get(21)?,
-        response_adapter: row.get(22)?,
-        upstream_url: row.get(23)?,
-        aggregate_api_supplier_name: row.get(24)?,
-        aggregate_api_url: row.get(25)?,
-        status_code: row.get(26)?,
-        duration_ms: row.get(27)?,
-        first_response_ms: row.get(28)?,
-        input_tokens: row.get(29)?,
-        cached_input_tokens: row.get(30)?,
-        output_tokens: row.get(31)?,
-        total_tokens: row.get(32)?,
-        reasoning_output_tokens: row.get(33)?,
-        estimated_cost_usd: row.get(34)?,
-        error: row.get(35)?,
-        created_at: row.get(36)?,
+        route_strategy: row.get(13)?,
+        route_source: row.get(14)?,
+        transparent_mode: row.get(15)?,
+        enhanced_mode: row.get(16)?,
+        client_model: row.get(17)?,
+        model: row.get(18)?,
+        model_source: row.get(19)?,
+        upstream_model: row.get(20)?,
+        actual_source_kind: row.get(21)?,
+        actual_source_id: row.get(22)?,
+        client_reasoning_effort: row.get(23)?,
+        reasoning_effort: row.get(24)?,
+        reasoning_source: row.get(25)?,
+        service_tier: row.get(26)?,
+        effective_service_tier: row.get(27)?,
+        service_tier_source: row.get(28)?,
+        response_adapter: row.get(29)?,
+        upstream_url: row.get(30)?,
+        aggregate_api_supplier_name: row.get(31)?,
+        aggregate_api_url: row.get(32)?,
+        status_code: row.get(33)?,
+        duration_ms: row.get(34)?,
+        first_response_ms: row.get(35)?,
+        input_tokens: row.get(36)?,
+        cached_input_tokens: row.get(37)?,
+        output_tokens: row.get(38)?,
+        total_tokens: row.get(39)?,
+        reasoning_output_tokens: row.get(40)?,
+        estimated_cost_usd: row.get(41)?,
+        error: row.get(42)?,
+        created_at: row.get(43)?,
     })
 }
 
@@ -1215,11 +1269,18 @@ fn append_request_log_query_clause(
                 "IFNULL(r.adapted_path,'') LIKE ?",
                 "r.method LIKE ?",
                 "IFNULL(r.request_type,'') LIKE ?",
+                "IFNULL(r.route_strategy,'') LIKE ?",
+                "IFNULL(r.route_source,'') LIKE ?",
                 "IFNULL(r.account_id,'') LIKE ?",
+                "IFNULL(r.client_model,'') LIKE ?",
                 "IFNULL(r.model,'') LIKE ?",
+                "IFNULL(r.model_source,'') LIKE ?",
+                "IFNULL(r.client_reasoning_effort,'') LIKE ?",
                 "IFNULL(r.reasoning_effort,'') LIKE ?",
+                "IFNULL(r.reasoning_source,'') LIKE ?",
                 "IFNULL(r.service_tier,'') LIKE ?",
                 "IFNULL(r.effective_service_tier,'') LIKE ?",
+                "IFNULL(r.service_tier_source,'') LIKE ?",
                 "IFNULL(r.response_adapter,'') LIKE ?",
                 "IFNULL(r.error,'') LIKE ?",
                 "IFNULL(r.key_id,'') LIKE ?",

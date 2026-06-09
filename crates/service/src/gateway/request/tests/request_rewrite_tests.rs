@@ -1326,7 +1326,7 @@ fn responses_codex_backend_keeps_conservative_field_snapshot() {
         "tools": [{ "type": "function", "name": "ping", "parameters": { "type": "object", "properties": {} } }],
         "tool_choice": "auto",
         "parallel_tool_calls": true,
-        "reasoning": { "effort": "medium" },
+        "reasoning": { "effort": "medium", "summary": "auto", "context": "current_turn" },
         "service_tier": "priority",
         "store": false,
         "stream": true,
@@ -1378,6 +1378,8 @@ fn responses_codex_backend_keeps_conservative_field_snapshot() {
     .collect::<std::collections::BTreeSet<_>>();
 
     assert_eq!(keys, expected);
+    assert_eq!(value["reasoning"]["context"], "current_turn");
+    assert_eq!(value["reasoning"]["summary"], "auto");
     assert!(object.get("max_output_tokens").is_none());
     assert!(object.get("metadata").is_none());
     assert!(object.get("temperature").is_none());

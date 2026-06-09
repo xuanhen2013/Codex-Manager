@@ -261,6 +261,8 @@ export function RequestRouteInfoCell({ log }: { log: RequestLog }) {
   const requestType = normalizeRequestType(log.requestType);
   const canonicalSource = String(log.canonicalSource || "native_codex").trim();
   const sizeRejectStage = String(log.sizeRejectStage || "-").trim();
+  const routeStrategy = String(log.routeStrategy || "").trim();
+  const routeSource = String(log.routeSource || "").trim();
 
   return (
     <Tooltip>
@@ -305,6 +307,18 @@ export function RequestRouteInfoCell({ log }: { log: RequestLog }) {
             <div className="space-y-0.5">
               <div className="text-[10px] text-background/70">{t("网关模式")}</div>
               <div className="font-mono text-[11px]">{gatewayMode}</div>
+            </div>
+          ) : null}
+          {routeStrategy ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-background/70">{t("路由策略")}</div>
+              <div className="font-mono text-[11px]">{routeStrategy}</div>
+            </div>
+          ) : null}
+          {routeSource ? (
+            <div className="space-y-0.5">
+              <div className="text-[10px] text-background/70">{t("路由来源")}</div>
+              <div className="font-mono text-[11px]">{routeSource}</div>
             </div>
           ) : null}
           <div className="space-y-0.5">
@@ -395,15 +409,20 @@ export function ErrorInfoCell({ error }: { error: string }) {
 
 export function ModelEffortCell({ log }: { log: RequestLog }) {
   const { t } = useI18n();
+  const clientModel = String(log.clientModel || "").trim() || "-";
   const model = String(log.model || "").trim();
+  const modelSource = String(log.modelSource || "").trim() || "-";
   const upstreamModel = String(log.upstreamModel || "").trim();
   const actualSourceKind = String(log.actualSourceKind || "").trim();
   const actualSourceId = String(log.actualSourceId || "").trim();
+  const clientReasoningEffort = String(log.clientReasoningEffort || "").trim() || "-";
   const effort = String(log.reasoningEffort || "").trim();
+  const reasoningSource = String(log.reasoningSource || "").trim() || "-";
   const clientServiceTier = resolveDisplayServiceTier(log.serviceTier);
   const effectiveServiceTier = resolveDisplayServiceTier(
     log.effectiveServiceTier || log.serviceTier,
   );
+  const serviceTierSource = String(log.serviceTierSource || "").trim() || "-";
   const badgeServiceTier =
     effectiveServiceTier !== "auto" ? effectiveServiceTier : clientServiceTier;
   const display = formatModelEffortDisplay(log);
@@ -427,8 +446,16 @@ export function ModelEffortCell({ log }: { log: RequestLog }) {
       <TooltipContent className="max-w-sm">
         <div className="flex min-w-[220px] flex-col gap-2">
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("平台模型")}</div>
+            <div className="text-[10px] text-background/70">{t("客户端模型")}</div>
+            <div className="break-all font-mono text-[11px]">{clientModel}</div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">{t("最终平台模型")}</div>
             <div className="break-all font-mono text-[11px]">{model || "-"}</div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">{t("模型来源")}</div>
+            <div className="break-all font-mono text-[11px]">{modelSource}</div>
           </div>
           <div className="space-y-0.5">
             <div className="text-[10px] text-background/70">{t("上游模型")}</div>
@@ -443,8 +470,16 @@ export function ModelEffortCell({ log }: { log: RequestLog }) {
             </div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("推理")}</div>
+            <div className="text-[10px] text-background/70">{t("客户端推理")}</div>
+            <div className="break-all font-mono text-[11px]">{clientReasoningEffort}</div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">{t("最终推理")}</div>
             <div className="break-all font-mono text-[11px]">{effort || "-"}</div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">{t("推理来源")}</div>
+            <div className="break-all font-mono text-[11px]">{reasoningSource}</div>
           </div>
           <div className="space-y-0.5">
             <div className="text-[10px] text-background/70">{t("客户端显式服务等级")}</div>
@@ -453,6 +488,10 @@ export function ModelEffortCell({ log }: { log: RequestLog }) {
           <div className="space-y-0.5">
             <div className="text-[10px] text-background/70">{t("最终生效服务等级")}</div>
             <div className="break-all font-mono text-[11px]">{effectiveServiceTier}</div>
+          </div>
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">{t("服务等级来源")}</div>
+            <div className="break-all font-mono text-[11px]">{serviceTierSource}</div>
           </div>
         </div>
       </TooltipContent>
