@@ -446,8 +446,7 @@ mod tests {
     use super::{
         normalize_supported_proxy_url, resolve_account_proxy_mode_from_storage,
         test_account_proxy_settings_with_checker, AccountProxyMode, AccountProxySettingsResponse,
-        STATUS_CHECKING, STATUS_INVALID_URL, STATUS_NOT_CONFIGURED, STATUS_RUNTIME_ERROR,
-        STATUS_UNCHECKED,
+        STATUS_INVALID_URL, STATUS_NOT_CONFIGURED, STATUS_RUNTIME_ERROR, STATUS_UNCHECKED,
     };
     use codexmanager_core::storage::{now_ts, Account, Storage};
     use std::fs;

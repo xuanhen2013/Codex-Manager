@@ -1286,6 +1286,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <p className="text-[11px] leading-4 text-amber-600 dark:text-amber-400">
                 {t("建议登录、刷新、用量和 API 请求保持同一代理与地区，以降低账号风控和状态漂移。")}
               </p>
+              <p className="text-[11px] leading-4 text-amber-600 dark:text-amber-400">
+                {t("建议登录、刷新、用量和 API 请求保持同一代理与地区，以降低账号风控和状态漂移。")}
+              </p>
             </div>
             <div className="grid gap-2 rounded-xl bg-muted/20 px-3 py-3 text-xs sm:grid-cols-2">
               <div>
