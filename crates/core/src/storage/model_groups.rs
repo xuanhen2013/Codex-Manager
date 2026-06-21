@@ -89,7 +89,9 @@ impl Storage {
                 PRIMARY KEY (user_id, group_id)
             );
             CREATE INDEX IF NOT EXISTS idx_user_model_groups_user_status
-                ON user_model_groups(user_id, status, expires_at);",
+                ON user_model_groups(user_id, status, expires_at);
+            CREATE INDEX IF NOT EXISTS idx_user_model_groups_group_lookup
+                ON user_model_groups(group_id, user_id);",
         )?;
         self.bootstrap_default_model_group()?;
         Ok(())
@@ -710,6 +712,33 @@ mod tests {
         assert!(
             !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
             "model group list query should avoid temp sorting, got {plan}"
+        );
+    }
+
+    #[test]
+    fn replace_user_model_groups_for_group_uses_group_lookup_index() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+
+        let mut stmt = storage
+            .conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 DELETE FROM user_model_groups
+                 WHERE group_id = ?1",
+            )
+            .expect("prepare explain");
+        let mut rows = stmt.query(["mg_default"]).expect("query explain");
+        let mut plan = String::new();
+        while let Some(row) = rows.next().expect("read explain row") {
+            let detail: String = row.get(3).expect("plan detail");
+            plan.push_str(&detail);
+            plan.push('\n');
+        }
+
+        assert!(
+            plan.contains("idx_user_model_groups_group_lookup"),
+            "expected user model-group assignment delete to use group lookup index, got {plan}"
         );
     }
 

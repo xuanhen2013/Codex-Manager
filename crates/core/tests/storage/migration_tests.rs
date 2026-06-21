@@ -363,6 +363,7 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         "097_tokens_refresh_due_order_index",
         "098_accounts_list_order_index",
         "099_model_groups_list_order_index",
+        "100_user_model_groups_group_lookup_index",
     ] {
         let applied: i64 = storage
             .conn
