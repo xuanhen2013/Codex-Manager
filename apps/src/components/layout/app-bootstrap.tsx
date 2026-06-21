@@ -227,6 +227,7 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
           addr,
           0,
           localDayRange.dayStartTs,
+          localDayRange.dayEndTs,
           false,
           false,
         ),

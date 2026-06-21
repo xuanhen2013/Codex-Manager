@@ -41,7 +41,19 @@ test("启动快照只预取轻量日志样本", async () => {
   assert.match(source, /STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT = 24/);
 });
 
+test("启动快照缓存键包含完整日期边界", async () => {
+  const startupSource = await readSource("src/lib/api/startup-snapshot.ts");
+  assert.match(startupSource, /dayStartTs \|\| null,\s*dayEndTs \|\| null,/s);
+
+  const dashboardSource = await readSource("src/hooks/useDashboardStats.ts");
+  assert.match(
+    dashboardSource,
+    /buildStartupSnapshotQueryKey\(\s*serviceStatus\.addr,\s*requestLogLimit,\s*localDayRange\.dayStartTs,\s*localDayRange\.dayEndTs,\s*includeApiModels,\s*includeAccountDetails,/s,
+  );
+});
+
 test("首页仪表盘不再为已移除的活跃账号卡片预取日志样本", async () => {
   const source = await readDashboardSource();
-  assert.match(source, /useDashboardStats\(\{\s*requestLogLimit: 0,\s*includeAccountHints: false,\s*\}\)/s);
+  assert.match(source, /useDashboardStats\(\{\s*requestLogLimit: 0,\s*includeAccountHints: false,/s);
+  assert.match(source, /includeApiModels: false,\s*includeAccountDetails: false,/s);
 });

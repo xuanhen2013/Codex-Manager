@@ -67,6 +67,7 @@ export function useDashboardStats(options: UseDashboardStatsOptions = {}) {
       serviceStatus.addr,
       requestLogLimit,
       localDayRange.dayStartTs,
+      localDayRange.dayEndTs,
       includeApiModels,
       includeAccountDetails,
     ),
