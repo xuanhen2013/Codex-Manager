@@ -28,14 +28,6 @@ pub(crate) fn read_request_log_filter_summary_with_storage(
     params: RequestLogListParams,
 ) -> Result<RequestLogFilterSummaryResult, String> {
     let params = NormalizedRequestLogParams::from_params(params);
-    let total_count = storage
-        .count_request_logs(
-            params.query.as_deref(),
-            None,
-            params.start_ts,
-            params.end_ts,
-        )
-        .map_err(|err| format!("count request logs failed: {err}"))?;
     let filtered = storage
         .summarize_request_logs_filtered(
             params.query.as_deref(),
@@ -44,6 +36,17 @@ pub(crate) fn read_request_log_filter_summary_with_storage(
             params.end_ts,
         )
         .map_err(|err| format!("summarize request logs failed: {err}"))?;
+    let total_count = match needs_unfiltered_total_count(params.status_filter.as_deref()) {
+        true => storage
+            .count_request_logs(
+                params.query.as_deref(),
+                None,
+                params.start_ts,
+                params.end_ts,
+            )
+            .map_err(|err| format!("count request logs failed: {err}"))?,
+        false => filtered.count,
+    };
 
     Ok(map_filter_summary(total_count, filtered))
 }
@@ -57,15 +60,6 @@ pub(crate) fn read_request_log_filter_summary_for_key_ids_with_storage(
     if key_ids.is_empty() {
         return Ok(RequestLogFilterSummaryResult::default());
     }
-    let total_count = storage
-        .count_request_logs_for_keys(
-            params.query.as_deref(),
-            None,
-            params.start_ts,
-            params.end_ts,
-            key_ids,
-        )
-        .map_err(|err| format!("count request logs failed: {err}"))?;
     let filtered = storage
         .summarize_request_logs_filtered_for_keys(
             params.query.as_deref(),
@@ -75,8 +69,24 @@ pub(crate) fn read_request_log_filter_summary_for_key_ids_with_storage(
             key_ids,
         )
         .map_err(|err| format!("summarize request logs failed: {err}"))?;
+    let total_count = match needs_unfiltered_total_count(params.status_filter.as_deref()) {
+        true => storage
+            .count_request_logs_for_keys(
+                params.query.as_deref(),
+                None,
+                params.start_ts,
+                params.end_ts,
+                key_ids,
+            )
+            .map_err(|err| format!("count request logs failed: {err}"))?,
+        false => filtered.count,
+    };
 
     Ok(map_filter_summary(total_count, filtered))
+}
+
+fn needs_unfiltered_total_count(status_filter: Option<&str>) -> bool {
+    status_filter.is_some()
 }
 
 fn map_filter_summary(
@@ -95,7 +105,10 @@ fn map_filter_summary(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_filter_summary, read_request_log_filter_summary_for_key_ids_with_storage};
+    use super::{
+        map_filter_summary, needs_unfiltered_total_count,
+        read_request_log_filter_summary_for_key_ids_with_storage,
+    };
     use codexmanager_core::rpc::types::RequestLogListParams;
     use codexmanager_core::storage::{RequestLogQuerySummary, Storage};
 
@@ -144,5 +157,13 @@ mod tests {
         assert_eq!(summary.error_count, 0);
         assert_eq!(summary.total_tokens, 0);
         assert_eq!(summary.total_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn filter_summary_reuses_filtered_count_when_status_filter_is_absent() {
+        assert!(!needs_unfiltered_total_count(None));
+        assert!(needs_unfiltered_total_count(Some("2xx")));
+        assert!(needs_unfiltered_total_count(Some("4xx")));
+        assert!(needs_unfiltered_total_count(Some("5xx")));
     }
 }

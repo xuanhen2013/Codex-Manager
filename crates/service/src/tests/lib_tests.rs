@@ -669,6 +669,68 @@ fn startup_snapshot_can_skip_account_details_for_light_dashboard_reads() {
     let _ = std::fs::remove_file(db_path);
 }
 
+#[test]
+fn request_log_summary_reuses_filtered_count_for_all_status() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-requestlog-summary-count");
+    let day_start = 1_700_000_000;
+
+    insert_test_request_log(
+        "key-summary",
+        "trace-summary-ok",
+        "gpt-5-mini",
+        200,
+        10,
+        0,
+        20,
+        0.01,
+        day_start + 10,
+    );
+    insert_test_request_log(
+        "key-summary",
+        "trace-summary-error",
+        "gpt-5-mini",
+        502,
+        30,
+        0,
+        40,
+        0.02,
+        day_start + 20,
+    );
+
+    let all_resp = response_result(handle_request_with_actor(
+        rpc_request(
+            "requestlog/summary",
+            serde_json::json!({ "statusFilter": "all" }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        all_resp.result.get("error").is_none(),
+        "{:?}",
+        all_resp.result
+    );
+    assert_eq!(all_resp.result["totalCount"].as_i64(), Some(2));
+    assert_eq!(all_resp.result["filteredCount"].as_i64(), Some(2));
+
+    let success_resp = response_result(handle_request_with_actor(
+        rpc_request(
+            "requestlog/summary",
+            serde_json::json!({ "statusFilter": "2xx" }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(
+        success_resp.result.get("error").is_none(),
+        "{:?}",
+        success_resp.result
+    );
+    assert_eq!(success_resp.result["totalCount"].as_i64(), Some(2));
+    assert_eq!(success_resp.result["filteredCount"].as_i64(), Some(1));
+
+    let _ = std::fs::remove_file(db_path);
+}
+
 fn insert_test_request_log(
     key_id: &str,
     trace_id: &str,
