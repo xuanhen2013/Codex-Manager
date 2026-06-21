@@ -3178,16 +3178,14 @@ pub(crate) fn test_aggregate_api_connection(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?;
-    let Some(secret) = secret else {
-        return Err("aggregate api secret not found".to_string());
-    };
+    let api = api_with_secrets.api;
+    let secret = api_with_secrets
+        .secret_value
+        .ok_or_else(|| "aggregate api secret not found".to_string())?;
     let client = gateway::fresh_upstream_client();
     let started_at = Instant::now();
     let provider_type = normalize_provider_type_value(api.provider_type.as_str());
@@ -3221,13 +3219,13 @@ pub(crate) fn discover_aggregate_api_models(api_id: &str) -> Result<Vec<String>,
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let api = api_with_secrets.api;
+    let secret = api_with_secrets
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
     if let Some(model_override) = api
         .model_override
@@ -3266,20 +3264,18 @@ pub(crate) fn refresh_aggregate_api_balance(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
+    let api = api_with_secrets.api;
     if !api.balance_query_enabled {
         return Err("aggregate api balance query is disabled".to_string());
     }
-    let provider_secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let provider_secret = api_with_secrets
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let balance_secret = storage
-        .find_aggregate_api_balance_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?;
+    let balance_secret = api_with_secrets.balance_access_token;
     let template = default_balance_query_template(normalize_balance_query_template(
         api.balance_query_template.clone(),
     )?);

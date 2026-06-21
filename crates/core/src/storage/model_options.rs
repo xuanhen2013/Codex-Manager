@@ -661,6 +661,29 @@ impl Storage {
         Ok(())
     }
 
+    pub fn delete_model_catalog_string_item_kinds(
+        &self,
+        scope: &str,
+        slug: &str,
+        item_kinds: &[&str],
+    ) -> rusqlite::Result<()> {
+        let item_kinds = item_kinds
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>();
+        let Some((condition, mut values)) = text_id_in_clause("item_kind", &item_kinds) else {
+            return Ok(());
+        };
+        let sql = format!(
+            "DELETE FROM model_catalog_string_items
+             WHERE scope = ?1 AND slug = ?2 AND {condition}"
+        );
+        values.insert(0, SqlValue::Text(slug.to_string()));
+        values.insert(0, SqlValue::Text(scope.to_string()));
+        self.conn.execute(&sql, params_from_iter(values))?;
+        Ok(())
+    }
+
     fn upsert_model_catalog_string_items(
         &self,
         item_kind: &str,
@@ -1714,6 +1737,86 @@ mod tests {
             .expect("list prefixed api available slugs");
 
         assert_eq!(slugs, vec!["gpt-codex", "gpt-available"]);
+    }
+
+    #[test]
+    fn delete_model_catalog_string_item_kinds_deletes_selected_kinds_for_slug() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        storage
+            .upsert_model_catalog_additional_speed_tiers(&[
+                ModelCatalogStringItemRecord {
+                    scope: "default".to_string(),
+                    slug: "target-model".to_string(),
+                    value: "fast".to_string(),
+                    sort_index: 0,
+                    updated_at: now,
+                },
+                ModelCatalogStringItemRecord {
+                    scope: "default".to_string(),
+                    slug: "other-model".to_string(),
+                    value: "fast".to_string(),
+                    sort_index: 0,
+                    updated_at: now,
+                },
+            ])
+            .expect("seed speed tiers");
+        storage
+            .upsert_model_catalog_experimental_supported_tools(&[ModelCatalogStringItemRecord {
+                scope: "default".to_string(),
+                slug: "target-model".to_string(),
+                value: "web_search".to_string(),
+                sort_index: 0,
+                updated_at: now,
+            }])
+            .expect("seed tools");
+        storage
+            .upsert_model_catalog_input_modalities(&[ModelCatalogStringItemRecord {
+                scope: "default".to_string(),
+                slug: "target-model".to_string(),
+                value: "text".to_string(),
+                sort_index: 0,
+                updated_at: now,
+            }])
+            .expect("seed input modalities");
+
+        storage
+            .delete_model_catalog_string_item_kinds(
+                "default",
+                "target-model",
+                &["additional_speed_tiers", "experimental_supported_tools"],
+            )
+            .expect("delete selected string item kinds");
+
+        assert!(storage
+            .list_model_catalog_additional_speed_tiers("default")
+            .expect("list speed tiers")
+            .iter()
+            .all(|item| item.slug != "target-model"));
+        assert!(storage
+            .list_model_catalog_experimental_supported_tools("default")
+            .expect("list tools")
+            .iter()
+            .all(|item| item.slug != "target-model"));
+        assert_eq!(
+            storage
+                .list_model_catalog_input_modalities("default")
+                .expect("list input modalities")
+                .into_iter()
+                .map(|item| item.slug)
+                .collect::<Vec<_>>(),
+            vec!["target-model".to_string()]
+        );
+        assert_eq!(
+            storage
+                .list_model_catalog_additional_speed_tiers("default")
+                .expect("list remaining speed tiers")
+                .into_iter()
+                .map(|item| item.slug)
+                .collect::<Vec<_>>(),
+            vec!["other-model".to_string()]
+        );
     }
 
     #[test]

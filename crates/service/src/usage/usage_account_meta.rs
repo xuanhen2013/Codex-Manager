@@ -216,7 +216,12 @@ pub(crate) fn patch_account_meta_cached(
     if let Some(account) = accounts.get_mut(account_id) {
         if apply_account_meta_patch(account, chatgpt_account_id, workspace_id) {
             account.updated_at = now_ts();
-            let _ = storage.insert_account(account);
+            let _ = storage.update_account_workspace_identity(
+                &account.id,
+                account.chatgpt_account_id.as_deref(),
+                account.workspace_id.as_deref(),
+                account.updated_at,
+            );
         }
         return;
     }

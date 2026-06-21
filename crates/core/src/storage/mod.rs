@@ -858,6 +858,13 @@ pub struct AggregateApi {
 }
 
 #[derive(Debug, Clone)]
+pub struct AggregateApiWithSecrets {
+    pub api: AggregateApi,
+    pub secret_value: Option<String>,
+    pub balance_access_token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct AggregateApiListSummary {
     pub id: String,
     pub provider_type: String,

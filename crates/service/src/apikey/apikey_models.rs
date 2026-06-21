@@ -1791,24 +1791,16 @@ fn delete_model_catalog_entry(storage: &Storage, slug: &str) -> Result<(), Strin
         .delete_model_catalog_reasoning_levels(MODEL_CACHE_SCOPE_DEFAULT, slug)
         .map_err(|e| e.to_string())?;
     storage
-        .delete_model_catalog_string_items(
+        .delete_model_catalog_string_item_kinds(
             MODEL_CACHE_SCOPE_DEFAULT,
             slug,
-            "additional_speed_tiers",
+            &[
+                "additional_speed_tiers",
+                "experimental_supported_tools",
+                "input_modalities",
+                "available_in_plans",
+            ],
         )
-        .map_err(|e| e.to_string())?;
-    storage
-        .delete_model_catalog_string_items(
-            MODEL_CACHE_SCOPE_DEFAULT,
-            slug,
-            "experimental_supported_tools",
-        )
-        .map_err(|e| e.to_string())?;
-    storage
-        .delete_model_catalog_string_items(MODEL_CACHE_SCOPE_DEFAULT, slug, "input_modalities")
-        .map_err(|e| e.to_string())?;
-    storage
-        .delete_model_catalog_string_items(MODEL_CACHE_SCOPE_DEFAULT, slug, "available_in_plans")
         .map_err(|e| e.to_string())?;
     storage
         .delete_model_catalog_model(MODEL_CACHE_SCOPE_DEFAULT, slug)

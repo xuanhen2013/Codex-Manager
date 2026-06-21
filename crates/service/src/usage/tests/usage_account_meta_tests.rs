@@ -141,6 +141,51 @@ fn patch_account_meta_cached_updates_preloaded_account_without_lookup() {
     assert_eq!(updated.workspace_id.as_deref(), Some("workspace-5"));
 }
 
+#[test]
+fn patch_account_meta_cached_updates_identity_without_rewriting_account() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let mut account = build_account("acc-cached-identity", None, None);
+    account.label = "keep cached label".to_string();
+    account.issuer = "keep cached issuer".to_string();
+    account.group_name = Some("keep cached group".to_string());
+    account.sort = 29;
+    account.status = "limited".to_string();
+    let created_at = account.created_at;
+    storage.insert_account(&account).expect("insert");
+    let mut account_map = HashMap::new();
+    account_map.insert(account.id.clone(), account);
+
+    patch_account_meta_cached(
+        &storage,
+        &mut account_map,
+        "acc-cached-identity",
+        Some("chatgpt-cached".to_string()),
+        Some("workspace-cached".to_string()),
+    );
+
+    let updated = storage
+        .find_account_by_id("acc-cached-identity")
+        .expect("find")
+        .expect("account");
+    assert_eq!(updated.label, "keep cached label");
+    assert_eq!(updated.issuer, "keep cached issuer");
+    assert_eq!(updated.group_name.as_deref(), Some("keep cached group"));
+    assert_eq!(updated.sort, 29);
+    assert_eq!(updated.status, "limited");
+    assert_eq!(updated.created_at, created_at);
+    assert_eq!(
+        updated.chatgpt_account_id.as_deref(),
+        Some("chatgpt-cached")
+    );
+    assert_eq!(updated.workspace_id.as_deref(), Some("workspace-cached"));
+    let cached = account_map
+        .get("acc-cached-identity")
+        .expect("cached account updated");
+    assert_eq!(cached.chatgpt_account_id.as_deref(), Some("chatgpt-cached"));
+    assert_eq!(cached.workspace_id.as_deref(), Some("workspace-cached"));
+}
+
 /// 函数 `patch_account_meta_updates_identity_without_rewriting_account`
 ///
 /// 作者: gaohongshun

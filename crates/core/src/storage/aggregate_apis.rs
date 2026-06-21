@@ -6,7 +6,7 @@ use super::{
     now_ts, AggregateApi, AggregateApiDashboardSourceMetadata, AggregateApiListSnapshot,
     AggregateApiListSummary, AggregateApiOverviewStats, AggregateApiQuotaSourceSummary,
     AggregateApiSecretConfig, AggregateApiSupplierIdentity, AggregateApiSupplierModel,
-    AggregateApiUpdateConfig, Storage,
+    AggregateApiUpdateConfig, AggregateApiWithSecrets, Storage,
 };
 
 const AGGREGATE_API_SELECT_SQL: &str = "SELECT
@@ -199,6 +199,52 @@ impl Storage {
         let mut rows = stmt.query([api_id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(map_aggregate_api_row(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn find_aggregate_api_with_secrets_by_id(
+        &self,
+        api_id: &str,
+    ) -> Result<Option<AggregateApiWithSecrets>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                a.id,
+                a.provider_type,
+                a.supplier_name,
+                a.sort,
+                a.url,
+                a.auth_type,
+                a.auth_params_json,
+                a.action,
+                a.model_override,
+                a.status,
+                a.created_at,
+                a.updated_at,
+                a.last_test_at,
+                a.last_test_status,
+                a.last_test_error,
+                a.balance_query_enabled,
+                a.balance_query_template,
+                a.balance_query_base_url,
+                a.balance_query_user_id,
+                a.balance_query_config_json,
+                a.last_balance_at,
+                a.last_balance_status,
+                a.last_balance_error,
+                a.last_balance_json,
+                s.secret_value,
+                bs.access_token
+             FROM aggregate_apis a
+             LEFT JOIN aggregate_api_secrets s ON s.aggregate_api_id = a.id
+             LEFT JOIN aggregate_api_balance_secrets bs ON bs.aggregate_api_id = a.id
+             WHERE a.id = ?1
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([api_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(map_aggregate_api_with_secrets_row(row)?))
         } else {
             Ok(None)
         }
@@ -1230,6 +1276,14 @@ fn map_aggregate_api_row(row: &Row<'_>) -> Result<AggregateApi> {
     })
 }
 
+fn map_aggregate_api_with_secrets_row(row: &Row<'_>) -> Result<AggregateApiWithSecrets> {
+    Ok(AggregateApiWithSecrets {
+        api: map_aggregate_api_row(row)?,
+        secret_value: row.get(24)?,
+        balance_access_token: row.get(25)?,
+    })
+}
+
 fn map_aggregate_api_list_summary_row(row: &Row<'_>) -> Result<AggregateApiListSummary> {
     Ok(AggregateApiListSummary {
         id: row.get(0)?,
@@ -1792,6 +1846,45 @@ mod supplier_model_tests {
         assert!(storage
             .find_aggregate_api_secret_config_by_id("api-secret-config-missing")
             .expect("find missing api secret config")
+            .is_none());
+    }
+
+    #[test]
+    fn find_aggregate_api_with_secrets_by_id_reads_api_and_joined_secrets() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+
+        let mut api = sample_aggregate_api("api-with-joined-secrets", now);
+        api.provider_type = "claude".to_string();
+        api.balance_query_enabled = true;
+        api.balance_query_template = Some("newapi".to_string());
+        storage
+            .insert_aggregate_api(&api)
+            .expect("insert aggregate api");
+        storage
+            .upsert_aggregate_api_secret("api-with-joined-secrets", "provider-secret")
+            .expect("insert provider secret");
+        storage
+            .upsert_aggregate_api_balance_secret("api-with-joined-secrets", "balance-token")
+            .expect("insert balance secret");
+
+        let joined = storage
+            .find_aggregate_api_with_secrets_by_id("api-with-joined-secrets")
+            .expect("find aggregate api with secrets")
+            .expect("aggregate api with secrets exists");
+
+        assert_eq!(joined.api.id, "api-with-joined-secrets");
+        assert_eq!(joined.api.provider_type, "claude");
+        assert_eq!(joined.api.balance_query_template.as_deref(), Some("newapi"));
+        assert_eq!(joined.secret_value.as_deref(), Some("provider-secret"));
+        assert_eq!(
+            joined.balance_access_token.as_deref(),
+            Some("balance-token")
+        );
+        assert!(storage
+            .find_aggregate_api_with_secrets_by_id("api-with-joined-secrets-missing")
+            .expect("find missing aggregate api with secrets")
             .is_none());
     }
 
