@@ -12,14 +12,12 @@ import {
   AlertTriangle,
   ArrowRight,
   BarChart3,
-  CheckCircle2,
   KeyRound,
   LineChart,
   PieChart,
   Plus,
   Wallet,
   Users,
-  XCircle,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -95,15 +93,6 @@ import type {
   MemberDashboardKeyUsage,
   MemberDashboardSummary,
 } from "@/types";
-
-interface StatProgressCardProps {
-  title: string;
-  value: number;
-  total: number;
-  icon: LucideIcon;
-  color: string;
-  sub: string;
-}
 
 interface MetricCardProps {
   title: string;
@@ -263,40 +252,6 @@ function quotaTrackClass(tone: "green" | "blue") {
 
 function quotaIndicatorClass(tone: "green" | "blue") {
   return tone === "blue" ? "bg-blue-500" : "bg-green-500";
-}
-
-function StatProgressCard({
-  title,
-  value,
-  total,
-  icon: Icon,
-  color,
-  sub,
-}: StatProgressCardProps) {
-  const { t } = useI18n();
-  const percentage = total > 0 ? Math.min(Math.round((value / total) * 100), 100) : 0;
-
-  return (
-    <Card className="glass-card overflow-hidden shadow-sm transition-colors">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className={cn("h-4 w-4", color)} />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div>
-          <div className="text-2xl font-bold">{value}</div>
-          <p className="mt-1 text-[10px] text-muted-foreground">{sub}</p>
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-muted-foreground">{t("占比")}</span>
-            <span className="font-mono font-medium">{percentage}%</span>
-          </div>
-          <Progress value={percentage} className="h-1.5" />
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
 function MetricCard({ title, value, icon: Icon, color, sub, badge }: MetricCardProps) {
@@ -1001,9 +956,9 @@ function AdminDashboard() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 lg:grid-cols-2">
         {isLoading ? (
-          Array.from({ length: 4 }).map((_, index) => (
+          Array.from({ length: 2 }).map((_, index) => (
             <Skeleton key={index} className="h-36 w-full rounded-xl" />
           ))
         ) : (
@@ -1019,24 +974,6 @@ function AdminDashboard() {
                   ? t("账号直连模式下不可用")
                   : `${stats.available}/${stats.total} ${t("可用")}`
               }
-            />
-
-            <StatProgressCard
-              title={t("可用账号")}
-              value={stats.available}
-              total={stats.total}
-              icon={CheckCircle2}
-              color="text-green-500"
-              sub={t("当前健康可调用的账号")}
-            />
-
-            <StatProgressCard
-              title={t("不可用账号")}
-              value={stats.unavailable}
-              total={stats.total}
-              icon={XCircle}
-              color="text-red-500"
-              sub={t("额度耗尽或授权失效")}
             />
 
             <Card className="overflow-hidden bg-primary/10 shadow-sm transition-colors">
