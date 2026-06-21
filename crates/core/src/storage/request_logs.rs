@@ -674,6 +674,9 @@ impl Storage {
     }
 
     pub fn prune_request_logs_before(&self, cutoff_ts: i64) -> Result<usize> {
+        if cutoff_ts <= 0 {
+            return Ok(0);
+        }
         self.rollup_request_token_stats_before(cutoff_ts)?;
         self.conn.execute(
             "DELETE FROM request_logs WHERE created_at < ?1",

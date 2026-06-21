@@ -760,6 +760,33 @@ fn request_log_queries_short_circuit_empty_time_ranges() {
 }
 
 #[test]
+fn prune_request_logs_before_short_circuits_non_positive_cutoff() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-prune-cutoff".to_string()),
+            key_id: Some("key-prune-cutoff".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 1_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+
+    let deleted = storage
+        .prune_request_logs_before(0)
+        .expect("prune non-positive cutoff");
+    assert_eq!(deleted, 0);
+
+    let total = storage
+        .count_request_logs(None, None, None, None)
+        .expect("count logs after prune");
+    assert_eq!(total, 1);
+}
+
+#[test]
 fn request_logs_for_empty_key_sets_return_empty_results() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
