@@ -1,8 +1,9 @@
 use codexmanager_core::auth::parse_id_token_claims;
 use codexmanager_core::rpc::types::ModelsResponse;
-use codexmanager_core::storage::{Account, Storage, Token};
+use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
 use reqwest::Method;
 use serde_json::Value;
+use std::collections::HashMap;
 
 mod parse;
 mod request;
@@ -124,13 +125,42 @@ enum ModelPickerPlanTier {
 /// # 返回
 /// 无
 fn sort_model_picker_candidates(storage: &Storage, candidates: &mut [(Account, Token)]) {
+    let snapshot_map = latest_snapshot_map_for_candidates(storage, candidates);
     candidates.sort_by_key(|(account, token)| {
         (
             super::is_account_in_cooldown(&account.id),
             super::account_inflight_count(&account.id),
-            resolve_model_picker_plan_tier(storage, account.id.as_str(), token),
+            resolve_model_picker_plan_tier(snapshot_map.get(account.id.as_str()), token),
         )
     });
+}
+
+fn latest_snapshot_map_for_candidates(
+    storage: &Storage,
+    candidates: &[(Account, Token)],
+) -> HashMap<String, UsageSnapshotRecord> {
+    let account_ids = candidates
+        .iter()
+        .filter(|(_, token)| {
+            plan_tier_from_token(&token.access_token)
+                .or_else(|| plan_tier_from_token(&token.id_token))
+                .is_none()
+        })
+        .map(|(account, _)| account.id.clone())
+        .collect::<Vec<_>>();
+    if account_ids.is_empty() {
+        return HashMap::new();
+    }
+    match storage.latest_usage_snapshots_for_accounts(&account_ids) {
+        Ok(snapshots) => snapshots
+            .into_iter()
+            .map(|snapshot| (snapshot.account_id.clone(), snapshot))
+            .collect(),
+        Err(err) => {
+            log::warn!("model picker usage snapshot prefetch failed: {err}");
+            HashMap::new()
+        }
+    }
 }
 
 /// 函数 `resolve_model_picker_plan_tier`
@@ -147,13 +177,12 @@ fn sort_model_picker_candidates(storage: &Storage, candidates: &mut [(Account, T
 /// # 返回
 /// 返回函数执行结果
 fn resolve_model_picker_plan_tier(
-    storage: &Storage,
-    account_id: &str,
+    snapshot: Option<&UsageSnapshotRecord>,
     token: &Token,
 ) -> ModelPickerPlanTier {
     plan_tier_from_token(&token.access_token)
         .or_else(|| plan_tier_from_token(&token.id_token))
-        .or_else(|| plan_tier_from_usage_snapshot(storage, account_id))
+        .or_else(|| plan_tier_from_usage_snapshot(snapshot))
         .unwrap_or(ModelPickerPlanTier::Unknown)
 }
 
@@ -188,15 +217,11 @@ fn plan_tier_from_token(raw_token: &str) -> Option<ModelPickerPlanTier> {
 /// # 返回
 /// 返回函数执行结果
 fn plan_tier_from_usage_snapshot(
-    storage: &Storage,
-    account_id: &str,
+    snapshot: Option<&UsageSnapshotRecord>,
 ) -> Option<ModelPickerPlanTier> {
-    storage
-        .latest_usage_snapshot_for_account(account_id)
-        .ok()
-        .flatten()
-        .and_then(|snapshot| snapshot.credits_json)
-        .and_then(|raw| plan_tier_from_credits_json(raw.as_str()))
+    snapshot
+        .and_then(|snapshot| snapshot.credits_json.as_deref())
+        .and_then(plan_tier_from_credits_json)
 }
 
 /// 函数 `plan_tier_from_credits_json`
@@ -313,7 +338,7 @@ fn normalize_model_picker_plan_tier(raw: &str) -> Option<ModelPickerPlanTier> {
 
 #[cfg(test)]
 mod tests {
-    use codexmanager_core::storage::{now_ts, Storage, Token};
+    use codexmanager_core::storage::{now_ts, Storage, Token, UsageSnapshotRecord};
 
     use super::{should_retry_models_with_openai_fallback, sort_model_picker_candidates, Account};
 
@@ -426,6 +451,53 @@ mod tests {
         )
     }
 
+    fn candidate_without_plan(id: &str, sort: i64) -> (Account, Token) {
+        let now = now_ts();
+        (
+            Account {
+                id: id.to_string(),
+                label: id.to_string(),
+                issuer: "issuer".to_string(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            Token {
+                account_id: id.to_string(),
+                id_token: "header.payload.sig".to_string(),
+                access_token: "header.payload.sig".to_string(),
+                refresh_token: "refresh".to_string(),
+                api_key_access_token: None,
+                last_refresh: now,
+            },
+        )
+    }
+
+    fn insert_usage_snapshot_with_plan(
+        storage: &Storage,
+        account_id: &str,
+        captured_at: i64,
+        plan: &str,
+    ) {
+        storage
+            .insert_usage_snapshot(&UsageSnapshotRecord {
+                account_id: account_id.to_string(),
+                used_percent: Some(10.0),
+                window_minutes: Some(300),
+                resets_at: None,
+                secondary_used_percent: None,
+                secondary_window_minutes: None,
+                secondary_resets_at: None,
+                credits_json: Some(serde_json::json!({ "planType": plan }).to_string()),
+                captured_at,
+            })
+            .expect("insert usage snapshot");
+    }
+
     /// 函数 `fallback_retry_matches_stable_html_and_challenge_summaries`
     ///
     /// 作者: gaohongshun
@@ -490,6 +562,33 @@ mod tests {
                 "acc-go",
                 "acc-free",
             ]
+        );
+    }
+
+    #[test]
+    fn sort_model_picker_candidates_uses_latest_usage_snapshots_when_token_has_no_plan() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        insert_usage_snapshot_with_plan(&storage, "acc-free-snapshot", now, "free");
+        insert_usage_snapshot_with_plan(&storage, "acc-pro-snapshot", now, "free");
+        insert_usage_snapshot_with_plan(&storage, "acc-pro-snapshot", now + 1, "pro");
+        insert_usage_snapshot_with_plan(&storage, "acc-plus-snapshot", now, "plus");
+        let mut candidates = vec![
+            candidate_without_plan("acc-free-snapshot", 0),
+            candidate_without_plan("acc-pro-snapshot", 1),
+            candidate_without_plan("acc-plus-snapshot", 2),
+        ];
+
+        sort_model_picker_candidates(&storage, &mut candidates);
+
+        let ids = candidates
+            .iter()
+            .map(|(account, _)| account.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec!["acc-pro-snapshot", "acc-plus-snapshot", "acc-free-snapshot"]
         );
     }
 }

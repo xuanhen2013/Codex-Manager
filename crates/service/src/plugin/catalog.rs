@@ -232,10 +232,11 @@ fn source_url_from_request(req: &JsonRpcRequest) -> Option<String> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn current_market_source_url() -> Option<String> {
-    crate::app_settings::list_app_settings_map()
-        .get(crate::app_settings::APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY)
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    crate::app_settings::get_persisted_app_setting(
+        crate::app_settings::APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY,
+    )
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
 }
 
 /// 函数 `current_market_source_mode`
@@ -250,19 +251,16 @@ pub(crate) fn current_market_source_url() -> Option<String> {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn current_market_source_mode() -> String {
-    let settings = crate::app_settings::list_app_settings_map();
-    if let Some(value) = settings.get(crate::app_settings::APP_SETTING_PLUGIN_MARKET_MODE_KEY) {
+    if let Some(value) = crate::app_settings::get_persisted_app_setting(
+        crate::app_settings::APP_SETTING_PLUGIN_MARKET_MODE_KEY,
+    ) {
         return match value.trim().to_ascii_lowercase().as_str() {
             "private" => CUSTOM_MARKET_MODE.to_string(),
             CUSTOM_MARKET_MODE => CUSTOM_MARKET_MODE.to_string(),
             _ => BUILTIN_MARKET_MODE.to_string(),
         };
     }
-    if settings
-        .get(crate::app_settings::APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-    {
+    if current_market_source_url().is_some() {
         return CUSTOM_MARKET_MODE.to_string();
     }
     BUILTIN_MARKET_MODE.to_string()

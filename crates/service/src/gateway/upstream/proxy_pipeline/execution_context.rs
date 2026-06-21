@@ -318,7 +318,8 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         let direct_upstream_model =
             resolve_direct_upstream_model_for_log(platform_model_for_log, model_for_log);
         let mapped_upstream_model = final_account_id.and_then(|account_id| {
-            let platform_model = platform_model_for_log?;
+            let platform_model =
+                platform_model_for_mapping_lookup(platform_model_for_log, direct_upstream_model)?;
             self.storage
                 .find_enabled_model_source_mapping(platform_model, "openai_account", account_id)
                 .ok()
@@ -392,9 +393,21 @@ fn resolve_direct_upstream_model_for_log<'a>(
     (candidate_model != platform_model).then_some(candidate_model)
 }
 
+fn platform_model_for_mapping_lookup<'a>(
+    platform_model_for_log: Option<&'a str>,
+    direct_upstream_model: Option<&str>,
+) -> Option<&'a str> {
+    if direct_upstream_model.is_some() {
+        return None;
+    }
+    platform_model_for_log
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resolve_direct_upstream_model_for_log;
+    use super::{platform_model_for_mapping_lookup, resolve_direct_upstream_model_for_log};
 
     #[test]
     fn direct_upstream_model_is_logged_for_override() {
@@ -410,5 +423,22 @@ mod tests {
             resolve_direct_upstream_model_for_log(Some("gpt-5"), Some("gpt-5")),
             None
         );
+    }
+
+    #[test]
+    fn direct_upstream_model_skips_mapping_lookup() {
+        assert_eq!(
+            platform_model_for_mapping_lookup(Some("gpt-5"), Some("gpt-5.4-openai-compact")),
+            None
+        );
+    }
+
+    #[test]
+    fn mapping_lookup_uses_trimmed_platform_model_without_direct_override() {
+        assert_eq!(
+            platform_model_for_mapping_lookup(Some(" gpt-5 "), None),
+            Some("gpt-5")
+        );
+        assert_eq!(platform_model_for_mapping_lookup(Some(" "), None), None);
     }
 }

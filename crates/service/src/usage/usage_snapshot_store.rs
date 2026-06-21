@@ -54,10 +54,9 @@ pub(crate) fn apply_status_from_snapshot(
 ) -> Availability {
     let availability = evaluate_snapshot(record);
     let current_status = storage
-        .find_account_by_id(&record.account_id)
+        .find_account_status_by_id(&record.account_id)
         .ok()
         .flatten()
-        .map(|account| account.status)
         .unwrap_or_default();
 
     if usage_status_updates_blocked(storage, &record.account_id, &current_status) {

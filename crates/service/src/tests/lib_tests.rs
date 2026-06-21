@@ -1,7 +1,11 @@
 use super::*;
-use codexmanager_core::rpc::types::{JsonRpcMessage, JsonRpcResponse};
+use codexmanager_core::rpc::types::{
+    JsonRpcMessage, JsonRpcResponse, ModelGroupModelUpsertParams, ModelGroupModelsSetParams,
+    ModelGroupUsersSetParams,
+};
 use codexmanager_core::storage::{
-    ModelCatalogModelRecord, ModelGroupModel, RequestLog, RequestTokenStat,
+    ModelCatalogModelRecord, ModelGroupModel, PluginInstall, PluginRunLog, PluginTask, RequestLog,
+    RequestTokenStat,
 };
 
 /// 函数 `response_result`
@@ -286,6 +290,142 @@ fn admin_user_update_edits_member_and_protects_last_active_admin() {
     let _ = std::fs::remove_file(db_path);
 }
 
+#[test]
+fn account_manager_user_list_batches_wallets() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-user-list-wallets");
+    let admin = create_app_user(AppUserCreateInput {
+        username: "admin-list-wallets".to_string(),
+        password: "password-one".to_string(),
+        display_name: None,
+        role: Some(ROLE_ADMIN.to_string()),
+        initial_balance_credit_micros: None,
+    })
+    .expect("create admin");
+    let member = create_test_member("member-list-wallets", Some(1_000_000));
+
+    let resp = response_result(handle_request_with_actor(
+        rpc_request("accountManager/users/list", serde_json::json!({})),
+        RpcActor::from_parts(Some(ROLE_ADMIN), Some(&admin.id)),
+    ));
+    let users = resp.result.as_array().expect("users");
+    let listed_admin = users
+        .iter()
+        .find(|user| user.get("id").and_then(|value| value.as_str()) == Some(admin.id.as_str()))
+        .expect("listed admin");
+    let listed_member = users
+        .iter()
+        .find(|user| user.get("id").and_then(|value| value.as_str()) == Some(member.id.as_str()))
+        .expect("listed member");
+
+    assert!(listed_admin
+        .get("wallet")
+        .is_none_or(|value| value.is_null()));
+    assert_eq!(
+        listed_member
+            .get("wallet")
+            .and_then(|wallet| wallet.get("availableCreditMicros"))
+            .and_then(|value| value.as_i64()),
+        Some(1_000_000)
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn plugin_logs_rpc_resolves_names_from_current_log_page() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-plugin-log-names");
+    let storage = storage_helpers::open_storage().expect("open storage");
+    let install = PluginInstall {
+        plugin_id: "cleanup-banned-accounts".to_string(),
+        source_url: Some("builtin://codexmanager".to_string()),
+        name: "清理封禁账号".to_string(),
+        version: "1.0.0".to_string(),
+        description: Some("test".to_string()),
+        author: Some("CodexManager".to_string()),
+        homepage_url: None,
+        script_url: None,
+        script_body: "fn run(context) { context }".to_string(),
+        permissions_json: serde_json::json!(["accounts:cleanup"]).to_string(),
+        manifest_json: serde_json::json!({ "id": "cleanup-banned-accounts" }).to_string(),
+        status: "enabled".to_string(),
+        installed_at: 1,
+        updated_at: 1,
+        last_run_at: None,
+        last_error: None,
+    };
+    let task = PluginTask {
+        id: "cleanup-banned-accounts::run".to_string(),
+        plugin_id: install.plugin_id.clone(),
+        name: "手动清理".to_string(),
+        description: None,
+        entrypoint: "run".to_string(),
+        schedule_kind: "manual".to_string(),
+        interval_seconds: None,
+        enabled: true,
+        next_run_at: None,
+        last_run_at: None,
+        last_status: None,
+        last_error: None,
+        task_json: serde_json::json!({
+            "id": "run",
+            "name": "手动清理",
+            "entrypoint": "run",
+            "scheduleKind": "manual",
+            "enabled": true
+        })
+        .to_string(),
+        created_at: 1,
+        updated_at: 1,
+    };
+    storage
+        .replace_plugin_install(&install, &[task])
+        .expect("seed plugin");
+    storage
+        .insert_plugin_run_log(&PluginRunLog {
+            id: None,
+            plugin_id: "cleanup-banned-accounts".to_string(),
+            task_id: Some("cleanup-banned-accounts::run".to_string()),
+            run_type: "manual".to_string(),
+            status: "success".to_string(),
+            started_at: 100,
+            finished_at: Some(101),
+            duration_ms: Some(1),
+            output_json: Some(serde_json::json!({ "deleted": 0 }).to_string()),
+            error: None,
+        })
+        .expect("insert plugin log");
+
+    let resp = response_result(handle_request_with_actor(
+        rpc_request(
+            "plugin/logs/list",
+            serde_json::json!({
+                "pluginId": "cleanup-banned-accounts",
+                "taskId": "cleanup-banned-accounts::run",
+                "limit": 5
+            }),
+        ),
+        RpcActor::from_parts(Some(ROLE_ADMIN), Some("admin-plugin-logs")),
+    ));
+    let items = resp
+        .result
+        .get("items")
+        .and_then(|value| value.as_array())
+        .expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].get("pluginName").and_then(|value| value.as_str()),
+        Some("清理封禁账号")
+    );
+    assert_eq!(
+        items[0].get("taskName").and_then(|value| value.as_str()),
+        Some("手动清理")
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
 fn setup_dashboard_test_db(name: &str) -> String {
     let db_path = std::env::temp_dir()
         .join(format!(
@@ -441,6 +581,117 @@ fn insert_test_request_log(
             },
         )
         .expect("insert request log");
+}
+
+#[test]
+fn set_model_group_models_validates_requested_catalog_slugs_only() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-model-group-model-slug-validation");
+    set_web_auth_mode("accounts").expect("enable accounts mode");
+    seed_test_catalog_model("gpt-5-mini");
+    let storage = storage_helpers::open_storage().expect("open storage");
+    let group_id = storage
+        .default_model_group_id()
+        .expect("read default model group")
+        .expect("default model group");
+    drop(storage);
+
+    let result = set_model_group_models(ModelGroupModelsSetParams {
+        group_id: group_id.clone(),
+        models: vec![
+            ModelGroupModelUpsertParams {
+                platform_model_slug: "gpt-5-mini".to_string(),
+                enabled: Some(true),
+                rate_multiplier_millis: Some(1200),
+                billing_model_slug: None,
+                note: Some("primary".to_string()),
+            },
+            ModelGroupModelUpsertParams {
+                platform_model_slug: "gpt-5-mini".to_string(),
+                enabled: Some(false),
+                rate_multiplier_millis: Some(900),
+                billing_model_slug: None,
+                note: Some("duplicate ignored".to_string()),
+            },
+        ],
+    })
+    .expect("set model group models");
+
+    let saved = result
+        .models
+        .iter()
+        .filter(|item| item.group_id == group_id && item.platform_model_slug == "gpt-5-mini")
+        .collect::<Vec<_>>();
+    assert_eq!(saved.len(), 1);
+    assert!(saved[0].enabled);
+    assert_eq!(saved[0].rate_multiplier_millis, Some(1200));
+    assert_eq!(saved[0].note.as_deref(), Some("primary"));
+
+    let err = set_model_group_models(ModelGroupModelsSetParams {
+        group_id,
+        models: vec![ModelGroupModelUpsertParams {
+            platform_model_slug: "missing-model".to_string(),
+            enabled: Some(true),
+            rate_multiplier_millis: None,
+            billing_model_slug: None,
+            note: None,
+        }],
+    })
+    .expect_err("missing catalog model should fail");
+    assert!(err.contains("平台模型 `missing-model` 不存在"));
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn set_model_group_users_batches_member_validation_and_dedupes() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-model-group-users-batch-validation");
+    set_web_auth_mode("accounts").expect("enable accounts mode");
+    let admin = create_app_user(AppUserCreateInput {
+        username: "admin-model-group-users".to_string(),
+        password: "password-one".to_string(),
+        display_name: None,
+        role: Some(ROLE_ADMIN.to_string()),
+        initial_balance_credit_micros: None,
+    })
+    .expect("create admin");
+    let member_one = create_test_member("member-model-group-users-one", None);
+    let member_two = create_test_member("member-model-group-users-two", None);
+    let storage = storage_helpers::open_storage().expect("open storage");
+    let group_id = storage
+        .default_model_group_id()
+        .expect("read default model group")
+        .expect("default model group");
+    drop(storage);
+
+    let result = set_model_group_users(ModelGroupUsersSetParams {
+        group_id: group_id.clone(),
+        user_ids: vec![
+            member_two.id.clone(),
+            member_one.id.clone(),
+            member_two.id.clone(),
+        ],
+    })
+    .expect("set model group users");
+
+    let saved = result
+        .user_assignments
+        .iter()
+        .filter(|item| item.group_id == group_id)
+        .collect::<Vec<_>>();
+    assert_eq!(saved.len(), 2);
+    assert!(saved.iter().any(|item| item.user_id == member_one.id));
+    assert!(saved.iter().any(|item| item.user_id == member_two.id));
+
+    let err = set_model_group_users(ModelGroupUsersSetParams {
+        group_id,
+        user_ids: vec![admin.id],
+    })
+    .expect_err("admin should not be assigned to member model group");
+    assert!(err.contains("不是成员账号"));
+
+    let _ = std::fs::remove_file(db_path);
 }
 
 #[test]
@@ -642,6 +893,74 @@ fn member_dashboard_filters_to_current_user_keys() {
     assert_eq!(resp.result["recentLogs"][0]["keyId"], key_one.id);
     assert_eq!(resp.result["topKeys"][0]["keyId"], key_one.id);
     assert_eq!(resp.result["topKeys"][0]["todayTokens"], 70);
+    assert_eq!(
+        resp.result["availableModels"]
+            .as_array()
+            .expect("available models array")
+            .len(),
+        0
+    );
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
+fn member_dashboard_can_skip_detail_payloads() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-member-dashboard-light");
+    let day_start = 1_700_000_000;
+    let day_end = day_start + 86_400;
+    let user = create_test_member("member-light", Some(2_000_000));
+    let key_id = create_owned_test_api_key(&user.id, "member light key", "gpt-5-mini");
+    seed_test_catalog_model("gpt-5-mini");
+
+    insert_test_request_log(
+        &key_id,
+        "trace-member-light",
+        "gpt-5-mini",
+        200,
+        40,
+        4,
+        30,
+        0.01,
+        day_start + 10,
+    );
+
+    let resp = response_result(handle_request_with_actor(
+        rpc_request(
+            "dashboard/memberSummary",
+            serde_json::json!({
+                "dayStartTs": day_start,
+                "dayEndTs": day_end,
+                "includeDetails": false
+            }),
+        ),
+        RpcActor::from_parts(Some(ROLE_MEMBER), Some(&user.id)),
+    ));
+
+    assert!(resp.result.get("error").is_none(), "{:?}", resp.result);
+    assert_eq!(resp.result["apiKeySummary"]["totalCount"], 1);
+    assert_eq!(resp.result["usageToday"]["totalTokens"], 70);
+    assert_eq!(
+        resp.result["availableModels"]
+            .as_array()
+            .expect("available models array")
+            .len(),
+        0
+    );
+    assert_eq!(
+        resp.result["recentLogs"]
+            .as_array()
+            .expect("recent logs array")
+            .len(),
+        0
+    );
+    assert!(resp.result["alerts"]
+        .as_array()
+        .map(|items| !items
+            .iter()
+            .any(|item| item["kind"] == "no_available_model"))
+        .unwrap_or(false));
 
     let _ = std::fs::remove_file(db_path);
 }
@@ -951,7 +1270,7 @@ fn admin_usage_summary_daily_trend_includes_token_stats_without_request_logs() {
     );
     assert_eq!(
         admin_resp.result["dailyUsage"][0]["usage"]["requestCount"],
-        0
+        1
     );
     assert_eq!(
         admin_resp.result["dailyUsage"][1]["usage"]["totalTokens"],
@@ -959,7 +1278,7 @@ fn admin_usage_summary_daily_trend_includes_token_stats_without_request_logs() {
     );
     assert_eq!(
         admin_resp.result["dailyUsage"][1]["usage"]["requestCount"],
-        0
+        1
     );
     assert_eq!(
         admin_resp.result["dailyUsage"][2]["usage"]["totalTokens"],

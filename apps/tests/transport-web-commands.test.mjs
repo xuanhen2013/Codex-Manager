@@ -168,8 +168,13 @@ test("createWebCommandMap 为普通用户仪表盘汇总提供 Web RPC 映射", 
   assert.equal(summary.rpcMethod, "dashboard/memberSummary");
   assert.ok(summary.mapParams);
   assert.deepEqual(
-    summary.mapParams({ user_id: "usr-1", day_start_ts: 100, day_end_ts: 200 }),
-    { userId: "usr-1", dayStartTs: 100, dayEndTs: 200 },
+    summary.mapParams({
+      user_id: "usr-1",
+      day_start_ts: 100,
+      day_end_ts: 200,
+      include_details: false,
+    }),
+    { userId: "usr-1", dayStartTs: 100, dayEndTs: 200, includeDetails: false },
   );
 });
 

@@ -1,19 +1,87 @@
 use std::collections::BTreeMap;
 
-use rusqlite::params;
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, OptionalExtension, Row};
 use serde_json::Value;
 
 use crate::rpc::types::{ModelInfo, ModelReasoningLevel};
 
+use super::key_id_filters::{text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{
     now_ts, ModelCatalogModelRecord, ModelCatalogReasoningLevelRecord, ModelCatalogScopeRecord,
-    ModelCatalogStringItemRecord, Storage,
+    ModelCatalogStorageSnapshot, ModelCatalogStringItemRecord, Storage,
 };
 
 const STRING_ITEM_KIND_ADDITIONAL_SPEED_TIERS: &str = "additional_speed_tiers";
 const STRING_ITEM_KIND_EXPERIMENTAL_SUPPORTED_TOOLS: &str = "experimental_supported_tools";
 const STRING_ITEM_KIND_INPUT_MODALITIES: &str = "input_modalities";
 const STRING_ITEM_KIND_AVAILABLE_IN_PLANS: &str = "available_in_plans";
+
+fn normalize_model_catalog_slugs(slugs: &[String]) -> Vec<String> {
+    let mut normalized = slugs
+        .iter()
+        .map(|slug| slug.trim().to_string())
+        .filter(|slug| !slug.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn model_catalog_model_select_sql() -> &'static str {
+    "SELECT
+        scope, slug, display_name, source_kind, user_edited,
+        description, default_reasoning_level, shell_type, visibility, supported_in_api, priority,
+        availability_nux_json, upgrade_json, base_instructions,
+        model_messages_json, supports_reasoning_summaries,
+        default_reasoning_summary, support_verbosity,
+        default_verbosity_json, apply_patch_tool_type,
+        web_search_tool_type, truncation_mode, truncation_limit,
+        truncation_extra_json, supports_parallel_tool_calls,
+        supports_image_detail_original, context_window,
+        auto_compact_token_limit, effective_context_window_percent,
+        minimal_client_version_json, supports_search_tool,
+        extra_json, sort_index, updated_at
+     FROM model_catalog_models"
+}
+
+fn map_model_catalog_model_record(row: &Row<'_>) -> rusqlite::Result<ModelCatalogModelRecord> {
+    Ok(ModelCatalogModelRecord {
+        scope: row.get(0)?,
+        slug: row.get(1)?,
+        display_name: row.get(2)?,
+        source_kind: row.get(3)?,
+        user_edited: row.get(4)?,
+        description: row.get(5)?,
+        default_reasoning_level: row.get(6)?,
+        shell_type: row.get(7)?,
+        visibility: row.get(8)?,
+        supported_in_api: row.get(9)?,
+        priority: row.get(10)?,
+        availability_nux_json: row.get(11)?,
+        upgrade_json: row.get(12)?,
+        base_instructions: row.get(13)?,
+        model_messages_json: row.get(14)?,
+        supports_reasoning_summaries: row.get(15)?,
+        default_reasoning_summary: row.get(16)?,
+        support_verbosity: row.get(17)?,
+        default_verbosity_json: row.get(18)?,
+        apply_patch_tool_type: row.get(19)?,
+        web_search_tool_type: row.get(20)?,
+        truncation_mode: row.get(21)?,
+        truncation_limit: row.get(22)?,
+        truncation_extra_json: row.get(23)?,
+        supports_parallel_tool_calls: row.get(24)?,
+        supports_image_detail_original: row.get(25)?,
+        context_window: row.get(26)?,
+        auto_compact_token_limit: row.get(27)?,
+        effective_context_window_percent: row.get(28)?,
+        minimal_client_version_json: row.get(29)?,
+        supports_search_tool: row.get(30)?,
+        extra_json: row.get(31)?,
+        sort_index: row.get(32)?,
+        updated_at: row.get(33)?,
+    })
+}
 
 impl Storage {
     pub fn upsert_model_catalog_scope(
@@ -205,67 +273,244 @@ impl Storage {
         &self,
         scope: &str,
     ) -> rusqlite::Result<Vec<ModelCatalogModelRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT
-                scope, slug, display_name, source_kind, user_edited,
-                description, default_reasoning_level, shell_type, visibility, supported_in_api, priority,
-                availability_nux_json, upgrade_json, base_instructions,
-                model_messages_json, supports_reasoning_summaries,
-                default_reasoning_summary, support_verbosity,
-                default_verbosity_json, apply_patch_tool_type,
-                web_search_tool_type, truncation_mode, truncation_limit,
-                truncation_extra_json, supports_parallel_tool_calls,
-                supports_image_detail_original, context_window,
-                auto_compact_token_limit, effective_context_window_percent,
-                minimal_client_version_json, supports_search_tool,
-                extra_json, sort_index, updated_at
-             FROM model_catalog_models
+        let sql = format!(
+            "{select_sql}
              WHERE scope = ?1
              ORDER BY sort_index ASC, updated_at DESC, slug ASC",
-        )?;
-        let rows = stmt.query_map([scope], |row| {
-            Ok(ModelCatalogModelRecord {
-                scope: row.get(0)?,
-                slug: row.get(1)?,
-                display_name: row.get(2)?,
-                source_kind: row.get(3)?,
-                user_edited: row.get(4)?,
-                description: row.get(5)?,
-                default_reasoning_level: row.get(6)?,
-                shell_type: row.get(7)?,
-                visibility: row.get(8)?,
-                supported_in_api: row.get(9)?,
-                priority: row.get(10)?,
-                availability_nux_json: row.get(11)?,
-                upgrade_json: row.get(12)?,
-                base_instructions: row.get(13)?,
-                model_messages_json: row.get(14)?,
-                supports_reasoning_summaries: row.get(15)?,
-                default_reasoning_summary: row.get(16)?,
-                support_verbosity: row.get(17)?,
-                default_verbosity_json: row.get(18)?,
-                apply_patch_tool_type: row.get(19)?,
-                web_search_tool_type: row.get(20)?,
-                truncation_mode: row.get(21)?,
-                truncation_limit: row.get(22)?,
-                truncation_extra_json: row.get(23)?,
-                supports_parallel_tool_calls: row.get(24)?,
-                supports_image_detail_original: row.get(25)?,
-                context_window: row.get(26)?,
-                auto_compact_token_limit: row.get(27)?,
-                effective_context_window_percent: row.get(28)?,
-                minimal_client_version_json: row.get(29)?,
-                supports_search_tool: row.get(30)?,
-                extra_json: row.get(31)?,
-                sort_index: row.get(32)?,
-                updated_at: row.get(33)?,
-            })
-        })?;
+            select_sql = model_catalog_model_select_sql(),
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([scope], map_model_catalog_model_record)?;
         let mut items = Vec::new();
         for row in rows {
             items.push(row?);
         }
         Ok(items)
+    }
+
+    pub fn load_model_catalog_storage_snapshot(
+        &self,
+        scope: &str,
+    ) -> rusqlite::Result<ModelCatalogStorageSnapshot> {
+        let models = self.list_model_catalog_models(scope)?;
+        if models.is_empty() {
+            return Ok(ModelCatalogStorageSnapshot::default());
+        }
+        let string_items = self.list_model_catalog_string_items_for_kinds(
+            scope,
+            &[
+                STRING_ITEM_KIND_ADDITIONAL_SPEED_TIERS,
+                STRING_ITEM_KIND_EXPERIMENTAL_SUPPORTED_TOOLS,
+                STRING_ITEM_KIND_INPUT_MODALITIES,
+                STRING_ITEM_KIND_AVAILABLE_IN_PLANS,
+            ],
+        )?;
+        let mut additional_speed_tiers = Vec::new();
+        let mut experimental_supported_tools = Vec::new();
+        let mut input_modalities = Vec::new();
+        let mut available_in_plans = Vec::new();
+        for (item_kind, item) in string_items {
+            match item_kind.as_str() {
+                STRING_ITEM_KIND_ADDITIONAL_SPEED_TIERS => additional_speed_tiers.push(item),
+                STRING_ITEM_KIND_EXPERIMENTAL_SUPPORTED_TOOLS => {
+                    experimental_supported_tools.push(item)
+                }
+                STRING_ITEM_KIND_INPUT_MODALITIES => input_modalities.push(item),
+                STRING_ITEM_KIND_AVAILABLE_IN_PLANS => available_in_plans.push(item),
+                _ => {}
+            }
+        }
+        Ok(ModelCatalogStorageSnapshot {
+            scope: self.get_model_catalog_scope(scope)?,
+            models,
+            reasoning_levels: self.list_model_catalog_reasoning_levels(scope)?,
+            additional_speed_tiers,
+            experimental_supported_tools,
+            input_modalities,
+            available_in_plans,
+        })
+    }
+
+    pub fn list_remote_unedited_model_catalog_models_for_slugs(
+        &self,
+        scope: &str,
+        slugs: &[String],
+    ) -> rusqlite::Result<Vec<ModelCatalogModelRecord>> {
+        let slugs = normalize_model_catalog_slugs(slugs);
+        if slugs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut items = Vec::new();
+        for chunk in slugs.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            let Some((slug_condition, slug_params)) = text_id_in_clause("slug", chunk) else {
+                continue;
+            };
+            let sql = format!(
+                "{select_sql}
+                 WHERE scope = ?1
+                   AND {slug_condition}
+                   AND source_kind = 'remote'
+                   AND COALESCE(user_edited, 0) = 0",
+                select_sql = model_catalog_model_select_sql(),
+            );
+            let mut values = Vec::with_capacity(slug_params.len() + 1);
+            values.push(SqlValue::Text(scope.trim().to_string()));
+            values.extend(slug_params);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(values), map_model_catalog_model_record)?;
+            for row in rows {
+                items.push(row?);
+            }
+        }
+        items.sort_by(|left, right| {
+            left.sort_index
+                .cmp(&right.sort_index)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
+                .then_with(|| left.slug.cmp(&right.slug))
+        });
+        Ok(items)
+    }
+
+    pub fn list_remote_unedited_model_catalog_slugs(
+        &self,
+        scope: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT slug
+             FROM model_catalog_models
+             WHERE scope = ?1
+               AND source_kind = 'remote'
+               AND COALESCE(user_edited, 0) = 0
+             ORDER BY sort_index ASC, updated_at DESC, slug ASC",
+        )?;
+        let rows = stmt.query_map([scope], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_api_available_model_catalog_slugs(
+        &self,
+        scope: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT slug
+             FROM model_catalog_models
+             WHERE scope = ?1
+               AND TRIM(slug) <> ''
+               AND COALESCE(supported_in_api, 1) = 1
+               AND LOWER(TRIM(COALESCE(visibility, ''))) NOT IN ('hide', 'hidden', 'disabled', 'unavailable')
+             ORDER BY sort_index ASC, updated_at DESC, slug ASC",
+        )?;
+        let rows = stmt.query_map([scope], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn find_first_api_available_model_catalog_slug(
+        &self,
+        scope: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT slug
+                 FROM model_catalog_models
+                 WHERE scope = ?1
+                   AND TRIM(slug) <> ''
+                   AND COALESCE(supported_in_api, 1) = 1
+                   AND LOWER(TRIM(COALESCE(visibility, ''))) NOT IN ('hide', 'hidden', 'disabled', 'unavailable')
+                 ORDER BY sort_index ASC, updated_at DESC, slug ASC
+                 LIMIT 1",
+                [scope],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    }
+
+    pub fn list_api_available_model_catalog_slugs_with_prefix(
+        &self,
+        scope: &str,
+        slug_prefix: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let normalized_prefix = slug_prefix.trim().to_ascii_lowercase();
+        if normalized_prefix.is_empty() {
+            return self.list_api_available_model_catalog_slugs(scope);
+        }
+        let like_pattern = format!("{normalized_prefix}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT slug
+             FROM model_catalog_models
+             WHERE scope = ?1
+               AND TRIM(slug) <> ''
+               AND COALESCE(supported_in_api, 1) = 1
+               AND LOWER(TRIM(COALESCE(visibility, ''))) NOT IN ('hide', 'hidden', 'disabled', 'unavailable')
+               AND LOWER(TRIM(slug)) LIKE ?2
+             ORDER BY sort_index ASC, updated_at DESC, slug ASC",
+        )?;
+        let rows = stmt.query_map(params![scope, like_pattern], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn model_catalog_model_exists(&self, scope: &str, slug: &str) -> rusqlite::Result<bool> {
+        let found = self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM model_catalog_models
+                 WHERE scope = ?1
+                   AND slug = ?2
+                 LIMIT 1",
+                params![scope, slug],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
+    pub fn list_existing_model_catalog_slugs(
+        &self,
+        scope: &str,
+        slugs: &[String],
+    ) -> rusqlite::Result<Vec<String>> {
+        let slugs = normalize_model_catalog_slugs(slugs);
+        if slugs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        for chunk in slugs.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            let Some((slug_condition, slug_params)) = text_id_in_clause("slug", chunk) else {
+                continue;
+            };
+            let sql = format!(
+                "SELECT slug
+                 FROM model_catalog_models
+                 WHERE scope = ?1
+                   AND {slug_condition}",
+            );
+            let mut values = Vec::with_capacity(slug_params.len() + 1);
+            values.push(SqlValue::Text(scope.trim().to_string()));
+            values.extend(slug_params);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(values), |row| row.get::<_, String>(0))?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    pub fn count_available_model_catalog_models(&self, scope: &str) -> rusqlite::Result<i64> {
+        self.conn.query_row(
+            "SELECT COUNT(1)
+             FROM model_catalog_models
+             WHERE scope = ?1
+               AND TRIM(slug) <> ''
+               AND COALESCE(supported_in_api, 1) = 1
+               AND LOWER(TRIM(COALESCE(visibility, ''))) NOT IN ('hide', 'hidden', 'disabled', 'unavailable')",
+            [scope],
+            |row| row.get(0),
+        )
     }
 
     pub fn delete_model_catalog_model(&self, scope: &str, slug: &str) -> rusqlite::Result<()> {
@@ -472,10 +717,55 @@ impl Storage {
         Ok(items)
     }
 
+    fn list_model_catalog_string_items_for_kinds(
+        &self,
+        scope: &str,
+        item_kinds: &[&str],
+    ) -> rusqlite::Result<Vec<(String, ModelCatalogStringItemRecord)>> {
+        if item_kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (0..item_kinds.len())
+            .map(|index| format!("?{}", index + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT item_kind, scope, slug, value, sort_index, updated_at
+             FROM model_catalog_string_items
+             WHERE scope = ?1 AND item_kind IN ({placeholders})
+             ORDER BY item_kind ASC, slug ASC, sort_index ASC, value ASC"
+        );
+        let mut values = Vec::with_capacity(item_kinds.len() + 1);
+        values.push(SqlValue::Text(scope.trim().to_string()));
+        values.extend(
+            item_kinds
+                .iter()
+                .map(|item_kind| SqlValue::Text(item_kind.to_string())),
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ModelCatalogStringItemRecord {
+                    scope: row.get(1)?,
+                    slug: row.get(2)?,
+                    value: row.get(3)?,
+                    sort_index: row.get(4)?,
+                    updated_at: row.get(5)?,
+                },
+            ))
+        })?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
     fn ensure_model_catalog_child_tables(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_model_catalog_models_scope_sort
-               ON model_catalog_models(scope, sort_index, slug);
+            "CREATE INDEX IF NOT EXISTS idx_model_catalog_models_scope_order
+               ON model_catalog_models(scope, sort_index, updated_at DESC, slug);
              CREATE INDEX IF NOT EXISTS idx_model_catalog_models_scope_supported_in_api
                ON model_catalog_models(scope, supported_in_api, sort_index, slug);
              CREATE INDEX IF NOT EXISTS idx_model_catalog_models_scope_visibility
@@ -1138,4 +1428,333 @@ fn choose_extra_text(
 fn serialize_extra_map(extra: &BTreeMap<String, Value>) -> rusqlite::Result<String> {
     serde_json::to_string(extra)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model_record(slug: &str) -> ModelCatalogModelRecord {
+        ModelCatalogModelRecord {
+            scope: "default".to_string(),
+            slug: slug.to_string(),
+            display_name: slug.to_string(),
+            source_kind: "remote".to_string(),
+            visibility: Some("list".to_string()),
+            supported_in_api: Some(true),
+            extra_json: "{}".to_string(),
+            ..ModelCatalogModelRecord::default()
+        }
+    }
+
+    fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
+        let mut stmt = storage.conn.prepare(sql).expect("prepare explain");
+        let mut rows = stmt.query([]).expect("query explain");
+        let mut details = Vec::new();
+        while let Some(row) = rows.next().expect("next explain row") {
+            let detail: String = row.get(3).expect("detail");
+            details.push(detail.to_ascii_lowercase());
+        }
+        details
+    }
+
+    #[test]
+    fn count_available_model_catalog_models_uses_visibility_and_api_filters() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut hidden = model_record("hidden-model");
+        hidden.visibility = Some("hide".to_string());
+        let mut remote_hidden = model_record("remote-hidden-model");
+        remote_hidden.visibility = Some("hidden".to_string());
+        let mut unsupported = model_record("unsupported-model");
+        unsupported.supported_in_api = Some(false);
+        let mut default_supported = model_record("default-supported-model");
+        default_supported.supported_in_api = None;
+        storage
+            .upsert_model_catalog_models(&[
+                model_record("available-model"),
+                hidden,
+                remote_hidden,
+                unsupported,
+                default_supported,
+            ])
+            .expect("seed models");
+
+        assert_eq!(
+            storage
+                .count_available_model_catalog_models("default")
+                .expect("count models"),
+            2
+        );
+    }
+
+    #[test]
+    fn model_catalog_model_exists_checks_single_slug() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        storage
+            .upsert_model_catalog_models(&[model_record("available-model")])
+            .expect("seed model");
+
+        assert!(storage
+            .model_catalog_model_exists("default", "available-model")
+            .expect("check existing model"));
+        assert!(!storage
+            .model_catalog_model_exists("default", "missing-model")
+            .expect("check missing model"));
+    }
+
+    #[test]
+    fn list_existing_model_catalog_slugs_filters_requested_slugs() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        storage
+            .upsert_model_catalog_models(&[
+                model_record("available-a"),
+                model_record("available-b"),
+                model_record("unrequested"),
+            ])
+            .expect("seed models");
+
+        let slugs = storage
+            .list_existing_model_catalog_slugs(
+                "default",
+                &[
+                    "available-b".to_string(),
+                    "missing".to_string(),
+                    "available-a".to_string(),
+                    "available-a".to_string(),
+                ],
+            )
+            .expect("list existing slugs");
+
+        assert_eq!(slugs, vec!["available-a", "available-b"]);
+    }
+
+    #[test]
+    fn model_catalog_slug_chunk_queries_defer_final_ordering_to_rust() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        let existing_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT slug
+             FROM model_catalog_models
+             WHERE scope = 'default'
+               AND slug IN ('available-a', 'available-b')",
+        );
+        let remote_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT slug, sort_index, updated_at
+             FROM model_catalog_models
+             WHERE scope = 'default'
+               AND slug IN ('available-a', 'available-b')
+               AND source_kind = 'remote'
+               AND COALESCE(user_edited, 0) = 0",
+        );
+
+        assert!(
+            !existing_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "existing slug chunk query should avoid per-chunk ORDER BY temp sorting, got {existing_details:?}"
+        );
+        assert!(
+            !remote_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "remote catalog chunk query should avoid per-chunk ORDER BY temp sorting, got {remote_details:?}"
+        );
+    }
+
+    #[test]
+    fn list_remote_unedited_model_catalog_models_for_slugs_preserves_catalog_order() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut later = model_record("later");
+        later.sort_index = 2;
+        later.updated_at = 10;
+        let mut first = model_record("first");
+        first.sort_index = 1;
+        first.updated_at = 5;
+        let mut newer_same_sort = model_record("newer-same-sort");
+        newer_same_sort.sort_index = 1;
+        newer_same_sort.updated_at = 20;
+        storage
+            .upsert_model_catalog_models(&[later, first, newer_same_sort])
+            .expect("seed models");
+
+        let rows = storage
+            .list_remote_unedited_model_catalog_models_for_slugs(
+                "default",
+                &[
+                    "later".to_string(),
+                    "first".to_string(),
+                    "newer-same-sort".to_string(),
+                ],
+            )
+            .expect("list remote catalog models");
+
+        assert_eq!(
+            rows.into_iter().map(|row| row.slug).collect::<Vec<_>>(),
+            vec![
+                "newer-same-sort".to_string(),
+                "first".to_string(),
+                "later".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn list_remote_unedited_model_catalog_slugs_filters_in_sql() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut user_edited = model_record("user-edited");
+        user_edited.user_edited = true;
+        let mut custom = model_record("custom-model");
+        custom.source_kind = "custom".to_string();
+        storage
+            .upsert_model_catalog_models(&[
+                model_record("remote-a"),
+                user_edited,
+                custom,
+                model_record("remote-b"),
+            ])
+            .expect("seed models");
+
+        let slugs = storage
+            .list_remote_unedited_model_catalog_slugs("default")
+            .expect("list remote unedited slugs");
+
+        assert_eq!(slugs, vec!["remote-a", "remote-b"]);
+    }
+
+    #[test]
+    fn list_api_available_model_catalog_slugs_filters_in_sql() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut hidden = model_record("hidden-model");
+        hidden.visibility = Some("hidden".to_string());
+        let mut hide = model_record("hide-model");
+        hide.visibility = Some("hide".to_string());
+        let mut disabled = model_record("disabled-model");
+        disabled.visibility = Some("disabled".to_string());
+        let mut unavailable = model_record("unavailable-model");
+        unavailable.visibility = Some("unavailable".to_string());
+        let mut unsupported = model_record("unsupported-model");
+        unsupported.supported_in_api = Some(false);
+        let mut default_supported = model_record("default-supported-model");
+        default_supported.supported_in_api = None;
+        default_supported.sort_index = 1;
+        let mut available = model_record("available-model");
+        available.sort_index = 0;
+        storage
+            .upsert_model_catalog_models(&[
+                default_supported,
+                hidden,
+                hide,
+                unsupported,
+                disabled,
+                unavailable,
+                available,
+            ])
+            .expect("seed models");
+
+        let slugs = storage
+            .list_api_available_model_catalog_slugs("default")
+            .expect("list api available slugs");
+
+        assert_eq!(slugs, vec!["available-model", "default-supported-model"]);
+    }
+
+    #[test]
+    fn find_first_api_available_model_catalog_slug_uses_catalog_order() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut hidden = model_record("hidden-model");
+        hidden.visibility = Some("hidden".to_string());
+        hidden.sort_index = 0;
+        let mut unsupported = model_record("unsupported-model");
+        unsupported.supported_in_api = Some(false);
+        unsupported.sort_index = 1;
+        let mut selected = model_record("selected-model");
+        selected.sort_index = 2;
+        let mut later = model_record("later-model");
+        later.sort_index = 3;
+        storage
+            .upsert_model_catalog_models(&[hidden, unsupported, later, selected])
+            .expect("seed models");
+
+        let slug = storage
+            .find_first_api_available_model_catalog_slug("default")
+            .expect("find first api available slug");
+
+        assert_eq!(slug.as_deref(), Some("selected-model"));
+    }
+
+    #[test]
+    fn list_api_available_model_catalog_slugs_with_prefix_filters_in_sql() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let mut gpt = model_record("gpt-available");
+        gpt.sort_index = 1;
+        let mut codex = model_record("gpt-codex");
+        codex.sort_index = 0;
+        let other = model_record("claude-available");
+        let mut hidden = model_record("gpt-hidden");
+        hidden.visibility = Some("hide".to_string());
+        storage
+            .upsert_model_catalog_models(&[gpt, codex, other, hidden])
+            .expect("seed models");
+
+        let slugs = storage
+            .list_api_available_model_catalog_slugs_with_prefix("default", " GPT-")
+            .expect("list prefixed api available slugs");
+
+        assert_eq!(slugs, vec!["gpt-codex", "gpt-available"]);
+    }
+
+    #[test]
+    fn list_model_catalog_models_uses_scope_order_index() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        let details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT slug
+             FROM model_catalog_models
+             WHERE scope = 'default'
+             ORDER BY sort_index ASC, updated_at DESC, slug ASC",
+        );
+
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("idx_model_catalog_models_scope_order")),
+            "expected model catalog scope order index, got {details:?}"
+        );
+    }
+
+    #[test]
+    fn model_catalog_model_exists_uses_primary_key_lookup() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        let details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT 1
+             FROM model_catalog_models
+             WHERE scope = 'default'
+               AND slug = 'available-model'
+             LIMIT 1",
+        );
+
+        assert!(details.iter().any(
+            |detail| detail.contains("search model_catalog_models") && detail.contains("index")
+        ));
+    }
 }

@@ -2,31 +2,29 @@ use crate::app_settings::{list_app_settings_map, listener_bind_addr_for_mode};
 use crate::initialize_storage_if_needed;
 use crate::{current_web_auth_mode, distribution_enabled, web_access_password_configured};
 use chrono::Local;
-use codexmanager_core::rpc::types::ModelInfo;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::author_links::{
     default_author_server_recommendations, default_author_sponsors, load_author_link_items,
     serialize_author_link_items,
 };
 use super::{
-    current_background_tasks_snapshot_value, current_close_to_tray_on_close_setting,
-    current_codex_cli_guide_dismissed, current_env_overrides, current_gateway_account_max_inflight,
-    current_gateway_compact_model_forward_rules, current_gateway_free_account_max_model,
-    current_gateway_model_forward_rules, current_gateway_originator, current_gateway_quota_guard,
-    current_gateway_residency_requirement, current_gateway_sse_keepalive_interval_ms,
-    current_gateway_upstream_stream_timeout_ms, current_gateway_upstream_total_timeout_ms,
-    current_gateway_user_agent_version, current_lightweight_mode_on_close_to_tray_setting,
-    current_saved_service_addr, current_service_bind_mode, current_ui_appearance_preset,
-    current_ui_locale, current_ui_low_transparency_enabled, current_ui_theme,
-    current_update_auto_check_enabled, default_gateway_originator,
+    current_background_tasks_snapshot_value, current_env_overrides,
+    current_gateway_account_max_inflight, current_gateway_compact_model_forward_rules,
+    current_gateway_free_account_max_model, current_gateway_model_forward_rules,
+    current_gateway_originator, current_gateway_quota_guard, current_gateway_residency_requirement,
+    current_gateway_sse_keepalive_interval_ms, current_gateway_upstream_stream_timeout_ms,
+    current_gateway_upstream_total_timeout_ms, current_gateway_user_agent_version,
+    current_saved_service_addr, current_service_bind_mode, default_gateway_originator,
     default_gateway_user_agent_version, env_override_catalog_value, env_override_reserved_keys,
-    env_override_unsupported_keys, residency_requirement_options, save_env_overrides_value,
-    save_persisted_app_setting, save_persisted_bool_setting, sync_runtime_settings_from_storage,
-    APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
-    APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
-    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
+    env_override_unsupported_keys, normalize_ui_appearance_preset, normalize_ui_locale,
+    normalize_ui_theme, parse_bool_with_default, residency_requirement_options,
+    save_env_overrides_value, save_persisted_app_setting, save_persisted_bool_setting,
+    sync_runtime_settings_from_storage, APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY,
+    APP_SETTING_AUTHOR_SPONSORS_KEY, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+    APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
@@ -79,6 +77,13 @@ fn normalize_service_bind_mode_value(raw: Option<&str>) -> &'static str {
     }
 }
 
+fn setting_bool(settings: &HashMap<String, String>, key: &str, default: bool) -> bool {
+    settings
+        .get(key)
+        .map(|value| parse_bool_with_default(value, default))
+        .unwrap_or(default)
+}
+
 fn current_runtime_time_zone_value() -> Value {
     let env_tz = std::env::var("TZ")
         .ok()
@@ -119,18 +124,31 @@ pub(super) fn current_app_settings_value(
 ) -> Result<Value, String> {
     initialize_storage_if_needed()?;
     sync_runtime_settings_from_storage();
+    let settings = list_app_settings_map();
     let background_tasks = current_background_tasks_snapshot_value()?;
     let runtime_time_zone = current_runtime_time_zone_value();
-    let update_auto_check = current_update_auto_check_enabled();
-    let persisted_close_to_tray = current_close_to_tray_on_close_setting();
+    let update_auto_check = setting_bool(&settings, APP_SETTING_UPDATE_AUTO_CHECK_KEY, true);
+    let persisted_close_to_tray =
+        setting_bool(&settings, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY, false);
     let close_to_tray = close_to_tray_on_close.unwrap_or(persisted_close_to_tray);
-    let lightweight_mode_on_close_to_tray = current_lightweight_mode_on_close_to_tray_setting();
-    let codex_cli_guide_dismissed = current_codex_cli_guide_dismissed();
-    let low_transparency = current_ui_low_transparency_enabled();
-    let theme = current_ui_theme();
-    let appearance_preset = current_ui_appearance_preset();
-    let locale = current_ui_locale();
-    let settings = list_app_settings_map();
+    let lightweight_mode_on_close_to_tray = setting_bool(
+        &settings,
+        APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY,
+        false,
+    );
+    let codex_cli_guide_dismissed = setting_bool(
+        &settings,
+        APP_SETTING_UI_CODEX_CLI_GUIDE_DISMISSED_KEY,
+        false,
+    );
+    let low_transparency = setting_bool(&settings, APP_SETTING_UI_LOW_TRANSPARENCY_KEY, false);
+    let theme = normalize_ui_theme(settings.get(APP_SETTING_UI_THEME_KEY).map(String::as_str));
+    let appearance_preset = normalize_ui_appearance_preset(
+        settings
+            .get(APP_SETTING_UI_APPEARANCE_PRESET_KEY)
+            .map(String::as_str),
+    );
+    let locale = normalize_ui_locale(settings.get(APP_SETTING_UI_LOCALE_KEY).map(String::as_str));
     let service_addr = current_saved_service_addr();
     let service_listen_mode = if let Some(mode) = service_listen_mode_override {
         normalize_service_bind_mode_value(Some(mode)).to_string()
@@ -358,8 +376,12 @@ pub(super) fn current_author_content_value() -> Result<Value, String> {
 /// # 返回
 /// 返回函数执行结果
 fn load_free_account_max_model_options(current: &str) -> Vec<String> {
-    let cached = crate::apikey_models::read_model_options(false)
-        .map(|result| result.models)
+    let cached = crate::storage_helpers::open_storage()
+        .and_then(|storage| {
+            storage
+                .list_api_available_model_catalog_slugs_with_prefix("default", "gpt-")
+                .ok()
+        })
         .unwrap_or_default();
     collect_free_account_max_model_options(current, &cached)
 }
@@ -376,11 +398,11 @@ fn load_free_account_max_model_options(current: &str) -> Vec<String> {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn collect_free_account_max_model_options(current: &str, cached: &[ModelInfo]) -> Vec<String> {
+fn collect_free_account_max_model_options(current: &str, cached: &[String]) -> Vec<String> {
     let mut items = vec!["auto".to_string()];
     for slug in cached
         .iter()
-        .map(|item| item.slug.trim().to_ascii_lowercase())
+        .map(|item| item.trim().to_ascii_lowercase())
         .filter(|slug| is_free_account_max_model_option(slug))
     {
         if !items.iter().any(|item| item == &slug) {
@@ -618,7 +640,6 @@ mod tests {
         collect_free_account_max_model_options, normalize_market_mode,
         DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS,
     };
-    use codexmanager_core::rpc::types::ModelInfo;
 
     /// 函数 `free_account_max_model_options_fallback_to_curated_defaults`
     ///
@@ -657,31 +678,11 @@ mod tests {
         let actual = collect_free_account_max_model_options(
             "gpt-5.2",
             &[
-                ModelInfo {
-                    slug: "gpt-5".to_string(),
-                    display_name: "gpt-5".to_string(),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    slug: "gpt-5.1-codex".to_string(),
-                    display_name: "gpt-5.1-codex".to_string(),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    slug: "gpt-5.4-pro".to_string(),
-                    display_name: "gpt-5.4-pro".to_string(),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    slug: "o3".to_string(),
-                    display_name: "o3".to_string(),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    slug: "gpt-5.1-codex".to_string(),
-                    display_name: "gpt-5.1-codex".to_string(),
-                    ..Default::default()
-                },
+                "gpt-5".to_string(),
+                "gpt-5.1-codex".to_string(),
+                "gpt-5.4-pro".to_string(),
+                "o3".to_string(),
+                "gpt-5.1-codex".to_string(),
             ],
         );
 

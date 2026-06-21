@@ -26,18 +26,22 @@ test("账号直连模式下会遮罩依赖网关请求日志的仪表盘区域",
     source,
     /<DirectModeUnavailable active=\{isDirectAccountMode\}>\s*<AdminUsageAnalyticsCard/s,
   );
-  assert.match(
-    source,
-    /<DirectModeUnavailable active=\{isDirectAccountMode\}>\s*<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">/s,
-  );
-  assert.match(
-    source,
-    /<DirectModeUnavailable active=\{isDirectAccountMode\}>\s*<Card className="glass-card min-h-\[300px\] shadow-sm">/s,
-  );
+  assert.doesNotMatch(source, /当前活跃账号/);
+  assert.doesNotMatch(source, /智能推荐/);
 });
 
 test("日志页 direct 模式只提示日志口径不遮罩历史日志", async () => {
   const source = await readSource("src/app/logs/page.tsx");
   assert.match(source, /useCodexProfileModeStatus/);
   assert.doesNotMatch(source, /DirectModeUnavailable/);
+});
+
+test("启动快照只预取轻量日志样本", async () => {
+  const source = await readSource("src/lib/api/startup-snapshot.ts");
+  assert.match(source, /STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT = 24/);
+});
+
+test("首页仪表盘不再为已移除的活跃账号卡片预取日志样本", async () => {
+  const source = await readDashboardSource();
+  assert.match(source, /useDashboardStats\(\{\s*requestLogLimit: 0,\s*includeAccountHints: false,\s*\}\)/s);
 });

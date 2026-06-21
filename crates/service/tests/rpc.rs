@@ -2338,6 +2338,94 @@ fn rpc_usage_list_empty() {
     );
 }
 
+#[test]
+fn rpc_usage_list_limit_returns_recent_latest_snapshots() {
+    let ctx = RpcTestContext::new("rpc-usage-list-limit");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let now = now_ts();
+    for (account_id, captured_at, used_percent) in [
+        ("acc-old", now, 10.0),
+        ("acc-newest", now + 3, 30.0),
+        ("acc-middle", now + 2, 20.0),
+    ] {
+        storage
+            .insert_usage_snapshot(&UsageSnapshotRecord {
+                account_id: account_id.to_string(),
+                used_percent: Some(used_percent),
+                window_minutes: Some(180),
+                resets_at: None,
+                secondary_used_percent: None,
+                secondary_window_minutes: None,
+                secondary_resets_at: None,
+                credits_json: None,
+                captured_at,
+            })
+            .expect("insert usage snapshot");
+    }
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let req = JsonRpcRequest {
+        id: 17.into(),
+        method: "account/usage/list".to_string(),
+        params: Some(serde_json::json!({ "limit": 2 })),
+        trace: None,
+    };
+    let json = serde_json::to_string(&req).expect("serialize");
+    let v = post_rpc(&server.addr, &json);
+    let result = v.get("result").expect("result");
+    let items = result
+        .get("items")
+        .and_then(|value| value.as_array())
+        .expect("items array");
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items
+            .iter()
+            .filter_map(|item| item.get("accountId").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>(),
+        vec!["acc-newest", "acc-middle"]
+    );
+}
+
+#[test]
+fn rpc_usage_list_zero_limit_returns_empty_without_unbounded_read() {
+    let ctx = RpcTestContext::new("rpc-usage-list-zero-limit");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    storage
+        .insert_usage_snapshot(&UsageSnapshotRecord {
+            account_id: "acc-hidden".to_string(),
+            used_percent: Some(10.0),
+            window_minutes: Some(180),
+            resets_at: None,
+            secondary_used_percent: None,
+            secondary_window_minutes: None,
+            secondary_resets_at: None,
+            credits_json: None,
+            captured_at: now_ts(),
+        })
+        .expect("insert usage snapshot");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let req = JsonRpcRequest {
+        id: 18.into(),
+        method: "account/usage/list".to_string(),
+        params: Some(serde_json::json!({ "limit": 0 })),
+        trace: None,
+    };
+    let json = serde_json::to_string(&req).expect("serialize");
+    let v = post_rpc(&server.addr, &json);
+    let result = v.get("result").expect("result");
+    let items = result
+        .get("items")
+        .and_then(|value| value.as_array())
+        .expect("items array");
+
+    assert!(items.is_empty(), "expected zero-limit usage list: {result}");
+}
+
 /// 函数 `rpc_usage_aggregate_returns_backend_summary`
 ///
 /// 作者: gaohongshun
@@ -2517,6 +2605,7 @@ fn rpc_requestlog_list_and_summary_support_pagination() {
                 reasoning_output_tokens: Some(0),
                 estimated_cost_usd: Some(0.01),
                 created_at,
+                ..RequestTokenStat::default()
             })
             .expect("insert token stat");
     }

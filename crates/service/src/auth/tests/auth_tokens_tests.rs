@@ -1,4 +1,4 @@
-use super::next_account_sort;
+use super::{next_account_sort, resolve_existing_account_for_login};
 use crate::account_identity::{build_account_storage_id, pick_existing_account_id_by_identity};
 use crate::auth_tokens::{
     build_api_key_exchange_request, build_exchange_code_request, ensure_workspace_allowed,
@@ -152,6 +152,84 @@ fn next_account_sort_uses_step_five() {
         .expect("update sort 2");
 
     assert_eq!(next_account_sort(&storage), 12);
+}
+
+#[test]
+fn resolve_existing_account_for_login_uses_identity_lookup_without_tags() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    storage
+        .insert_account(&build_account("acc-existing", Some("cgpt-1"), Some("ws-1")))
+        .expect("insert existing account");
+
+    let found = resolve_existing_account_for_login(
+        &storage,
+        Some("cgpt-1"),
+        Some("ws-1"),
+        Some("subject-fallback"),
+        None,
+    )
+    .expect("resolve account");
+
+    assert_eq!(found.as_deref(), Some("acc-existing"));
+}
+
+#[test]
+fn resolve_existing_account_for_login_preserves_tagged_fallback_behavior() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    storage
+        .insert_account(&build_account(
+            "subject-fallback",
+            Some("cgpt-1"),
+            Some("ws-1"),
+        ))
+        .expect("insert untagged account");
+
+    let found = resolve_existing_account_for_login(
+        &storage,
+        Some("cgpt-1"),
+        Some("ws-1"),
+        Some("subject-fallback::team-a"),
+        Some("team-a"),
+    )
+    .expect("resolve tagged account");
+
+    assert_eq!(found.as_deref(), Some("subject-fallback"));
+}
+
+#[test]
+fn resolve_existing_account_for_login_with_tags_uses_identity_candidates() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    storage
+        .insert_account(&build_account(
+            "subject-fallback",
+            Some("cgpt-target"),
+            Some("ws-target"),
+        ))
+        .expect("insert fallback account");
+    storage
+        .insert_account(&build_account(
+            "acc-unrelated-newer",
+            Some("cgpt-other"),
+            Some("ws-other"),
+        ))
+        .expect("insert unrelated account");
+    storage
+        .touch_account_updated_at("acc-unrelated-newer")
+        .expect("touch unrelated");
+
+    let found = resolve_existing_account_for_login(
+        &storage,
+        Some("cgpt-target"),
+        Some("ws-target"),
+        Some("subject-fallback::team-a"),
+        Some("team-a"),
+    )
+    .expect("resolve account");
+
+    assert_eq!(found.as_deref(), Some("subject-fallback"));
 }
 
 /// 函数 `jwt_with_claims`

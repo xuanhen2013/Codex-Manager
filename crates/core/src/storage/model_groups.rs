@@ -1,6 +1,9 @@
 use rusqlite::{params, OptionalExtension, Result, Row};
 
-use super::{now_ts, ModelGroup, ModelGroupAccess, ModelGroupModel, Storage, UserModelGroup};
+use super::{
+    now_ts, ModelGroup, ModelGroupAccess, ModelGroupListSnapshot, ModelGroupModel, Storage,
+    UserModelGroup,
+};
 
 const DEFAULT_MODEL_GROUP_ID: &str = "mg_default";
 
@@ -180,6 +183,15 @@ impl Storage {
         )?;
         let rows = stmt.query_map([], map_model_group)?;
         rows.collect()
+    }
+
+    pub fn load_model_group_list_snapshot(&self) -> Result<ModelGroupListSnapshot> {
+        self.bootstrap_default_model_group()?;
+        Ok(ModelGroupListSnapshot {
+            groups: self.list_model_groups()?,
+            models: self.list_model_group_models()?,
+            user_assignments: self.list_user_model_groups()?,
+        })
     }
 
     pub fn find_model_group(&self, id: &str) -> Result<Option<ModelGroup>> {
@@ -626,6 +638,44 @@ mod tests {
             .map(|model| model.platform_model_slug)
             .collect::<Vec<_>>();
         assert_eq!(slugs, vec!["gpt-existing"]);
+    }
+
+    #[test]
+    fn model_group_list_snapshot_bootstraps_and_loads_related_rows() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_app_user(&AppUser {
+                id: "usr_snapshot".to_string(),
+                username: "snapshot-member".to_string(),
+                display_name: None,
+                password_hash: "hash".to_string(),
+                role: "member".to_string(),
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+                last_login_at: None,
+            })
+            .expect("insert user");
+        storage
+            .upsert_model_catalog_models(&[model_catalog_record("gpt-snapshot")])
+            .expect("seed catalog");
+
+        let snapshot = storage
+            .load_model_group_list_snapshot()
+            .expect("load model group snapshot");
+
+        assert!(snapshot
+            .groups
+            .iter()
+            .any(|group| group.id == DEFAULT_MODEL_GROUP_ID));
+        assert!(snapshot.models.iter().any(|model| {
+            model.group_id == DEFAULT_MODEL_GROUP_ID && model.platform_model_slug == "gpt-snapshot"
+        }));
+        assert!(snapshot.user_assignments.iter().any(|assignment| {
+            assignment.user_id == "usr_snapshot" && assignment.group_id == DEFAULT_MODEL_GROUP_ID
+        }));
     }
 
     #[test]

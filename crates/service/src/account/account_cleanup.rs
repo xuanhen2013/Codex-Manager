@@ -1,9 +1,11 @@
-use codexmanager_core::storage::{now_ts, Event, UsageSnapshotRecord};
+use codexmanager_core::storage::{
+    now_ts, AccountTokenPlan, Event, UsageSnapshotCleanupRow, UsageSnapshotRecord,
+};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::account_availability::{evaluate_snapshot, Availability};
-use crate::account_plan::{resolve_account_plan, ResolvedAccountPlan};
+use crate::account_plan::ResolvedAccountPlan;
 use crate::storage_helpers::open_storage;
 
 #[derive(Debug, Serialize)]
@@ -61,16 +63,29 @@ const CLEANUP_STATUS_ALLOWLIST: &[&str] = &[
 /// 返回函数执行结果
 pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFreeResult, String> {
     let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let accounts = storage.list_accounts().map_err(|err| err.to_string())?;
-    let usage_by_account: HashMap<String, UsageSnapshotRecord> = storage
-        .latest_usage_snapshots_by_account()
+    let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
+    let accounts = storage
+        .list_account_cleanup_candidates_by_statuses(&cleanup_status_allowlist_vec())
+        .map_err(|err| err.to_string())?;
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let usage_by_account: HashMap<String, UsageSnapshotCleanupRow> = storage
+        .latest_usage_cleanup_rows_for_accounts(&account_ids)
         .map_err(|err| err.to_string())?
         .into_iter()
         .map(|snapshot| (snapshot.account_id.clone(), snapshot))
         .collect();
+    let token_plans_by_account: HashMap<String, AccountTokenPlan> = storage
+        .list_account_token_plans_for_accounts(&account_ids)
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .map(|token| (token.account_id.clone(), token))
+        .collect();
 
     let mut result = DeleteUnavailableFreeResult {
-        scanned: 0,
+        scanned,
         deleted: 0,
         skipped_available: 0,
         skipped_disabled: 0,
@@ -80,9 +95,8 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
         deleted_account_ids: Vec::new(),
     };
 
+    let mut pending_deletes: Vec<(String, String)> = Vec::new();
     for account in accounts {
-        result.scanned += 1;
-
         let normalized_status = account.status.trim().to_ascii_lowercase();
         if normalized_status == "disabled" {
             result.skipped_disabled += 1;
@@ -90,8 +104,9 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
         }
 
         let snapshot = usage_by_account.get(&account.id);
+        let snapshot_record = snapshot.map(cleanup_snapshot_record);
         if normalized_status != "unavailable" && normalized_status != "banned" {
-            let Some(snapshot) = snapshot else {
+            let Some(snapshot) = snapshot_record.as_ref() else {
                 result.skipped_missing_usage += 1;
                 continue;
             };
@@ -101,10 +116,9 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
             }
         }
 
-        let token = storage
-            .find_token_by_account_id(&account.id)
-            .map_err(|err| err.to_string())?;
-        let resolved_plan = resolve_account_plan(token.as_ref(), snapshot);
+        let token = token_plans_by_account.get(&account.id);
+        let resolved_plan =
+            crate::account_plan::resolve_account_plan(token, snapshot_record.as_ref());
         let Some(plan) = resolved_plan.as_ref() else {
             if snapshot.is_none() && token.is_none() {
                 result.skipped_missing_usage += 1;
@@ -124,23 +138,32 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
             continue;
         };
 
-        storage
-            .delete_account(&account.id)
-            .map_err(|err| err.to_string())?;
-
         let event_message = match plan_label_for_event(resolved_plan.as_ref()) {
             Some(plan) => format!("bulk delete unavailable free account: plan={plan}"),
             None => "bulk delete unavailable free account".to_string(),
         };
-        let _ = storage.insert_event(&Event {
-            account_id: Some(account.id.clone()),
-            event_type: "account_bulk_delete_unavailable_free".to_string(),
-            message: event_message,
-            created_at: now_ts(),
-        });
+        pending_deletes.push((account.id, event_message));
+    }
 
-        result.deleted += 1;
-        result.deleted_account_ids.push(account.id);
+    let pending_ids = pending_deletes
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect::<Vec<_>>();
+    if !pending_ids.is_empty() {
+        storage
+            .delete_accounts(&pending_ids)
+            .map_err(|err| err.to_string())?;
+        for (account_id, event_message) in pending_deletes {
+            let _ = storage.insert_event(&Event {
+                account_id: Some(account_id.clone()),
+                event_type: "account_bulk_delete_unavailable_free".to_string(),
+                message: event_message,
+                created_at: now_ts(),
+            });
+
+            result.deleted += 1;
+            result.deleted_account_ids.push(account_id);
+        }
     }
 
     Ok(result)
@@ -159,19 +182,24 @@ pub(crate) fn delete_unavailable_free_accounts() -> Result<DeleteUnavailableFree
 /// 返回函数执行结果
 pub(crate) fn delete_banned_accounts() -> Result<DeleteBannedResult, String> {
     let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let accounts = storage.list_accounts().map_err(|err| err.to_string())?;
+    let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
+    let accounts = storage
+        .list_account_cleanup_candidates_by_statuses(&[
+            "banned".to_string(),
+            "disabled".to_string(),
+        ])
+        .map_err(|err| err.to_string())?;
 
     let mut result = DeleteBannedResult {
-        scanned: 0,
+        scanned,
         deleted: 0,
         skipped_disabled: 0,
         skipped_not_banned: 0,
         deleted_account_ids: Vec::new(),
     };
 
+    let mut pending_ids = Vec::new();
     for account in accounts {
-        result.scanned += 1;
-
         let normalized_status = account.status.trim().to_ascii_lowercase();
         if normalized_status == "disabled" {
             result.skipped_disabled += 1;
@@ -182,19 +210,29 @@ pub(crate) fn delete_banned_accounts() -> Result<DeleteBannedResult, String> {
             continue;
         }
 
-        storage
-            .delete_account(&account.id)
-            .map_err(|err| err.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(account.id.clone()),
-            event_type: "account_bulk_delete_banned".to_string(),
-            message: "bulk delete banned account".to_string(),
-            created_at: now_ts(),
-        });
-
-        result.deleted += 1;
-        result.deleted_account_ids.push(account.id);
+        pending_ids.push(account.id);
     }
+
+    if !pending_ids.is_empty() {
+        storage
+            .delete_accounts(&pending_ids)
+            .map_err(|err| err.to_string())?;
+        for account_id in pending_ids {
+            let _ = storage.insert_event(&Event {
+                account_id: Some(account_id.clone()),
+                event_type: "account_bulk_delete_banned".to_string(),
+                message: "bulk delete banned account".to_string(),
+                created_at: now_ts(),
+            });
+
+            result.deleted += 1;
+            result.deleted_account_ids.push(account_id);
+        }
+    }
+    result.skipped_not_banned = result
+        .scanned
+        .saturating_sub(result.deleted)
+        .saturating_sub(result.skipped_disabled);
 
     Ok(result)
 }
@@ -214,39 +252,50 @@ pub(crate) fn delete_accounts_by_statuses(
     statuses: Vec<String>,
 ) -> Result<DeleteAccountsByStatusesResult, String> {
     let target_statuses = normalize_cleanup_statuses(statuses)?;
-    let target_set: HashSet<String> = target_statuses.iter().cloned().collect();
     let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let accounts = storage.list_accounts().map_err(|err| err.to_string())?;
+    let scanned = storage.account_count().map_err(|err| err.to_string())? as usize;
+    let accounts = storage
+        .list_account_cleanup_candidates_by_statuses(&target_statuses)
+        .map_err(|err| err.to_string())?;
 
     let mut result = DeleteAccountsByStatusesResult {
-        scanned: 0,
+        scanned,
         deleted: 0,
         skipped_status: 0,
         target_statuses,
         deleted_account_ids: Vec::new(),
     };
 
+    let mut pending_deletes: Vec<(String, String)> = Vec::new();
     for account in accounts {
-        result.scanned += 1;
         let normalized_status = account.status.trim().to_ascii_lowercase();
-        if !target_set.contains(&normalized_status) {
-            result.skipped_status += 1;
-            continue;
-        }
-
-        storage
-            .delete_account(&account.id)
-            .map_err(|err| err.to_string())?;
-        let _ = storage.insert_event(&Event {
-            account_id: Some(account.id.clone()),
-            event_type: "account_bulk_delete_by_status".to_string(),
-            message: format!("bulk delete account by status: status={normalized_status}"),
-            created_at: now_ts(),
-        });
-
-        result.deleted += 1;
-        result.deleted_account_ids.push(account.id);
+        pending_deletes.push((
+            account.id,
+            format!("bulk delete account by status: status={normalized_status}"),
+        ));
     }
+
+    let pending_ids = pending_deletes
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect::<Vec<_>>();
+    if !pending_ids.is_empty() {
+        storage
+            .delete_accounts(&pending_ids)
+            .map_err(|err| err.to_string())?;
+        for (account_id, event_message) in pending_deletes {
+            let _ = storage.insert_event(&Event {
+                account_id: Some(account_id.clone()),
+                event_type: "account_bulk_delete_by_status".to_string(),
+                message: event_message,
+                created_at: now_ts(),
+            });
+
+            result.deleted += 1;
+            result.deleted_account_ids.push(account_id);
+        }
+    }
+    result.skipped_status = result.scanned.saturating_sub(result.deleted);
 
     Ok(result)
 }
@@ -290,6 +339,27 @@ fn normalize_cleanup_statuses(statuses: Vec<String>) -> Result<Vec<String>, Stri
         .collect())
 }
 
+fn cleanup_status_allowlist_vec() -> Vec<String> {
+    CLEANUP_STATUS_ALLOWLIST
+        .iter()
+        .map(|status| (*status).to_string())
+        .collect()
+}
+
+fn cleanup_snapshot_record(row: &UsageSnapshotCleanupRow) -> UsageSnapshotRecord {
+    UsageSnapshotRecord {
+        account_id: row.account_id.clone(),
+        used_percent: row.used_percent,
+        window_minutes: row.window_minutes,
+        resets_at: None,
+        secondary_used_percent: row.secondary_used_percent,
+        secondary_window_minutes: row.secondary_window_minutes,
+        secondary_resets_at: None,
+        credits_json: row.credits_json.clone(),
+        captured_at: 0,
+    }
+}
+
 /// 函数 `plan_label_for_event`
 ///
 /// 作者: gaohongshun
@@ -313,8 +383,10 @@ fn plan_label_for_event(plan: Option<&ResolvedAccountPlan>) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_accounts_by_statuses, delete_banned_accounts};
-    use codexmanager_core::storage::{Account, Storage};
+    use super::{
+        delete_accounts_by_statuses, delete_banned_accounts, delete_unavailable_free_accounts,
+    };
+    use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -385,6 +457,91 @@ mod tests {
                 std::env::remove_var(self.key);
             }
         }
+    }
+
+    fn account(id: &str, status: &str, sort: i64) -> Account {
+        Account {
+            id: id.to_string(),
+            label: id.to_string(),
+            issuer: "chatgpt".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort,
+            status: status.to_string(),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn token(account_id: &str) -> Token {
+        Token {
+            account_id: account_id.to_string(),
+            id_token: "id".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            api_key_access_token: None,
+            last_refresh: 1,
+        }
+    }
+
+    fn free_usage(account_id: &str) -> UsageSnapshotRecord {
+        UsageSnapshotRecord {
+            account_id: account_id.to_string(),
+            used_percent: Some(95.0),
+            window_minutes: Some(300),
+            resets_at: None,
+            secondary_used_percent: None,
+            secondary_window_minutes: None,
+            secondary_resets_at: None,
+            credits_json: Some(r#"{"planType":"free"}"#.to_string()),
+            captured_at: 1,
+        }
+    }
+
+    #[test]
+    fn delete_unavailable_free_accounts_scans_total_but_loads_cleanup_status_candidates() {
+        let _lock = test_env_guard();
+        let dir = new_test_dir("cleanup-unavailable-free-accounts");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open db");
+        storage.init().expect("init db");
+        for account in [
+            account("acc-active", "active", 1),
+            account("acc-unavailable-free", "unavailable", 2),
+            account("acc-disabled-free", "disabled", 3),
+        ] {
+            storage.insert_account(&account).expect("insert account");
+            storage
+                .insert_token(&token(&account.id))
+                .expect("insert token");
+            storage
+                .insert_usage_snapshot(&free_usage(&account.id))
+                .expect("insert usage");
+        }
+
+        let result = delete_unavailable_free_accounts().expect("cleanup result");
+
+        assert_eq!(result.scanned, 3);
+        assert_eq!(result.deleted, 1);
+        assert_eq!(result.skipped_disabled, 1);
+        assert_eq!(
+            result.deleted_account_ids,
+            vec!["acc-unavailable-free".to_string()]
+        );
+        let remaining = Storage::open(&db_path)
+            .expect("reopen db")
+            .list_accounts()
+            .expect("list accounts")
+            .into_iter()
+            .map(|account| account.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining,
+            vec!["acc-active".to_string(), "acc-disabled-free".to_string()]
+        );
     }
 
     /// 函数 `delete_banned_accounts_removes_only_banned_accounts`

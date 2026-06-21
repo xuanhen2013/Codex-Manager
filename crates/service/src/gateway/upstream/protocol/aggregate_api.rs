@@ -2,7 +2,7 @@ use bytes::Bytes;
 use codexmanager_core::storage::{AggregateApi, Storage};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tiny_http::Request;
 
@@ -410,6 +410,21 @@ fn normalize_candidate_order(mut candidates: Vec<AggregateApi>) -> Vec<Aggregate
     candidates
 }
 
+fn promote_preferred_aggregate_candidate(candidates: &mut Vec<AggregateApi>, preferred_id: &str) {
+    let preferred_id = preferred_id.trim();
+    if preferred_id.is_empty() {
+        return;
+    }
+    let Some(index) = candidates.iter().position(|api| api.id == preferred_id) else {
+        return;
+    };
+    if index == 0 {
+        return;
+    }
+    let preferred = candidates.remove(index);
+    candidates.insert(0, preferred);
+}
+
 /// 函数 `apply_gateway_route_strategy_to_aggregate_candidates`
 ///
 /// 作者: gaohongshun
@@ -735,13 +750,9 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
     };
 
     let mut candidates = storage
-        .list_aggregate_apis()
+        .list_active_aggregate_apis_by_provider_type(provider_type)
         .map_err(|err| err.to_string())?
         .into_iter()
-        .filter(|api| {
-            api.status == "active"
-                && normalize_provider_type_value(api.provider_type.as_str()) == provider_type
-        })
         .collect::<Vec<_>>();
     candidates = normalize_candidate_order(candidates);
 
@@ -749,13 +760,7 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        if let Some(preferred) = storage
-            .find_aggregate_api_by_id(api_id)
-            .map_err(|err| err.to_string())?
-        {
-            candidates.retain(|api| api.id != preferred.id);
-            candidates.insert(0, preferred);
-        }
+        promote_preferred_aggregate_candidate(&mut candidates, api_id);
     }
 
     if candidates.is_empty() {
@@ -865,6 +870,8 @@ pub(in super::super) fn proxy_aggregate_request(
     let mut last_failure_status = 502u16;
 
     let total_candidates = aggregate_api_candidates.len();
+    let secrets_by_candidate_id =
+        aggregate_api_secrets_by_candidate_id(storage, &aggregate_api_candidates)?;
     for (candidate_idx, candidate) in aggregate_api_candidates.into_iter().enumerate() {
         attempted_aggregate_api_ids.push(candidate.id.clone());
         let candidate_id = candidate.id.clone();
@@ -874,10 +881,7 @@ pub(in super::super) fn proxy_aggregate_request(
         let candidate_url = candidate.url.clone();
         last_attempt_id = Some(candidate_id.clone());
         last_attempt_upstream_model = candidate_upstream_model.clone();
-        let Some(secret) = storage
-            .find_aggregate_api_secret_by_id(candidate.id.as_str())
-            .map_err(|err| err.to_string())?
-        else {
+        let Some(secret) = secrets_by_candidate_id.get(candidate.id.as_str()) else {
             last_attempt_url = Some(candidate_url.clone());
             last_attempt_supplier_name = candidate_supplier_name.clone();
             last_attempt_error = Some("aggregate api secret not found".to_string());
@@ -1291,6 +1295,19 @@ pub(in super::super) fn proxy_aggregate_request(
     );
     respond_error(request, status_code, message.as_str(), Some(trace_id));
     Ok(())
+}
+
+fn aggregate_api_secrets_by_candidate_id(
+    storage: &Storage,
+    candidates: &[AggregateApi],
+) -> Result<HashMap<String, String>, String> {
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.id.clone())
+        .collect::<Vec<_>>();
+    storage
+        .list_aggregate_api_secrets_for_ids(&candidate_ids)
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -1725,6 +1742,65 @@ mod tests {
             .map(|item| item.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(candidate_ids, vec!["agg-gemini"]);
+    }
+
+    #[test]
+    fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        for (id, provider_type, sort) in [
+            ("agg-first", AGGREGATE_API_PROVIDER_CODEX, 0),
+            ("agg-preferred", AGGREGATE_API_PROVIDER_CODEX, 10),
+            ("agg-claude", AGGREGATE_API_PROVIDER_CLAUDE, -1),
+        ] {
+            storage
+                .insert_aggregate_api(&AggregateApi {
+                    id: id.to_string(),
+                    provider_type: provider_type.to_string(),
+                    supplier_name: Some(id.to_string()),
+                    sort,
+                    url: format!("https://{id}.example.com"),
+                    auth_type: AGGREGATE_API_AUTH_APIKEY.to_string(),
+                    auth_params_json: None,
+                    action: None,
+                    model_override: None,
+                    status: "active".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                    last_test_at: None,
+                    last_test_status: None,
+                    last_test_error: None,
+                    balance_query_enabled: false,
+                    balance_query_template: None,
+                    balance_query_base_url: None,
+                    balance_query_user_id: None,
+                    balance_query_config_json: None,
+                    last_balance_at: None,
+                    last_balance_status: None,
+                    last_balance_error: None,
+                    last_balance_json: None,
+                })
+                .expect("insert aggregate api");
+        }
+
+        let candidates =
+            resolve_aggregate_api_rotation_candidates(&storage, "openai", Some("agg-preferred"))
+                .expect("resolve codex candidates");
+        let candidate_ids = candidates
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(candidate_ids, vec!["agg-preferred", "agg-first"]);
+
+        let candidates =
+            resolve_aggregate_api_rotation_candidates(&storage, "openai", Some("agg-claude"))
+                .expect("resolve codex candidates with mismatched preferred");
+        let candidate_ids = candidates
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(candidate_ids, vec!["agg-first", "agg-preferred"]);
     }
 
     /// 函数 `final_error_promotes_success_status_to_bad_gateway`

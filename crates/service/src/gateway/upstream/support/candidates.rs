@@ -1,5 +1,5 @@
 use codexmanager_core::storage::{Account, Storage, Token};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in super::super) enum CandidateSkipReason {
@@ -8,18 +8,16 @@ pub(in super::super) enum CandidateSkipReason {
 }
 
 fn account_source_ids_for_model(storage: &Storage, model: &str) -> Result<HashSet<String>, String> {
-    let all_mappings = storage
-        .list_enabled_model_source_mappings_for_platform(model)
-        .map_err(|err| format!("list model source mappings failed: {err}"))?;
-    let has_aggregate_mapping = all_mappings
-        .iter()
-        .any(|mapping| mapping.source_kind == "aggregate_api");
-    let mut account_source_ids: HashSet<String> = all_mappings
+    let mut account_source_ids: HashSet<String> = storage
+        .list_enabled_model_source_mapping_source_ids_for_platform_and_kind(model, "openai_account")
+        .map_err(|err| format!("list model source mapping source ids failed: {err}"))?
         .into_iter()
-        .filter(|mapping| mapping.source_kind == "openai_account")
-        .map(|mapping| mapping.source_id)
         .collect();
-    if account_source_ids.is_empty() && !has_aggregate_mapping {
+    if account_source_ids.is_empty()
+        && !storage
+            .has_enabled_model_source_mapping_for_platform_and_kind(model, "aggregate_api")
+            .map_err(|err| format!("check aggregate model source mappings failed: {err}"))?
+    {
         account_source_ids.extend(
             storage
                 .list_available_source_model_ids_by_upstream_model("openai_account", model)
@@ -46,48 +44,52 @@ pub(crate) fn prepare_gateway_candidates(
     account_plan_filter: Option<&str>,
     low_quota_mode: super::super::super::LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
+    let normalized_model = request_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let account_source_ids = if let Some(model) = normalized_model {
+        let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
+        let source_ids = account_source_ids_for_model(storage, model)?;
+        Some(source_ids.into_iter().collect::<Vec<_>>())
+    } else {
+        None
+    };
     // 中文注释：保持账号原始顺序（按账户排序字段）作为候选顺序，失败时再依次切下一个。
-    let mut candidates = super::super::super::collect_gateway_candidates_with_low_quota_mode(
-        storage,
-        low_quota_mode,
-    )?;
+    let mut candidates = if let Some(account_source_ids) = account_source_ids.as_deref() {
+        super::super::super::collect_gateway_candidates_for_accounts_with_low_quota_mode(
+            storage,
+            account_source_ids,
+            low_quota_mode,
+        )?
+    } else {
+        super::super::super::collect_gateway_candidates_with_low_quota_mode(
+            storage,
+            low_quota_mode,
+        )?
+    };
     let normalized_filter = account_plan_filter
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("all"));
     if let Some(plan_filter) = normalized_filter {
+        let account_ids = candidates
+            .iter()
+            .map(|(account, _)| account.id.clone())
+            .collect::<Vec<_>>();
+        let snapshots = storage
+            .latest_usage_snapshots_for_accounts(&account_ids)
+            .map_err(|err| format!("list account usage snapshots failed: {err}"))?
+            .into_iter()
+            .map(|snapshot| (snapshot.account_id.clone(), snapshot))
+            .collect::<HashMap<_, _>>();
         candidates.retain(|(account, token)| {
-            crate::account_plan::account_matches_plan_filter(
-                storage,
-                account.id.as_str(),
+            crate::account_plan::account_matches_plan_filter_with_snapshot(
                 token,
+                snapshots.get(account.id.as_str()),
                 Some(plan_filter),
             )
         });
     }
-    let normalized_model = request_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(model) = normalized_model {
-        let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
-        let account_source_ids = account_source_ids_for_model(storage, model)?;
-        candidates.retain(|(account, _)| account_source_ids.contains(&account.id));
-    }
     Ok(candidates)
-}
-
-pub(in super::super) fn account_model_override(
-    storage: &Storage,
-    platform_model: Option<&str>,
-    account: &Account,
-) -> Option<String> {
-    let model = platform_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    storage
-        .find_enabled_model_source_mapping(model, "openai_account", account.id.as_str())
-        .ok()
-        .flatten()
-        .map(|mapping| mapping.upstream_model)
 }
 
 /// 函数 `free_account_model_override`
@@ -139,7 +141,9 @@ pub(in super::super) fn allow_openai_fallback_for_account(
         .latest_usage_snapshot_for_account(account.id.as_str())
         .ok()
         .flatten();
-    let Some(plan) = crate::account_plan::resolve_account_plan(Some(token), snapshot.as_ref())
+    let token_plan = crate::account_plan::token_plan_from_token(token);
+    let Some(plan) =
+        crate::account_plan::resolve_account_plan(Some(&token_plan), snapshot.as_ref())
     else {
         return false;
     };
@@ -194,8 +198,36 @@ mod tests {
         free_account_model_override, CandidateSkipReason,
     };
     use codexmanager_core::storage::{
-        now_ts, Account, ModelSourceModel, Storage, Token, UsageSnapshotRecord,
+        now_ts, Account, ModelSourceMapping, ModelSourceModel, Storage, Token, UsageSnapshotRecord,
     };
+
+    fn insert_active_account_with_token(storage: &Storage, account_id: &str, sort: i64) {
+        let now = now_ts();
+        storage
+            .insert_account(&Account {
+                id: account_id.to_string(),
+                label: account_id.to_string(),
+                issuer: "issuer".to_string(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: account_id.to_string(),
+                id_token: "header.payload.sig".to_string(),
+                access_token: "header.payload.sig".to_string(),
+                refresh_token: "refresh".to_string(),
+                api_key_access_token: None,
+                last_refresh: now,
+            })
+            .expect("insert token");
+    }
 
     /// 函数 `free_account_model_override_uses_configured_model_for_free_account`
     ///
@@ -328,6 +360,154 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].0.id, "acc-direct-upstream");
+    }
+
+    #[test]
+    fn prepare_gateway_candidates_skips_source_model_fallback_when_aggregate_mapping_exists() {
+        let _guard = crate::test_env_guard();
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        insert_active_account_with_token(&storage, "acc-aggregate-owned", 0);
+        storage
+            .upsert_model_source_model(&ModelSourceModel {
+                source_kind: "openai_account".to_string(),
+                source_id: "acc-aggregate-owned".to_string(),
+                upstream_model: "gpt-aggregate-owned".to_string(),
+                display_name: Some("gpt-aggregate-owned".to_string()),
+                status: "available".to_string(),
+                discovery_kind: "manual".to_string(),
+                last_synced_at: Some(now),
+                extra_json: "{}".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("upsert account source model");
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "map-aggregate-owned".to_string(),
+                platform_model_slug: "gpt-aggregate-owned".to_string(),
+                source_kind: "aggregate_api".to_string(),
+                source_id: "agg-owned".to_string(),
+                upstream_model: "gpt-aggregate-owned".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("upsert aggregate mapping");
+
+        let candidates = super::prepare_gateway_candidates(
+            &storage,
+            Some("gpt-aggregate-owned"),
+            None,
+            crate::gateway::LowQuotaCandidateMode::NormalOnly,
+        )
+        .expect("prepare candidates");
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn prepare_gateway_candidates_keeps_explicit_account_mapping_with_aggregate_mapping() {
+        let _guard = crate::test_env_guard();
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        insert_active_account_with_token(&storage, "acc-explicit-route", 0);
+        insert_active_account_with_token(&storage, "acc-other-route", 1);
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "map-explicit-account".to_string(),
+                platform_model_slug: "gpt-hybrid-route".to_string(),
+                source_kind: "openai_account".to_string(),
+                source_id: "acc-explicit-route".to_string(),
+                upstream_model: "gpt-hybrid-route".to_string(),
+                enabled: true,
+                priority: 2,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("upsert account mapping");
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "map-hybrid-aggregate".to_string(),
+                platform_model_slug: "gpt-hybrid-route".to_string(),
+                source_kind: "aggregate_api".to_string(),
+                source_id: "agg-hybrid".to_string(),
+                upstream_model: "gpt-hybrid-route".to_string(),
+                enabled: true,
+                priority: 1,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("upsert aggregate mapping");
+
+        let candidates = super::prepare_gateway_candidates(
+            &storage,
+            Some("gpt-hybrid-route"),
+            None,
+            crate::gateway::LowQuotaCandidateMode::NormalOnly,
+        )
+        .expect("prepare candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0.id, "acc-explicit-route");
+    }
+
+    #[test]
+    fn prepare_gateway_candidates_with_account_mapping_bypasses_global_candidate_cache() {
+        let _guard = crate::test_env_guard();
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        insert_active_account_with_token(&storage, "acc-cached-other", 0);
+        insert_active_account_with_token(&storage, "acc-mapped-only", 1);
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "map-scoped-account".to_string(),
+                platform_model_slug: "gpt-scoped-route".to_string(),
+                source_kind: "openai_account".to_string(),
+                source_id: "acc-mapped-only".to_string(),
+                upstream_model: "gpt-scoped-route".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("upsert account mapping");
+
+        let all_candidates =
+            super::super::super::super::collect_gateway_candidates_with_low_quota_mode(
+                &storage,
+                crate::gateway::LowQuotaCandidateMode::NormalOnly,
+            )
+            .expect("warm global cache");
+        assert_eq!(all_candidates.len(), 2);
+
+        let candidates = super::prepare_gateway_candidates(
+            &storage,
+            Some("gpt-scoped-route"),
+            None,
+            crate::gateway::LowQuotaCandidateMode::NormalOnly,
+        )
+        .expect("prepare scoped candidates");
+
+        assert_eq!(
+            candidates
+                .into_iter()
+                .map(|(account, _token)| account.id)
+                .collect::<Vec<_>>(),
+            vec!["acc-mapped-only".to_string()]
+        );
     }
 
     /// 函数 `free_account_model_override_accepts_single_window_weekly_account`

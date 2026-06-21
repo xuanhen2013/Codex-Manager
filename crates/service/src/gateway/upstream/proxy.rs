@@ -154,10 +154,8 @@ fn model_route_error(
     };
     bootstrap_model_routes_for_plan(storage, execution_plan);
     let model_exists = storage
-        .list_model_catalog_models("default")
-        .map_err(|err| (500, format!("model_catalog_read_failed: {err}")))?
-        .into_iter()
-        .any(|item| item.slug == model);
+        .model_catalog_model_exists("default", model)
+        .map_err(|err| (500, format!("model_catalog_read_failed: {err}")))?;
     if !model_exists {
         return Err((404, format!("model_not_found: {model}")));
     }
@@ -167,12 +165,10 @@ fn model_route_error(
         }
         return Err((500, err));
     }
-    let mappings = storage
-        .list_enabled_model_source_mappings_for_platform(model)
+    let route_source_kinds = source_kinds_for_route(execution_plan);
+    let has_route_mapping = storage
+        .has_enabled_model_source_mapping_for_platform_matching_kinds(model, &route_source_kinds)
         .map_err(|err| (500, format!("model_mapping_read_failed: {err}")))?;
-    let has_route_mapping = mappings
-        .into_iter()
-        .any(|mapping| source_mapping_matches_route(mapping.source_kind.as_str(), execution_plan));
     let has_upstream_source_match = if has_route_mapping {
         true
     } else {
@@ -190,22 +186,10 @@ fn direct_upstream_model_matches_route(
     model: &str,
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
 ) -> Result<bool, String> {
-    let matches_source_kind = |source_kind: &str| match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => source_kind == "openai_account",
-        GatewayUpstreamRouteKind::AggregateApi => source_kind == "aggregate_api",
-        GatewayUpstreamRouteKind::HybridAccountFirst => {
-            source_kind == "openai_account" || source_kind == "aggregate_api"
-        }
-    };
-    for source_kind in ["openai_account", "aggregate_api"] {
-        if !matches_source_kind(source_kind) {
-            continue;
-        }
+    for source_kind in source_kinds_for_route(execution_plan) {
         let has_conflicting_mapping = storage
-            .list_enabled_model_source_mappings_for_platform(model)
-            .map_err(|err| err.to_string())?
-            .into_iter()
-            .any(|m| m.source_kind != source_kind);
+            .has_enabled_model_source_mapping_for_platform_outside_kinds(model, &[source_kind])
+            .map_err(|err| err.to_string())?;
         if has_conflicting_mapping {
             continue;
         }
@@ -237,16 +221,13 @@ fn bootstrap_model_routes_for_plan(
     }
 }
 
-fn source_mapping_matches_route(
-    source_kind: &str,
+fn source_kinds_for_route(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
-) -> bool {
+) -> Vec<&'static str> {
     match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => source_kind == "openai_account",
-        GatewayUpstreamRouteKind::AggregateApi => source_kind == "aggregate_api",
-        GatewayUpstreamRouteKind::HybridAccountFirst => {
-            source_kind == "openai_account" || source_kind == "aggregate_api"
-        }
+        GatewayUpstreamRouteKind::AccountRotation => vec!["openai_account"],
+        GatewayUpstreamRouteKind::AggregateApi => vec!["aggregate_api"],
+        GatewayUpstreamRouteKind::HybridAccountFirst => vec!["openai_account", "aggregate_api"],
     }
 }
 
@@ -328,7 +309,7 @@ fn respond_model_route_error(
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_aggregate_candidates_for_route(
-    storage: &crate::storage_helpers::StorageHandle,
+    storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
     aggregate_api_id: Option<&str>,
     model_for_log: Option<&str>,
@@ -344,14 +325,18 @@ fn resolve_aggregate_candidates_for_route(
     else {
         return Ok(candidates);
     };
+    let candidate_ids = candidates
+        .iter()
+        .map(|api| api.id.clone())
+        .collect::<Vec<_>>();
+    let mappings = storage
+        .list_enabled_model_source_mappings_for_sources(model, "aggregate_api", &candidate_ids)
+        .map_err(|err| format!("list aggregate model source mappings failed: {err}"))?;
     candidates = candidates
         .into_iter()
         .filter_map(|mut api| {
-            let mapping = storage
-                .find_enabled_model_source_mapping(model, "aggregate_api", api.id.as_str())
-                .ok()
-                .flatten()?;
-            api.model_override = Some(mapping.upstream_model);
+            let mapping = mappings.get(api.id.as_str())?;
+            api.model_override = Some(mapping.upstream_model.clone());
             Some(api)
         })
         .collect();
@@ -1049,8 +1034,8 @@ pub(in super::super) fn proxy_validated_request(
 mod tests {
     use super::{
         exhausted_gateway_error_for_log, hybrid_route_error_message, model_route_error,
-        provider_upstream_hint, request_deadline_for_path, resolve_upstream_is_stream,
-        respond_when_account_candidates_empty,
+        provider_upstream_hint, request_deadline_for_path, resolve_aggregate_candidates_for_route,
+        resolve_upstream_is_stream, respond_when_account_candidates_empty,
         should_fallback_to_aggregate_after_account_exhaustion,
         should_try_provider_executor_aggregate_route,
     };
@@ -1344,6 +1329,47 @@ mod tests {
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].source_kind, "aggregate_api");
         assert_eq!(mappings[0].source_id, "agg-route");
+    }
+
+    #[test]
+    fn aggregate_route_model_filter_uses_batched_source_mappings() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        insert_test_aggregate_api(&storage, "agg-with-model");
+        insert_test_aggregate_api(&storage, "agg-without-model");
+        let now = now_ts();
+        for (id, source_id, upstream_model, priority) in [
+            ("map-low", "agg-with-model", "vendor-low", 0),
+            ("map-top", "agg-with-model", "vendor-top", 5),
+        ] {
+            storage
+                .upsert_model_source_mapping(&ModelSourceMapping {
+                    id: id.to_string(),
+                    platform_model_slug: "vendor-batched".to_string(),
+                    source_kind: "aggregate_api".to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: upstream_model.to_string(),
+                    enabled: true,
+                    priority,
+                    weight: 1,
+                    billing_model_slug: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed aggregate mapping");
+        }
+
+        let candidates = resolve_aggregate_candidates_for_route(
+            &storage,
+            "openai_responses",
+            None,
+            Some("vendor-batched"),
+        )
+        .expect("resolve aggregate candidates");
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].id, "agg-with-model");
+        assert_eq!(candidates[0].model_override.as_deref(), Some("vendor-top"));
     }
 
     #[test]

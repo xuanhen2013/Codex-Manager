@@ -1,9 +1,8 @@
 use codexmanager_core::rpc::types::{
     InstalledPluginSummary, JsonRpcRequest, PluginRunLogSummary, PluginTaskSummary,
 };
-use codexmanager_core::storage::{now_ts, PluginInstall, Storage};
+use codexmanager_core::storage::{now_ts, PluginInstallListSummary, Storage};
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::storage_helpers::open_storage;
 
@@ -59,12 +58,9 @@ pub(crate) fn rearm_enabled_interval_tasks_for_plugin(
     now: i64,
 ) -> Result<(), String> {
     let tasks = storage
-        .list_plugin_tasks(plugin_id)
+        .list_plugin_tasks_needing_schedule_repair(plugin_id)
         .map_err(|err| err.to_string())?;
     for task in tasks {
-        if !task.enabled || task.schedule_kind == "manual" || task.next_run_at.is_some() {
-            continue;
-        }
         let Some(interval_seconds) = task.interval_seconds.filter(|value| *value > 0) else {
             continue;
         };
@@ -332,31 +328,23 @@ pub(crate) fn handle_log_list(
 pub(crate) fn list_installed_plugins() -> Result<Vec<InstalledPluginSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let installs = storage
-        .list_plugin_installs()
+        .list_plugin_install_summaries()
         .map_err(|err| err.to_string())?;
-    let tasks = storage
-        .list_plugin_tasks(None)
+    let task_count_by_plugin = storage
+        .plugin_task_counts_by_plugin()
         .map_err(|err| err.to_string())?;
-    let mut task_count_by_plugin: HashMap<String, (i64, i64)> = HashMap::new();
-    for task in tasks {
-        let entry = task_count_by_plugin.entry(task.plugin_id).or_insert((0, 0));
-        entry.0 += 1;
-        if task.enabled {
-            entry.1 += 1;
-        }
-    }
 
     installs
         .into_iter()
         .map(|install| {
-            let (task_count, enabled_task_count) = task_count_by_plugin
+            let task_counts = task_count_by_plugin
                 .get(&install.plugin_id)
-                .copied()
-                .unwrap_or((0, 0));
+                .cloned()
+                .unwrap_or_default();
             Ok(to_installed_plugin_summary(
                 &install,
-                task_count,
-                enabled_task_count,
+                task_counts.task_count,
+                task_counts.enabled_task_count,
             ))
         })
         .collect()
@@ -375,25 +363,16 @@ pub(crate) fn list_installed_plugins() -> Result<Vec<InstalledPluginSummary>, St
 /// 返回函数执行结果
 pub(crate) fn list_plugin_tasks(plugin_id: Option<&str>) -> Result<Vec<PluginTaskSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let installs = storage
-        .list_plugin_installs()
+    let tasks = storage
+        .list_plugin_task_summaries(plugin_id)
         .map_err(|err| err.to_string())?;
-    let install_name_map: HashMap<String, String> = installs
-        .into_iter()
-        .map(|install| (install.plugin_id, install.name))
-        .collect();
-    storage
-        .list_plugin_tasks(plugin_id)
-        .map_err(|err| err.to_string())?
+    tasks
         .into_iter()
         .map(|task| {
             Ok(PluginTaskSummary {
                 id: task.id,
                 plugin_id: task.plugin_id.clone(),
-                plugin_name: install_name_map
-                    .get(&task.plugin_id)
-                    .cloned()
-                    .unwrap_or_else(|| task.plugin_id.clone()),
+                plugin_name: task.plugin_name,
                 name: task.name,
                 description: task.description,
                 entrypoint: task.entrypoint,
@@ -426,34 +405,18 @@ pub(crate) fn list_plugin_run_logs(
     limit: i64,
 ) -> Result<Vec<PluginRunLogSummary>, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let installs = storage
-        .list_plugin_installs()
+    let logs = storage
+        .list_plugin_run_log_summaries(plugin_id, task_id, limit)
         .map_err(|err| err.to_string())?;
-    let tasks = storage
-        .list_plugin_tasks(None)
-        .map_err(|err| err.to_string())?;
-    let install_name_map: HashMap<String, String> = installs
-        .into_iter()
-        .map(|install| (install.plugin_id, install.name))
-        .collect();
-    let task_name_map: HashMap<String, String> =
-        tasks.into_iter().map(|task| (task.id, task.name)).collect();
 
-    storage
-        .list_plugin_run_logs(plugin_id, task_id, limit)
-        .map_err(|err| err.to_string())?
-        .into_iter()
+    logs.into_iter()
         .map(|log| {
             Ok(PluginRunLogSummary {
-                id: log.id.unwrap_or_default(),
+                id: log.id,
                 plugin_id: log.plugin_id.clone(),
-                plugin_name: install_name_map.get(&log.plugin_id).cloned(),
+                plugin_name: log.plugin_name,
                 task_id: log.task_id.clone(),
-                task_name: log
-                    .task_id
-                    .as_ref()
-                    .and_then(|task_id| task_name_map.get(task_id))
-                    .cloned(),
+                task_name: log.task_name,
                 run_type: log.run_type,
                 status: log.status,
                 started_at: log.started_at,
@@ -483,29 +446,34 @@ pub(crate) fn list_plugin_run_logs(
 /// # 返回
 /// 返回函数执行结果
 fn to_installed_plugin_summary(
-    plugin: &PluginInstall,
+    plugin: &PluginInstallListSummary,
     task_count: i64,
     enabled_task_count: i64,
 ) -> InstalledPluginSummary {
-    let manifest_entry = serde_json::from_str::<serde_json::Value>(&plugin.manifest_json)
-        .ok()
-        .and_then(|value| {
-            super::catalog::parse_catalog_entry_value(&value, plugin.source_url.as_deref()).ok()
-        });
-    let manifest_version = manifest_entry
-        .as_ref()
-        .map(|entry| entry.manifest_version.clone())
+    let manifest_version = plugin
+        .manifest_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
         .unwrap_or_else(|| "1".to_string());
-    let category = manifest_entry
-        .as_ref()
-        .and_then(|entry| entry.category.clone());
-    let runtime_kind = manifest_entry
-        .as_ref()
-        .map(|entry| entry.runtime_kind.clone())
+    let category = plugin
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let runtime_kind = plugin
+        .runtime_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
         .unwrap_or_else(|| "rhai".to_string());
-    let tags = manifest_entry
-        .as_ref()
-        .map(|entry| entry.tags.clone())
+    let tags = plugin
+        .tags_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
         .unwrap_or_default();
     InstalledPluginSummary {
         plugin_id: plugin.plugin_id.clone(),
@@ -534,7 +502,8 @@ fn to_installed_plugin_summary(
 #[cfg(test)]
 mod tests {
     use super::{rearm_enabled_interval_tasks_for_plugin, Storage};
-    use codexmanager_core::storage::{PluginInstall, PluginTask};
+    use crate::plugin::runtime;
+    use codexmanager_core::storage::{PluginInstall, PluginTask, PluginTaskExecutionRow};
 
     /// 函数 `rearm_enabled_interval_tasks_updates_enabled_interval_tasks`
     ///
@@ -640,5 +609,93 @@ mod tests {
             .expect("read manual task")
             .expect("manual task exists");
         assert_eq!(updated_manual.next_run_at, None);
+    }
+
+    #[test]
+    fn run_loaded_plugin_task_executes_without_refetching_task() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+
+        let install = PluginInstall {
+            plugin_id: "loaded-task-plugin".to_string(),
+            source_url: Some("builtin://codexmanager".to_string()),
+            name: "Loaded Task Plugin".to_string(),
+            version: "1.0.0".to_string(),
+            description: Some("test".to_string()),
+            author: Some("CodexManager".to_string()),
+            homepage_url: None,
+            script_url: None,
+            script_body: "fn run(context) { #{ taskId: context.task.id, ok: true } }".to_string(),
+            permissions_json: serde_json::json!([]).to_string(),
+            manifest_json: serde_json::json!({ "id": "loaded-task-plugin" }).to_string(),
+            status: "enabled".to_string(),
+            installed_at: 1,
+            updated_at: 1,
+            last_run_at: None,
+            last_error: None,
+        };
+        let task = PluginTask {
+            id: "loaded-task-plugin::run".to_string(),
+            plugin_id: install.plugin_id.clone(),
+            name: "自动运行".to_string(),
+            description: Some("interval".to_string()),
+            entrypoint: "run".to_string(),
+            schedule_kind: "interval".to_string(),
+            interval_seconds: Some(60),
+            enabled: true,
+            next_run_at: Some(1),
+            last_run_at: None,
+            last_status: None,
+            last_error: None,
+            task_json: serde_json::json!({
+                "id": "run",
+                "name": "自动运行",
+                "entrypoint": "run",
+                "scheduleKind": "interval",
+                "intervalSeconds": 60,
+                "enabled": true
+            })
+            .to_string(),
+            created_at: 1,
+            updated_at: 1,
+        };
+        storage
+            .replace_plugin_install(&install, &[task.clone()])
+            .expect("seed plugin");
+
+        let loaded_task = PluginTaskExecutionRow {
+            id: task.id,
+            plugin_id: task.plugin_id,
+            name: task.name,
+            description: task.description,
+            entrypoint: task.entrypoint,
+            schedule_kind: task.schedule_kind,
+            interval_seconds: task.interval_seconds,
+            enabled: task.enabled,
+        };
+        let output =
+            runtime::run_loaded_plugin_task(&storage, loaded_task, None).expect("run loaded task");
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["taskId"], "loaded-task-plugin::run");
+
+        let updated_task = storage
+            .find_plugin_task("loaded-task-plugin::run")
+            .expect("read updated task")
+            .expect("task exists");
+        assert_eq!(updated_task.last_status.as_deref(), Some("ok"));
+        assert!(updated_task.last_run_at.is_some());
+        assert!(updated_task.next_run_at.is_some());
+
+        let logs = storage
+            .list_plugin_run_logs(
+                Some("loaded-task-plugin"),
+                Some("loaded-task-plugin::run"),
+                10,
+            )
+            .expect("read run logs");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].status, "ok");
+        assert_eq!(logs[0].run_type, "scheduled");
     }
 }

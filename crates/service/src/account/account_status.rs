@@ -56,18 +56,12 @@ fn latest_status_reason(storage: &Storage, account_id: &str) -> Option<String> {
 /// # 返回
 /// 无
 pub(crate) fn set_account_status(storage: &Storage, account_id: &str, status: &str, reason: &str) {
-    let changed = matches!(
-        storage.update_account_status_if_changed(account_id, status),
-        Ok(true)
-    );
+    let (account_exists, changed) = storage
+        .update_account_status_if_changed_with_existence(account_id, status)
+        .unwrap_or((false, false));
     if changed {
         crate::gateway::invalidate_candidate_cache();
     }
-    let account_exists = storage
-        .find_account_by_id(account_id)
-        .ok()
-        .flatten()
-        .is_some();
     if account_exists
         && (changed || latest_status_reason(storage, account_id).as_deref() != Some(reason))
     {
@@ -94,12 +88,12 @@ pub(crate) fn set_account_status(storage: &Storage, account_id: &str, status: &s
 /// 返回函数执行结果
 fn should_preserve_manual_account_status(storage: &Storage, account_id: &str) -> bool {
     storage
-        .find_account_by_id(account_id)
+        .find_account_status_by_id(account_id)
         .ok()
         .flatten()
-        .map(|account| {
-            account.status.trim().eq_ignore_ascii_case("disabled")
-                || account.status.trim().eq_ignore_ascii_case("inactive")
+        .map(|status| {
+            status.trim().eq_ignore_ascii_case("disabled")
+                || status.trim().eq_ignore_ascii_case("inactive")
         })
         .unwrap_or(false)
 }
@@ -237,21 +231,10 @@ pub(crate) fn analyze_gateway_error(err: &str, has_more_candidates: bool) -> Gat
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn is_banned_status_reason(reason: &str) -> bool {
-    matches!(
-        reason.trim().to_ascii_lowercase().as_str(),
-        "account_deactivated" | "workspace_deactivated" | "deactivated_workspace"
-    )
-}
-
 pub(crate) fn is_refresh_blocked_status_reason(reason: &str) -> bool {
     reason
         .trim()
         .eq_ignore_ascii_case(REFRESH_TOKEN_REGION_BLOCKED_REASON)
-}
-
-pub(crate) fn is_account_refresh_blocked_status_reason(reason: &str) -> bool {
-    is_banned_status_reason(reason) || is_refresh_blocked_status_reason(reason)
 }
 
 /// 函数 `should_failover_for_deactivation_error`

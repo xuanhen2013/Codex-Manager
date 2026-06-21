@@ -395,6 +395,7 @@ use runtime_config::{
 };
 use selection::collect_gateway_candidates;
 pub(crate) use selection::{
+    collect_gateway_candidates_for_accounts_with_low_quota_mode,
     collect_gateway_candidates_with_low_quota_mode, current_quota_guard_config,
     invalidate_candidate_cache, set_quota_guard_config, LowQuotaCandidateMode, QuotaGuardConfig,
 };
@@ -931,10 +932,7 @@ pub(crate) fn set_manual_preferred_account(account_id: &str) -> Result<(), Strin
         return Err("accountId is required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage not initialized".to_string())?;
-    let found = storage
-        .find_account_by_id(id)
-        .map_err(|err| err.to_string())?
-        .is_some();
+    let found = storage.account_exists(id).map_err(|err| err.to_string())?;
     if !found {
         return Err("account not found".to_string());
     }

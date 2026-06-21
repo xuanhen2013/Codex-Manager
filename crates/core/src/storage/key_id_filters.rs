@@ -10,30 +10,38 @@ pub(super) const SQLITE_IN_CLAUSE_BATCH_SIZE: usize = 900;
 
 static NEXT_TEMP_FILTER_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(super) fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {
-    let mut normalized = key_ids
+pub(super) fn normalize_text_ids(ids: &[String]) -> Vec<String> {
+    let mut normalized = ids
         .iter()
-        .map(|key_id| key_id.trim())
-        .filter(|key_id| !key_id.is_empty())
-        .map(|key_id| key_id.to_string())
+        .map(|id| id.trim())
+        .filter(|id| !id.is_empty())
+        .map(|id| id.to_string())
         .collect::<Vec<_>>();
     normalized.sort();
     normalized.dedup();
     normalized
 }
 
-pub(super) fn key_id_in_clause(column: &str, key_ids: &[String]) -> Option<(String, Vec<Value>)> {
-    let key_ids = normalize_key_ids(key_ids);
-    if key_ids.is_empty() {
+pub(super) fn normalize_key_ids(key_ids: &[String]) -> Vec<String> {
+    normalize_text_ids(key_ids)
+}
+
+pub(super) fn text_id_in_clause(column: &str, ids: &[String]) -> Option<(String, Vec<Value>)> {
+    let ids = normalize_text_ids(ids);
+    if ids.is_empty() {
         return None;
     }
 
     let placeholders = std::iter::repeat("?")
-        .take(key_ids.len())
+        .take(ids.len())
         .collect::<Vec<_>>()
         .join(", ");
-    let params = key_ids.into_iter().map(Value::Text).collect::<Vec<_>>();
+    let params = ids.into_iter().map(Value::Text).collect::<Vec<_>>();
     Some((format!("{column} IN ({placeholders})"), params))
+}
+
+pub(super) fn key_id_in_clause(column: &str, key_ids: &[String]) -> Option<(String, Vec<Value>)> {
+    text_id_in_clause(column, key_ids)
 }
 
 pub(super) struct KeyIdSqlFilter<'a> {

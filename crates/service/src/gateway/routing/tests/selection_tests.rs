@@ -5,6 +5,20 @@ use super::{
 };
 use crate::account_status::mark_account_unavailable_for_gateway_error;
 use codexmanager_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn isolated_test_db_path(name: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "codexmanager-{name}-{}-{nanos}.sqlite",
+        std::process::id()
+    ));
+    path.to_string_lossy().into_owned()
+}
 
 /// 函数 `candidate_snapshot_cache_reuses_recent_snapshot`
 ///
@@ -23,7 +37,10 @@ fn candidate_snapshot_cache_reuses_recent_snapshot() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "2000");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-cache-test-1");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-cache-test-1"),
+    );
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -107,7 +124,10 @@ fn candidates_follow_account_sort_order() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-cache-test-2");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-cache-test-2"),
+    );
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -198,7 +218,10 @@ fn gateway_error_status_change_invalidates_candidate_snapshot_cache() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "2000");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-cache-test-3");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-cache-test-3"),
+    );
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -289,7 +312,10 @@ fn gateway_deactivation_status_change_invalidates_candidate_snapshot_cache() {
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "2000");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-cache-test-4");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-cache-test-4"),
+    );
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -380,7 +406,10 @@ fn gateway_usage_limit_with_exhausted_snapshot_invalidates_candidate_snapshot_ca
     let previous_ttl = std::env::var(CANDIDATE_CACHE_TTL_ENV).ok();
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "2000");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-cache-test-5");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-cache-test-5"),
+    );
     super::reload_from_env();
     clear_candidate_cache_for_tests();
 
@@ -477,7 +506,10 @@ fn low_quota_accounts_are_skipped_when_healthy_available() {
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-low-quota-test");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-low-quota-test"),
+    );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
@@ -567,7 +599,7 @@ fn append_low_quota_fallback_keeps_low_quota_candidates_at_tail() {
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
         "CODEXMANAGER_DB_PATH",
-        "selection-low-quota-append-fallback-test",
+        isolated_test_db_path("selection-low-quota-append-fallback-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
     super::reload_from_env();
@@ -659,7 +691,10 @@ fn all_low_quota_still_returns_candidates() {
     let previous_db_path = std::env::var("CODEXMANAGER_DB_PATH").ok();
     let previous_threshold = std::env::var(LOW_QUOTA_THRESHOLD_ENV).ok();
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
-    std::env::set_var("CODEXMANAGER_DB_PATH", "selection-all-low-quota-test");
+    std::env::set_var(
+        "CODEXMANAGER_DB_PATH",
+        isolated_test_db_path("selection-all-low-quota-test"),
+    );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
     super::reload_from_env();
     clear_candidate_cache_for_tests();
@@ -744,7 +779,7 @@ fn all_low_quota_without_fallback_returns_no_candidates() {
     std::env::set_var(CANDIDATE_CACHE_TTL_ENV, "0");
     std::env::set_var(
         "CODEXMANAGER_DB_PATH",
-        "selection-all-low-quota-no-fallback-test",
+        isolated_test_db_path("selection-all-low-quota-no-fallback-test"),
     );
     std::env::set_var(LOW_QUOTA_THRESHOLD_ENV, "95");
     std::env::set_var(QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV, "0");

@@ -88,6 +88,7 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
           userId: source.user_id ?? source.userId,
           dayStartTs: source.day_start_ts ?? source.dayStartTs,
           dayEndTs: source.day_end_ts ?? source.dayEndTs,
+          includeDetails: source.include_details ?? source.includeDetails,
         };
       },
     },

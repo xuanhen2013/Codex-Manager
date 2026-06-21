@@ -1,6 +1,9 @@
 use chrono::TimeZone;
 use codexmanager_core::auth::DEFAULT_CLIENT_ID;
-use codexmanager_core::storage::{now_ts, Account, ApiKey, Token};
+use codexmanager_core::storage::{
+    now_ts, AccountCodexProfileCandidate, AccountDirectAuthProfile, AccountTokenCandidate,
+    ApiKeyCodexProfileCandidate, Token,
+};
 use rusqlite::{backup::Backup, params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -197,6 +200,11 @@ struct BackupEntry {
     updated_at: i64,
 }
 
+struct CodexProfileSettingsSnapshot {
+    state: Option<ManagedState>,
+    backups: HashMap<String, BackupEntry>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MarkerFile {
@@ -226,14 +234,15 @@ pub(crate) fn set_config(codex_home: Option<&str>) -> Result<CodexProfileStatus,
 
 pub(crate) fn list_candidates() -> Result<CodexProfileCandidates, String> {
     let storage = open_storage()?;
-    let tokens = storage
-        .list_tokens()
-        .map_err(|err| format!("list tokens failed: {err}"))?
-        .into_iter()
-        .map(|token| (token.account_id.clone(), token))
-        .collect::<HashMap<_, _>>();
+    let tokens = usable_account_token_candidates_by_account(
+        storage
+            .list_usable_account_token_candidates()
+            .map_err(|err| format!("list token candidates failed: {err}"))?,
+    );
+    let mut account_ids = tokens.keys().cloned().collect::<Vec<_>>();
+    account_ids.sort();
     let mut accounts = storage
-        .list_accounts()
+        .list_active_account_codex_profile_candidates_for_ids(&account_ids)
         .map_err(|err| format!("list accounts failed: {err}"))?
         .into_iter()
         .filter_map(|account| account_candidate(&account, tokens.get(&account.id)))
@@ -246,8 +255,8 @@ pub(crate) fn list_candidates() -> Result<CodexProfileCandidates, String> {
     });
 
     let mut api_keys = storage
-        .list_api_keys()
-        .map_err(|err| format!("list api keys failed: {err}"))?
+        .list_api_key_codex_profile_candidates()
+        .map_err(|err| format!("list api key profile candidates failed: {err}"))?
         .into_iter()
         .filter_map(api_key_candidate)
         .collect::<Vec<_>>();
@@ -263,6 +272,15 @@ pub(crate) fn list_candidates() -> Result<CodexProfileCandidates, String> {
     Ok(CodexProfileCandidates { accounts, api_keys })
 }
 
+fn usable_account_token_candidates_by_account(
+    tokens: Vec<AccountTokenCandidate>,
+) -> HashMap<String, AccountTokenCandidate> {
+    tokens
+        .into_iter()
+        .map(|token| (token.account_id.clone(), token))
+        .collect()
+}
+
 pub(crate) fn apply_direct_account(
     account_id: Option<&str>,
     codex_home: Option<&str>,
@@ -274,7 +292,7 @@ pub(crate) fn apply_direct_account(
 
     let storage = open_storage()?;
     let account = storage
-        .find_account_by_id(account_id)
+        .find_account_direct_auth_profile_by_id(account_id)
         .map_err(|err| format!("read account failed: {err}"))?
         .ok_or_else(|| "account not found".to_string())?;
     if account.status.trim() != "active" {
@@ -333,10 +351,10 @@ pub(crate) fn apply_gateway(
 
     let storage = open_storage()?;
     let api_key = storage
-        .find_api_key_by_id(api_key_id)
+        .find_api_key_status_by_id(api_key_id)
         .map_err(|err| format!("read api key failed: {err}"))?
         .ok_or_else(|| "api key not found".to_string())?;
-    if !is_active_api_key(&api_key) {
+    if !api_key_status_is_active(&api_key.status) {
         return Err("api key is disabled".to_string());
     }
     let secret = storage
@@ -428,11 +446,11 @@ fn open_storage() -> Result<crate::storage_helpers::StorageHandle, String> {
 }
 
 fn account_candidate(
-    account: &Account,
-    token: Option<&Token>,
+    account: &AccountCodexProfileCandidate,
+    token: Option<&AccountTokenCandidate>,
 ) -> Option<CodexProfileAccountCandidate> {
     let token = token?;
-    if account.status.trim() != "active" || !token_is_usable(token) {
+    if !token_candidate_is_usable(token) {
         return None;
     }
     Some(CodexProfileAccountCandidate {
@@ -451,8 +469,8 @@ fn account_candidate(
     })
 }
 
-fn api_key_candidate(api_key: ApiKey) -> Option<CodexProfileApiKeyCandidate> {
-    if !is_active_api_key(&api_key) {
+fn api_key_candidate(api_key: ApiKeyCodexProfileCandidate) -> Option<CodexProfileApiKeyCandidate> {
+    if !api_key_status_is_active(&api_key.status) {
         return None;
     }
     Some(CodexProfileApiKeyCandidate {
@@ -464,8 +482,12 @@ fn api_key_candidate(api_key: ApiKey) -> Option<CodexProfileApiKeyCandidate> {
     })
 }
 
-fn is_active_api_key(api_key: &ApiKey) -> bool {
-    !api_key.status.trim().eq_ignore_ascii_case("disabled")
+fn api_key_status_is_active(status: &str) -> bool {
+    !status.trim().eq_ignore_ascii_case("disabled")
+}
+
+fn token_candidate_is_usable(token: &AccountTokenCandidate) -> bool {
+    token.has_access_token && token.has_refresh_token
 }
 
 fn token_is_usable(token: &Token) -> bool {
@@ -644,9 +666,9 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
     let warnings = ensure_managed_profile_migrated(profile_dir);
     let stats = history_backup_stats(&paths.history_backup_root);
     let key = profile_key(profile_dir);
-    let backup_map = load_backups();
+    let settings = load_profile_settings_snapshot();
     let marker = read_marker(&paths.marker_path).ok();
-    let persisted = load_state().filter(|state| state.profile_dir == key);
+    let persisted = settings.state.filter(|state| state.profile_dir == key);
     let detected_mode = detect_mode(&auth_path, &config_path, marker.as_ref());
     let state = marker
         .map(|marker| ManagedState {
@@ -680,7 +702,7 @@ fn status_for_profile(profile_dir: &Path) -> Result<CodexProfileStatus, String> 
             .as_ref()
             .and_then(|state| state.gateway_base_url.clone()),
         provider_id: PROVIDER_ID.to_string(),
-        has_backup: backup_map.contains_key(&key),
+        has_backup: settings.backups.contains_key(&key),
         last_applied_at: state.as_ref().map(|state| state.updated_at),
         profile_writable: profile_writable(profile_dir),
         error: None,
@@ -1691,7 +1713,10 @@ fn profile_key(profile_dir: &Path) -> String {
     profile_dir.to_string_lossy().to_string()
 }
 
-fn build_direct_auth_json(account: &Account, token: &Token) -> Result<String, String> {
+fn build_direct_auth_json(
+    account: &AccountDirectAuthProfile,
+    token: &Token,
+) -> Result<String, String> {
     let account_id = account
         .chatgpt_account_id
         .as_deref()
@@ -1850,6 +1875,19 @@ fn load_backups() -> HashMap<String, BackupEntry> {
         .unwrap_or_default()
 }
 
+fn load_profile_settings_snapshot() -> CodexProfileSettingsSnapshot {
+    let settings = crate::app_settings::list_app_settings_map();
+    CodexProfileSettingsSnapshot {
+        state: settings
+            .get(APP_SETTING_STATE_KEY)
+            .and_then(|value| serde_json::from_str(value).ok()),
+        backups: settings
+            .get(APP_SETTING_BACKUPS_KEY)
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or_default(),
+    }
+}
+
 fn save_backups(backups: &HashMap<String, BackupEntry>) -> Result<(), String> {
     let value =
         serde_json::to_string(backups).map_err(|err| format!("serialize backups failed: {err}"))?;
@@ -1922,6 +1960,7 @@ fn temp_file_path(parent: &Path, target: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codexmanager_core::storage::{Account, Storage};
     use rusqlite::Connection;
 
     fn temp_profile(name: &str) -> PathBuf {
@@ -1937,6 +1976,55 @@ mod tests {
             let _ = fs::remove_dir_all(root);
         }
         let _ = fs::remove_dir_all(dir);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn test_account(id: &str, status: &str) -> Account {
+        Account {
+            id: id.to_string(),
+            label: format!("Label {id}"),
+            issuer: format!("issuer-{id}"),
+            chatgpt_account_id: Some(format!("cgpt-{id}")),
+            workspace_id: Some(format!("ws-{id}")),
+            group_name: Some("test-group".to_string()),
+            sort: 0,
+            status: status.to_string(),
+            created_at: now_ts(),
+            updated_at: now_ts(),
+        }
+    }
+
+    fn test_token(account_id: &str, access_token: &str, refresh_token: &str) -> Token {
+        Token {
+            account_id: account_id.to_string(),
+            id_token: "id-token".to_string(),
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.to_string(),
+            api_key_access_token: None,
+            last_refresh: 123,
+        }
     }
 
     fn write_test_rollout(dir: &Path, thread_id: &str, provider: &str) -> (PathBuf, String) {
@@ -2031,6 +2119,106 @@ name = "Other"
     }
 
     #[test]
+    fn usable_account_token_candidates_by_account_indexes_candidates() {
+        let candidates = usable_account_token_candidates_by_account(vec![
+            AccountTokenCandidate {
+                account_id: "acc-ready".to_string(),
+                has_access_token: true,
+                has_refresh_token: true,
+                last_refresh: 10,
+            },
+            AccountTokenCandidate {
+                account_id: "acc-no-access".to_string(),
+                has_access_token: false,
+                has_refresh_token: true,
+                last_refresh: 11,
+            },
+            AccountTokenCandidate {
+                account_id: "acc-no-refresh".to_string(),
+                has_access_token: true,
+                has_refresh_token: false,
+                last_refresh: 12,
+            },
+        ]);
+
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(
+            candidates
+                .get("acc-ready")
+                .map(|candidate| candidate.last_refresh),
+            Some(10)
+        );
+        assert_eq!(
+            candidates
+                .get("acc-no-access")
+                .map(|candidate| candidate.last_refresh),
+            Some(11)
+        );
+        assert_eq!(
+            candidates
+                .get("acc-no-refresh")
+                .map(|candidate| candidate.last_refresh),
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn list_candidates_uses_active_account_projection_and_usable_tokens() {
+        let _lock = crate::test_env_guard();
+        let dir = temp_profile("codex-profile-candidates");
+        fs::create_dir_all(&dir).expect("mkdir temp dir");
+        let db_path = dir.join("codexmanager.db");
+        let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open storage");
+        storage.init().expect("init storage");
+        let mut active = test_account("acc-active-candidate", "active");
+        active.label = "Active Candidate".to_string();
+        active.group_name = Some("candidate-group".to_string());
+        let mut disabled = test_account("acc-disabled-candidate", "disabled");
+        disabled.label = "Disabled Candidate".to_string();
+        storage
+            .insert_account(&active)
+            .expect("insert active account");
+        storage
+            .insert_account(&disabled)
+            .expect("insert disabled account");
+        storage
+            .insert_token(&test_token("acc-active-candidate", "access", "refresh"))
+            .expect("insert active token");
+        storage
+            .insert_token(&test_token("acc-disabled-candidate", "access", "refresh"))
+            .expect("insert disabled token");
+        storage
+            .insert_account(&test_account("acc-missing-refresh", "active"))
+            .expect("insert missing refresh account");
+        storage
+            .insert_token(&test_token("acc-missing-refresh", "access", ""))
+            .expect("insert missing refresh token");
+        drop(storage);
+
+        let result = list_candidates().expect("list candidates");
+
+        assert_eq!(result.accounts.len(), 1);
+        let account = &result.accounts[0];
+        assert_eq!(account.id, "acc-active-candidate");
+        assert_eq!(account.label, "Active Candidate");
+        assert_eq!(account.group_name.as_deref(), Some("candidate-group"));
+        assert_eq!(account.status, "active");
+        assert_eq!(
+            account.chatgpt_account_id.as_deref(),
+            Some("cgpt-acc-active-candidate")
+        );
+        assert_eq!(
+            account.workspace_id.as_deref(),
+            Some("ws-acc-active-candidate")
+        );
+        assert_eq!(account.issuer, "issuer-acc-active-candidate");
+        assert_eq!(account.last_refresh, 123);
+        cleanup_profile(&dir);
+    }
+
+    #[test]
     fn restore_optional_file_removes_files_that_were_missing() {
         let dir = temp_profile("restore-missing");
         fs::create_dir_all(&dir).expect("mkdir");
@@ -2046,17 +2234,11 @@ name = "Other"
     #[test]
     fn auth_json_shapes_match_codex_modes() {
         let now = now_ts();
-        let account = Account {
+        let account = AccountDirectAuthProfile {
             id: "acc-1".to_string(),
-            label: "Account".to_string(),
             issuer: "https://auth.openai.com".to_string(),
             chatgpt_account_id: Some("chatgpt-1".to_string()),
-            workspace_id: None,
-            group_name: None,
-            sort: 0,
             status: "active".to_string(),
-            created_at: now,
-            updated_at: now,
         };
         let token = Token {
             account_id: "acc-1".to_string(),

@@ -1,5 +1,8 @@
 use super::{now_ts, ModelSourceMapping, ModelSourceMappingPreference, ModelSourceModel, Storage};
-use rusqlite::{params, OptionalExtension, Result, Row};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Result, Row};
+use std::collections::{BTreeSet, HashMap};
+
+use super::key_id_filters::{text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
 
 fn map_source_model(row: &Row<'_>) -> Result<ModelSourceModel> {
     Ok(ModelSourceModel {
@@ -37,6 +40,28 @@ fn normalize_text(value: &str) -> String {
     value.trim().to_string()
 }
 
+fn normalize_source_kinds(source_kinds: &[&str]) -> Vec<String> {
+    let mut normalized = source_kinds
+        .iter()
+        .map(|value| normalize_text(value))
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_slug_values(slugs: &[String]) -> Vec<String> {
+    let mut normalized = slugs
+        .iter()
+        .map(|slug| normalize_text(slug))
+        .filter(|slug| !slug.is_empty())
+        .collect::<Vec<_>>();
+    normalized.sort();
+    normalized.dedup();
+    normalized
+}
+
 impl Storage {
     pub(super) fn ensure_model_source_tables(&self) -> Result<()> {
         self.conn.execute_batch(
@@ -53,10 +78,12 @@ impl Storage {
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (source_kind, source_id, upstream_model)
             );
-            CREATE INDEX IF NOT EXISTS idx_model_source_models_source
-                ON model_source_models(source_kind, source_id);
             CREATE INDEX IF NOT EXISTS idx_model_source_models_upstream_model
                 ON model_source_models(upstream_model);
+            CREATE INDEX IF NOT EXISTS idx_model_source_models_kind_upstream_status_source
+                ON model_source_models(source_kind, upstream_model, status, source_id);
+            CREATE INDEX IF NOT EXISTS idx_model_source_models_source_status_upstream
+                ON model_source_models(source_kind, source_id, status, upstream_model);
             CREATE TABLE IF NOT EXISTS model_source_mappings (
                 id TEXT PRIMARY KEY,
                 platform_model_slug TEXT NOT NULL,
@@ -71,10 +98,12 @@ impl Storage {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(platform_model_slug, source_kind, source_id, upstream_model)
             );
-            CREATE INDEX IF NOT EXISTS idx_model_source_mappings_platform
-                ON model_source_mappings(platform_model_slug, enabled, priority DESC);
             CREATE INDEX IF NOT EXISTS idx_model_source_mappings_source
                 ON model_source_mappings(source_kind, source_id, enabled);
+            CREATE INDEX IF NOT EXISTS idx_model_source_mappings_platform_enabled_priority_weight
+                ON model_source_mappings(platform_model_slug, enabled, priority DESC, weight DESC, source_kind, source_id, upstream_model);
+            CREATE INDEX IF NOT EXISTS idx_model_source_mappings_platform_source_enabled_priority
+                ON model_source_mappings(platform_model_slug, source_kind, source_id, enabled, priority DESC, weight DESC, upstream_model);
             CREATE TABLE IF NOT EXISTS model_source_mapping_preferences (
                 source_kind     TEXT NOT NULL,
                 source_id       TEXT NOT NULL,
@@ -117,6 +146,30 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn list_available_model_source_models_for_source(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+    ) -> Result<Vec<ModelSourceModel>> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        if source_kind.is_empty() || source_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT source_kind, source_id, upstream_model, display_name, status,
+                    discovery_kind, last_synced_at, extra_json, created_at, updated_at
+             FROM model_source_models
+             WHERE source_kind = ?1
+               AND source_id = ?2
+               AND status = 'available'
+               AND TRIM(upstream_model) <> ''
+             ORDER BY upstream_model ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind, source_id], map_source_model)?;
+        rows.collect()
+    }
+
     pub fn list_available_source_model_ids_by_upstream_model(
         &self,
         source_kind: &str,
@@ -139,6 +192,55 @@ impl Storage {
             row.get::<_, String>(0)
         })?;
         rows.collect()
+    }
+
+    pub fn list_model_source_model_source_ids_for_kind(
+        &self,
+        source_kind: &str,
+    ) -> Result<Vec<String>> {
+        let source_kind = normalize_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT source_id
+             FROM model_source_models
+             WHERE source_kind = ?1
+               AND TRIM(source_id) <> ''
+             ORDER BY source_id ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn available_source_model_exists(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        upstream_model: &str,
+    ) -> Result<bool> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        let upstream_model = normalize_text(upstream_model);
+        if source_kind.is_empty() || source_id.is_empty() || upstream_model.is_empty() {
+            return Ok(false);
+        }
+        let found = self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM model_source_models
+                 WHERE source_kind = ?1
+                   AND source_id = ?2
+                   AND upstream_model = ?3
+                   AND status = 'available'
+                 LIMIT 1",
+                params![source_kind, source_id, upstream_model],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(found)
     }
 
     pub fn upsert_model_source_model(&self, model: &ModelSourceModel) -> Result<()> {
@@ -301,6 +403,336 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn list_enabled_model_source_mappings_for_platform_and_kind(
+        &self,
+        platform_model_slug: &str,
+        source_kind: &str,
+    ) -> Result<Vec<ModelSourceMapping>> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kind = normalize_text(source_kind);
+        if slug.is_empty() || source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+                    enabled, priority, weight, billing_model_slug, created_at, updated_at
+             FROM model_source_mappings
+             WHERE platform_model_slug = ?1
+               AND source_kind = ?2
+               AND enabled = 1
+             ORDER BY priority DESC, weight DESC, source_id ASC, upstream_model ASC",
+        )?;
+        let rows = stmt.query_map(params![slug, source_kind], map_source_mapping)?;
+        rows.collect()
+    }
+
+    pub fn list_enabled_model_source_mapping_source_ids_for_platform_and_kind(
+        &self,
+        platform_model_slug: &str,
+        source_kind: &str,
+    ) -> Result<Vec<String>> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kind = normalize_text(source_kind);
+        if slug.is_empty() || source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT source_id
+             FROM model_source_mappings
+             WHERE platform_model_slug = ?1
+               AND source_kind = ?2
+               AND enabled = 1
+             ORDER BY source_id ASC",
+        )?;
+        let rows = stmt.query_map(params![slug, source_kind], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_model_source_mapping_source_ids_for_kind(
+        &self,
+        source_kind: &str,
+    ) -> Result<Vec<String>> {
+        let source_kind = normalize_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT source_id
+             FROM model_source_mappings
+             WHERE source_kind = ?1
+             ORDER BY source_id ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_model_route_source_ids_for_kind(&self, source_kind: &str) -> Result<Vec<String>> {
+        let source_kind = normalize_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id
+             FROM (
+                SELECT source_id
+                FROM model_source_models
+                WHERE source_kind = ?1
+                  AND TRIM(source_id) <> ''
+                UNION
+                SELECT source_id
+                FROM model_source_mappings
+                WHERE source_kind = ?1
+                  AND TRIM(source_id) <> ''
+             )
+             ORDER BY source_id ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_model_source_mapping_platform_slugs_for_source(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+    ) -> Result<Vec<String>> {
+        let source_kind = normalize_text(source_kind);
+        let source_id = normalize_text(source_id);
+        if source_kind.is_empty() || source_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT platform_model_slug
+             FROM model_source_mappings
+             WHERE source_kind = ?1
+               AND source_id = ?2
+             ORDER BY platform_model_slug ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind, source_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_enabled_model_source_mapping_platform_slugs_for_kind(
+        &self,
+        source_kind: &str,
+    ) -> Result<Vec<String>> {
+        let source_kind = normalize_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT platform_model_slug
+             FROM model_source_mappings
+             WHERE source_kind = ?1
+               AND enabled = 1
+             ORDER BY platform_model_slug ASC",
+        )?;
+        let rows = stmt.query_map(params![source_kind], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_enabled_model_source_mapping_platform_slugs(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT platform_model_slug
+             FROM model_source_mappings
+             WHERE enabled = 1
+             ORDER BY platform_model_slug ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    pub fn list_enabled_model_source_mapping_platform_slugs_for_platforms(
+        &self,
+        platform_slugs: &[String],
+    ) -> Result<Vec<String>> {
+        let slugs = normalize_slug_values(platform_slugs);
+        if slugs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut found = BTreeSet::new();
+        for chunk in slugs.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            let Some((condition, params)) = text_id_in_clause("platform_model_slug", chunk) else {
+                continue;
+            };
+            let sql = format!(
+                "SELECT DISTINCT platform_model_slug
+                 FROM model_source_mappings
+                 WHERE enabled = 1
+                   AND {condition}"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
+            for row in rows {
+                found.insert(row?);
+            }
+        }
+        Ok(found.into_iter().collect())
+    }
+
+    pub fn list_model_source_model_upstream_models_for_upstream_models(
+        &self,
+        upstream_models: &[String],
+    ) -> Result<Vec<String>> {
+        let upstream_models = normalize_slug_values(upstream_models);
+        if upstream_models.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut found = BTreeSet::new();
+        for chunk in upstream_models.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            let Some((condition, params)) = text_id_in_clause("upstream_model", chunk) else {
+                continue;
+            };
+            let sql = format!(
+                "SELECT DISTINCT upstream_model
+                 FROM model_source_models
+                 WHERE {condition}"
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
+            for row in rows {
+                found.insert(row?);
+            }
+        }
+        Ok(found.into_iter().collect())
+    }
+
+    pub fn has_enabled_model_source_mapping_for_platform_and_kind(
+        &self,
+        platform_model_slug: &str,
+        source_kind: &str,
+    ) -> Result<bool> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kind = normalize_text(source_kind);
+        if slug.is_empty() || source_kind.is_empty() {
+            return Ok(false);
+        }
+        let found = self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM model_source_mappings
+                 WHERE platform_model_slug = ?1
+                   AND source_kind = ?2
+                   AND enabled = 1
+                 LIMIT 1",
+                params![slug, source_kind],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
+    pub fn has_enabled_model_source_mapping_for_platform(
+        &self,
+        platform_model_slug: &str,
+    ) -> Result<bool> {
+        let slug = normalize_text(platform_model_slug);
+        if slug.is_empty() {
+            return Ok(false);
+        }
+        let found = self
+            .conn
+            .query_row(
+                "SELECT 1
+                 FROM model_source_mappings
+                 WHERE platform_model_slug = ?1
+                   AND enabled = 1
+                 LIMIT 1",
+                params![slug],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
+    pub fn has_enabled_model_source_mapping_for_platform_matching_kinds(
+        &self,
+        platform_model_slug: &str,
+        source_kinds: &[&str],
+    ) -> Result<bool> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kinds = normalize_source_kinds(source_kinds);
+        if slug.is_empty() || source_kinds.is_empty() {
+            return Ok(false);
+        }
+        let Some((source_kind_condition, source_kind_params)) =
+            text_id_in_clause("source_kind", &source_kinds)
+        else {
+            return Ok(false);
+        };
+        let sql = format!(
+            "SELECT 1
+             FROM model_source_mappings
+             WHERE platform_model_slug = ?1
+               AND enabled = 1
+               AND {source_kind_condition}
+             LIMIT 1"
+        );
+        let mut params = Vec::with_capacity(source_kinds.len() + 1);
+        params.push(Value::Text(slug));
+        params.extend(source_kind_params);
+        let found = self
+            .conn
+            .query_row(&sql, params_from_iter(params), |_| Ok(()))
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
+    pub fn has_enabled_model_source_mapping_for_platform_outside_kinds(
+        &self,
+        platform_model_slug: &str,
+        source_kinds: &[&str],
+    ) -> Result<bool> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kinds = normalize_source_kinds(source_kinds);
+        if slug.is_empty() {
+            return Ok(false);
+        }
+        if source_kinds.is_empty() {
+            let found = self
+                .conn
+                .query_row(
+                    "SELECT 1
+                     FROM model_source_mappings
+                     WHERE platform_model_slug = ?1
+                       AND enabled = 1
+                     LIMIT 1",
+                    params![slug],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            return Ok(found);
+        }
+        let Some((source_kind_condition, source_kind_params)) =
+            text_id_in_clause("source_kind", &source_kinds)
+        else {
+            return Ok(false);
+        };
+        let sql = format!(
+            "SELECT 1
+             FROM model_source_mappings
+             WHERE platform_model_slug = ?1
+               AND enabled = 1
+               AND NOT ({source_kind_condition})
+             LIMIT 1"
+        );
+        let mut params = Vec::with_capacity(source_kinds.len() + 1);
+        params.push(Value::Text(slug));
+        params.extend(source_kind_params);
+        let found = self
+            .conn
+            .query_row(&sql, params_from_iter(params), |_| Ok(()))
+            .optional()?
+            .is_some();
+        Ok(found)
+    }
+
     pub fn find_enabled_model_source_mapping(
         &self,
         platform_model_slug: &str,
@@ -326,6 +758,33 @@ impl Storage {
                 map_source_mapping,
             )
             .optional()
+    }
+
+    pub fn list_enabled_model_source_mappings_for_sources(
+        &self,
+        platform_model_slug: &str,
+        source_kind: &str,
+        source_ids: &[String],
+    ) -> Result<HashMap<String, ModelSourceMapping>> {
+        let slug = normalize_text(platform_model_slug);
+        let source_kind = normalize_text(source_kind);
+        let source_ids = normalize_slug_values(source_ids);
+        if slug.is_empty() || source_kind.is_empty() || source_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut out = HashMap::new();
+        for chunk in source_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            for mapping in list_enabled_model_source_mappings_for_sources_chunk(
+                self,
+                slug.as_str(),
+                source_kind.as_str(),
+                chunk,
+            )? {
+                out.insert(mapping.source_id.clone(), mapping);
+            }
+        }
+        Ok(out)
     }
 
     pub fn upsert_model_source_mapping(&self, mapping: &ModelSourceMapping) -> Result<()> {
@@ -379,7 +838,13 @@ impl Storage {
              ON CONFLICT(source_kind, source_id, upstream_model) DO UPDATE SET
                  preference = excluded.preference,
                  updated_at = excluded.updated_at",
-            params![&source_kind, &source_id, &upstream_model, "unlinked", now_ts()],
+            params![
+                &source_kind,
+                &source_id,
+                &upstream_model,
+                "unlinked",
+                now_ts()
+            ],
         )?;
         tx.execute(
             "DELETE FROM model_source_mappings WHERE id = ?1",
@@ -521,6 +986,56 @@ impl Storage {
     }
 }
 
+fn list_enabled_model_source_mappings_for_sources_chunk(
+    storage: &Storage,
+    platform_model_slug: &str,
+    source_kind: &str,
+    source_ids: &[String],
+) -> Result<Vec<ModelSourceMapping>> {
+    if source_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some((source_condition, source_params)) = text_id_in_clause("source_id", source_ids) else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "WITH ranked AS (
+            SELECT
+                id,
+                platform_model_slug,
+                source_kind,
+                source_id,
+                upstream_model,
+                enabled,
+                priority,
+                weight,
+                billing_model_slug,
+                created_at,
+                updated_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY source_id
+                    ORDER BY priority DESC, weight DESC, upstream_model ASC
+                ) AS rn
+            FROM model_source_mappings
+            WHERE platform_model_slug = ?1
+              AND source_kind = ?2
+              AND enabled = 1
+              AND {source_condition}
+        )
+        SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+               enabled, priority, weight, billing_model_slug, created_at, updated_at
+        FROM ranked
+        WHERE rn = 1"
+    );
+    let mut params = Vec::with_capacity(source_ids.len() + 2);
+    params.push(Value::Text(platform_model_slug.to_string()));
+    params.push(Value::Text(source_kind.to_string()));
+    params.extend(source_params);
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params), map_source_mapping)?;
+    rows.collect()
+}
+
 fn map_preference(row: &Row<'_>) -> Result<ModelSourceMappingPreference> {
     Ok(ModelSourceMappingPreference {
         source_kind: row.get(0)?,
@@ -529,4 +1044,462 @@ fn map_preference(row: &Row<'_>) -> Result<ModelSourceMappingPreference> {
         preference: row.get(3)?,
         updated_at: row.get(4)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
+        let mut stmt = storage.conn.prepare(sql).expect("prepare explain");
+        let mut rows = stmt.query([]).expect("query explain");
+        let mut details = Vec::new();
+        while let Some(row) = rows.next().expect("next explain row") {
+            let detail: String = row.get(3).expect("detail");
+            details.push(detail.to_ascii_lowercase());
+        }
+        details
+    }
+
+    #[test]
+    fn model_source_lookup_queries_use_composite_indexes() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+
+        let source_model_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT source_id
+             FROM model_source_models
+             WHERE source_kind = 'openai_account'
+               AND upstream_model = 'gpt-upstream'
+               AND status = 'available'
+             ORDER BY source_id ASC",
+        );
+        assert!(source_model_details.iter().any(|detail| {
+            detail.contains("idx_model_source_models_kind_upstream_status_source")
+        }));
+
+        let source_model_exists_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT 1
+             FROM model_source_models
+             WHERE source_kind = 'openai_account'
+               AND source_id = 'acc-routing-1'
+               AND upstream_model = 'gpt-upstream'
+               AND status = 'available'
+             LIMIT 1",
+        );
+        assert!(source_model_exists_details.iter().any(|detail| {
+            detail.contains("search model_source_models") && detail.contains("index")
+        }));
+
+        let available_source_model_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT source_kind, source_id, upstream_model, display_name, status,
+                    discovery_kind, last_synced_at, extra_json, created_at, updated_at
+             FROM model_source_models
+             WHERE source_kind = 'openai_account'
+               AND source_id = 'acc-routing-1'
+               AND status = 'available'
+               AND TRIM(upstream_model) <> ''
+             ORDER BY upstream_model ASC",
+        );
+        assert!(available_source_model_details
+            .iter()
+            .any(|detail| { detail.contains("idx_model_source_models_source_status_upstream") }));
+
+        let platform_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+                    enabled, priority, weight, billing_model_slug, created_at, updated_at
+             FROM model_source_mappings
+             WHERE platform_model_slug = 'gpt-platform' AND enabled = 1
+             ORDER BY priority DESC, weight DESC, source_kind ASC, source_id ASC, upstream_model ASC",
+        );
+        assert!(platform_details.iter().any(|detail| {
+            detail.contains("idx_model_source_mappings_platform_enabled_priority_weight")
+        }));
+
+        let platform_exists_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT 1
+             FROM model_source_mappings
+             WHERE platform_model_slug = 'gpt-platform'
+               AND enabled = 1
+             LIMIT 1",
+        );
+        assert!(platform_exists_details.iter().any(|detail| {
+            detail.contains("idx_model_source_mappings_platform_enabled_priority_weight")
+        }));
+
+        let platform_batch_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT platform_model_slug
+             FROM model_source_mappings
+             WHERE enabled = 1
+               AND platform_model_slug IN ('gpt-platform', 'missing-platform')",
+        );
+        assert!(platform_batch_details.iter().any(|detail| {
+            detail.contains("search model_source_mappings") && detail.contains("index")
+        }));
+        assert!(
+            !platform_batch_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "platform slug chunk query should avoid per-chunk ORDER BY temp sorting, got {platform_batch_details:?}"
+        );
+
+        let source_model_batch_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT upstream_model
+             FROM model_source_models
+             WHERE upstream_model IN ('gpt-upstream', 'missing-upstream')",
+        );
+        assert!(source_model_batch_details
+            .iter()
+            .any(|detail| detail.contains("idx_model_source_models_upstream_model")));
+        assert!(
+            !source_model_batch_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "upstream model chunk query should avoid per-chunk ORDER BY temp sorting, got {source_model_batch_details:?}"
+        );
+
+        let source_id_by_kind_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT source_id
+             FROM model_source_models
+             WHERE source_kind = 'aggregate_api'
+               AND TRIM(source_id) <> ''
+             ORDER BY source_id ASC",
+        );
+        assert!(source_id_by_kind_details
+            .iter()
+            .any(|detail| { detail.contains("idx_model_source_models_source_status_upstream") }));
+
+        let platform_source_id_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT DISTINCT source_id
+             FROM model_source_mappings
+             WHERE platform_model_slug = 'gpt-platform'
+               AND source_kind = 'openai_account'
+               AND enabled = 1
+             ORDER BY source_id ASC",
+        );
+        assert!(platform_source_id_details.iter().any(|detail| {
+            detail.contains("idx_model_source_mappings_platform_source_enabled_priority")
+        }));
+
+        let source_mapping_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+                    enabled, priority, weight, billing_model_slug, created_at, updated_at
+             FROM model_source_mappings
+             WHERE platform_model_slug = 'gpt-platform'
+               AND source_kind = 'openai_account'
+               AND source_id = 'acc-routing-1'
+               AND enabled = 1
+             ORDER BY priority DESC, weight DESC, upstream_model ASC
+             LIMIT 1",
+        );
+        assert!(source_mapping_details.iter().any(|detail| {
+            detail.contains("idx_model_source_mappings_platform_source_enabled_priority")
+        }));
+    }
+
+    #[test]
+    fn list_model_source_model_source_ids_for_kind_returns_distinct_non_empty_ids() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+        let now = now_ts();
+        for (source_kind, source_id, upstream_model) in [
+            ("aggregate_api", "agg-b", "gpt-b"),
+            ("aggregate_api", "agg-a", "gpt-a"),
+            ("aggregate_api", "agg-a", "gpt-a-2"),
+            ("aggregate_api", "", "gpt-empty"),
+            ("openai_account", "acc-a", "gpt-a"),
+        ] {
+            storage
+                .upsert_model_source_model(&ModelSourceModel {
+                    source_kind: source_kind.to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: upstream_model.to_string(),
+                    display_name: None,
+                    status: "available".to_string(),
+                    discovery_kind: "synced".to_string(),
+                    last_synced_at: Some(now),
+                    extra_json: "{}".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed source model");
+        }
+
+        let source_ids = storage
+            .list_model_source_model_source_ids_for_kind(" aggregate_api ")
+            .expect("list source ids");
+
+        assert_eq!(source_ids, vec!["agg-a".to_string(), "agg-b".to_string()]);
+    }
+
+    #[test]
+    fn list_model_route_source_ids_for_kind_unions_models_and_mappings() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+        let now = now_ts();
+        for (source_kind, source_id, upstream_model) in [
+            ("aggregate_api", "agg-model-only", "gpt-model"),
+            ("aggregate_api", "agg-shared", "gpt-shared"),
+            ("aggregate_api", "", "gpt-empty"),
+            ("openai_account", "acc-ignored", "gpt-ignored"),
+        ] {
+            storage
+                .upsert_model_source_model(&ModelSourceModel {
+                    source_kind: source_kind.to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: upstream_model.to_string(),
+                    display_name: None,
+                    status: "available".to_string(),
+                    discovery_kind: "synced".to_string(),
+                    last_synced_at: None,
+                    extra_json: "{}".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed source model");
+        }
+        for (id, source_kind, source_id) in [
+            ("map-shared", "aggregate_api", "agg-shared"),
+            ("map-only", "aggregate_api", "agg-mapping-only"),
+            ("map-empty", "aggregate_api", ""),
+            ("map-ignored", "openai_account", "acc-ignored"),
+        ] {
+            storage
+                .upsert_model_source_mapping(&ModelSourceMapping {
+                    id: id.to_string(),
+                    platform_model_slug: format!("platform-{id}"),
+                    source_kind: source_kind.to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: format!("upstream-{id}"),
+                    enabled: true,
+                    priority: 0,
+                    weight: 1,
+                    billing_model_slug: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed mapping");
+        }
+
+        let source_ids = storage
+            .list_model_route_source_ids_for_kind(" aggregate_api ")
+            .expect("list route source ids");
+
+        assert_eq!(
+            source_ids,
+            vec![
+                "agg-mapping-only".to_string(),
+                "agg-model-only".to_string(),
+                "agg-shared".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn platform_mapping_kind_existence_helpers_filter_source_kinds() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+        let now = now_ts();
+        for (id, source_kind, source_id, enabled) in [
+            ("map-account", "openai_account", "acc-a", true),
+            ("map-aggregate", "aggregate_api", "agg-a", true),
+            ("map-disabled", "custom", "custom-a", false),
+        ] {
+            storage
+                .upsert_model_source_mapping(&ModelSourceMapping {
+                    id: id.to_string(),
+                    platform_model_slug: "gpt-platform".to_string(),
+                    source_kind: source_kind.to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: format!("upstream-{id}"),
+                    enabled,
+                    priority: 0,
+                    weight: 1,
+                    billing_model_slug: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed mapping");
+        }
+
+        assert!(storage
+            .has_enabled_model_source_mapping_for_platform_matching_kinds(
+                "gpt-platform",
+                &[" aggregate_api ", "missing_kind"],
+            )
+            .expect("matching kind exists"));
+        assert!(!storage
+            .has_enabled_model_source_mapping_for_platform_matching_kinds(
+                "gpt-platform",
+                &["custom"],
+            )
+            .expect("disabled kind should not match"));
+        assert!(storage
+            .has_enabled_model_source_mapping_for_platform_outside_kinds(
+                "gpt-platform",
+                &["aggregate_api"],
+            )
+            .expect("outside kind exists"));
+        assert!(!storage
+            .has_enabled_model_source_mapping_for_platform_outside_kinds(
+                "gpt-platform",
+                &["aggregate_api", "openai_account"],
+            )
+            .expect("no outside kind exists"));
+    }
+
+    #[test]
+    fn list_enabled_model_source_mappings_for_sources_picks_top_mapping_per_source() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+        let now = now_ts();
+        for (id, source_id, upstream_model, priority, weight, enabled, source_kind) in [
+            (
+                "map-a-low",
+                "acc-a",
+                "gpt-low",
+                0,
+                10,
+                true,
+                "openai_account",
+            ),
+            (
+                "map-a-top",
+                "acc-a",
+                "gpt-top",
+                5,
+                1,
+                true,
+                "openai_account",
+            ),
+            (
+                "map-a-disabled",
+                "acc-a",
+                "gpt-disabled",
+                9,
+                1,
+                false,
+                "openai_account",
+            ),
+            (
+                "map-b-weight-low",
+                "acc-b",
+                "gpt-z",
+                2,
+                1,
+                true,
+                "openai_account",
+            ),
+            (
+                "map-b-weight-top",
+                "acc-b",
+                "gpt-a",
+                2,
+                2,
+                true,
+                "openai_account",
+            ),
+            (
+                "map-kind-other",
+                "acc-c",
+                "gpt-other",
+                9,
+                9,
+                true,
+                "aggregate_api",
+            ),
+        ] {
+            storage
+                .upsert_model_source_mapping(&ModelSourceMapping {
+                    id: id.to_string(),
+                    platform_model_slug: "gpt-platform".to_string(),
+                    source_kind: source_kind.to_string(),
+                    source_id: source_id.to_string(),
+                    upstream_model: upstream_model.to_string(),
+                    enabled,
+                    priority,
+                    weight,
+                    billing_model_slug: None,
+                    created_at: now,
+                    updated_at: now,
+                })
+                .expect("seed mapping");
+        }
+
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_sources(
+                " gpt-platform ",
+                " openai_account ",
+                &[
+                    "acc-a".to_string(),
+                    "acc-b".to_string(),
+                    "acc-c".to_string(),
+                    "acc-a".to_string(),
+                    " ".to_string(),
+                ],
+            )
+            .expect("list mappings");
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings["acc-a"].upstream_model, "gpt-top");
+        assert_eq!(mappings["acc-b"].upstream_model, "gpt-a");
+        assert!(!mappings.contains_key("acc-c"));
+    }
+
+    #[test]
+    fn list_enabled_model_source_mappings_for_sources_chunks_large_source_sets() {
+        let storage = Storage::open_in_memory().expect("open in memory");
+        storage.init().expect("init schema");
+        let now = now_ts();
+        let target = "acc-batch-0742";
+        storage
+            .upsert_model_source_mapping(&ModelSourceMapping {
+                id: "map-batch-target".to_string(),
+                platform_model_slug: "gpt-platform".to_string(),
+                source_kind: "openai_account".to_string(),
+                source_id: target.to_string(),
+                upstream_model: "gpt-batch-target".to_string(),
+                enabled: true,
+                priority: 0,
+                weight: 1,
+                billing_model_slug: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("seed mapping");
+        let source_ids = (0..950)
+            .map(|index| format!("acc-batch-{index:04}"))
+            .collect::<Vec<_>>();
+
+        let mappings = storage
+            .list_enabled_model_source_mappings_for_sources(
+                "gpt-platform",
+                "openai_account",
+                &source_ids,
+            )
+            .expect("list mappings");
+
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[target].upstream_model, "gpt-batch-target");
+    }
 }

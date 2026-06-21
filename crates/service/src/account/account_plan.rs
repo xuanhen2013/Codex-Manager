@@ -1,6 +1,6 @@
 use codexmanager_core::{
     auth::parse_id_token_claims,
-    storage::{AccountSubscription, Storage, Token, UsageSnapshotRecord},
+    storage::{AccountSubscription, AccountTokenPlan, Storage, Token, UsageSnapshotRecord},
 };
 use serde_json::Value;
 
@@ -108,7 +108,7 @@ pub(crate) fn normalize_account_plan_filter(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn resolve_account_plan(
-    token: Option<&Token>,
+    token: Option<&AccountTokenPlan>,
     snapshot: Option<&UsageSnapshotRecord>,
 ) -> Option<ResolvedAccountPlan> {
     let token_plan = token
@@ -135,7 +135,7 @@ pub(crate) fn resolve_account_plan(
 }
 
 pub(crate) fn resolve_effective_account_plan(
-    token: Option<&Token>,
+    token: Option<&AccountTokenPlan>,
     snapshot: Option<&UsageSnapshotRecord>,
     subscription: Option<&AccountSubscription>,
 ) -> Option<ResolvedAccountPlan> {
@@ -147,6 +147,14 @@ pub(crate) fn resolve_effective_account_plan(
     }
 
     resolve_account_plan(token, snapshot)
+}
+
+pub(crate) fn token_plan_from_token(token: &Token) -> AccountTokenPlan {
+    AccountTokenPlan {
+        account_id: token.account_id.clone(),
+        id_token: token.id_token.clone(),
+        access_token: token.access_token.clone(),
+    }
 }
 
 pub(crate) fn normalize_account_plan_value(value: &str) -> Option<String> {
@@ -237,10 +245,9 @@ pub(crate) fn is_free_or_single_window_account(
         .unwrap_or(false)
 }
 
-pub(crate) fn account_matches_plan_filter(
-    storage: &Storage,
-    account_id: &str,
+pub(crate) fn account_matches_plan_filter_with_snapshot(
     token: &Token,
+    snapshot: Option<&UsageSnapshotRecord>,
     plan_filter: Option<&str>,
 ) -> bool {
     let Some(filter) = plan_filter.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -251,11 +258,8 @@ pub(crate) fn account_matches_plan_filter(
     }
 
     let normalized_filter = filter.to_ascii_lowercase();
-    let snapshot = storage
-        .latest_usage_snapshot_for_account(account_id)
-        .ok()
-        .flatten();
-    match resolve_account_plan(Some(token), snapshot.as_ref()) {
+    let token_plan = token_plan_from_token(token);
+    match resolve_account_plan(Some(&token_plan), snapshot) {
         Some(plan) => plan.normalized == normalized_filter,
         None => normalized_filter == "unknown",
     }
@@ -376,7 +380,7 @@ fn normalize_plan_type(value: &str) -> Option<ResolvedAccountPlan> {
 #[cfg(test)]
 mod tests {
     use super::{
-        account_matches_plan_filter, extract_plan_type_from_credits_json,
+        account_matches_plan_filter_with_snapshot, extract_plan_type_from_credits_json,
         extract_plan_type_from_id_token, is_free_or_single_window_account,
         is_free_plan_from_credits_json, is_free_plan_type, is_single_window_long_usage_snapshot,
         normalize_plan_type, resolve_account_plan,
@@ -693,8 +697,43 @@ mod tests {
             captured_at: now_ts(),
         };
 
-        let resolved = resolve_account_plan(Some(&token), Some(&usage)).expect("resolve plan");
+        let token_plan = super::token_plan_from_token(&token);
+        let resolved = resolve_account_plan(Some(&token_plan), Some(&usage)).expect("resolve plan");
         assert_eq!(resolved.normalized, "plus");
+    }
+
+    #[test]
+    fn account_plan_filter_with_preloaded_snapshot_matches_usage_plan() {
+        let token = Token {
+            account_id: "acc-free".to_string(),
+            id_token: "header.payload.sig".to_string(),
+            access_token: "header.payload.sig".to_string(),
+            refresh_token: "refresh".to_string(),
+            api_key_access_token: None,
+            last_refresh: now_ts(),
+        };
+        let usage = UsageSnapshotRecord {
+            account_id: "acc-free".to_string(),
+            used_percent: Some(10.0),
+            window_minutes: Some(300),
+            resets_at: None,
+            secondary_used_percent: Some(20.0),
+            secondary_window_minutes: Some(10_080),
+            secondary_resets_at: None,
+            credits_json: Some(r#"{"planType":"free"}"#.to_string()),
+            captured_at: now_ts(),
+        };
+
+        assert!(super::account_matches_plan_filter_with_snapshot(
+            &token,
+            Some(&usage),
+            Some("free")
+        ));
+        assert!(!super::account_matches_plan_filter_with_snapshot(
+            &token,
+            Some(&usage),
+            Some("plus")
+        ));
     }
 
     /// 函数 `account_plan_filter_unknown_accepts_unresolved_accounts`
@@ -710,23 +749,7 @@ mod tests {
     /// 无
     #[test]
     fn account_plan_filter_unknown_accepts_unresolved_accounts() {
-        let storage = Storage::open_in_memory().expect("open");
-        storage.init().expect("init");
         let now = now_ts();
-        storage
-            .insert_account(&Account {
-                id: "acc-unknown".to_string(),
-                label: "acc-unknown".to_string(),
-                issuer: "issuer".to_string(),
-                chatgpt_account_id: None,
-                workspace_id: None,
-                group_name: None,
-                sort: 0,
-                status: "active".to_string(),
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("insert account");
         let token = Token {
             account_id: "acc-unknown".to_string(),
             id_token: "header.payload.sig".to_string(),
@@ -735,18 +758,15 @@ mod tests {
             api_key_access_token: None,
             last_refresh: now,
         };
-        storage.insert_token(&token).expect("insert token");
 
-        assert!(account_matches_plan_filter(
-            &storage,
-            "acc-unknown",
+        assert!(account_matches_plan_filter_with_snapshot(
             &token,
+            None,
             Some("unknown"),
         ));
-        assert!(!account_matches_plan_filter(
-            &storage,
-            "acc-unknown",
+        assert!(!account_matches_plan_filter_with_snapshot(
             &token,
+            None,
             Some("plus"),
         ));
     }

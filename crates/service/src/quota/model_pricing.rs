@@ -1,4 +1,5 @@
 use codexmanager_core::storage::{now_ts, ModelPriceRule, Storage};
+use std::sync::{Mutex, OnceLock};
 
 pub(crate) const PRICE_SEED_VERSION: &str = "2026-05-11";
 
@@ -15,6 +16,14 @@ struct PriceSeed {
     long_context_output_price_per_1m: Option<f64>,
     source_url: &'static str,
 }
+
+#[derive(Debug, Clone)]
+struct EnabledPriceRuleCache {
+    db_path: String,
+    rules: Vec<ModelPriceRule>,
+}
+
+static ENABLED_PRICE_RULE_CACHE: OnceLock<Mutex<Option<EnabledPriceRuleCache>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModelPriceMatch {
@@ -415,6 +424,7 @@ pub(crate) fn ensure_official_price_seed(storage: &Storage) -> Result<(), String
             })
             .map_err(|err| format!("insert official model price seed failed: {err}"))?;
     }
+    invalidate_price_rule_cache();
     Ok(())
 }
 
@@ -423,6 +433,45 @@ pub(crate) fn load_enabled_price_rules(storage: &Storage) -> Result<Vec<ModelPri
     storage
         .list_enabled_model_price_rules()
         .map_err(|err| format!("list enabled model price rules failed: {err}"))
+}
+
+pub(crate) fn invalidate_price_rule_cache() {
+    let mut cache = crate::lock_utils::lock_recover(
+        ENABLED_PRICE_RULE_CACHE.get_or_init(|| Mutex::new(None)),
+        "enabled_price_rule_cache",
+    );
+    *cache = None;
+}
+
+fn current_price_rule_cache_db_path() -> Option<String> {
+    let db_path = std::env::var("CODEXMANAGER_DB_PATH").ok()?;
+    let db_path = db_path.trim();
+    if db_path.is_empty() || db_path == "<unset>" {
+        return None;
+    }
+    Some(db_path.to_string())
+}
+
+fn load_enabled_price_rules_cached(storage: &Storage) -> Result<Vec<ModelPriceRule>, String> {
+    let Some(db_path) = current_price_rule_cache_db_path() else {
+        return load_enabled_price_rules(storage);
+    };
+
+    let cache_lock = ENABLED_PRICE_RULE_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let cache = crate::lock_utils::lock_recover(cache_lock, "enabled_price_rule_cache");
+        if let Some(cached) = cache.as_ref().filter(|cached| cached.db_path == db_path) {
+            return Ok(cached.rules.clone());
+        }
+    }
+
+    let rules = load_enabled_price_rules(storage)?;
+    let mut cache = crate::lock_utils::lock_recover(cache_lock, "enabled_price_rule_cache");
+    *cache = Some(EnabledPriceRuleCache {
+        db_path,
+        rules: rules.clone(),
+    });
+    Ok(rules)
 }
 
 pub(crate) fn wildcard_matches(pattern: &str, value: &str) -> bool {
@@ -660,8 +709,7 @@ pub(crate) fn estimate_cost_usd_for_log(
     let input = input_tokens.unwrap_or(0);
     let cached = cached_input_tokens.unwrap_or(0);
     let output = output_tokens.unwrap_or(0);
-    let cost = storage
-        .list_enabled_model_price_rules()
+    let cost = load_enabled_price_rules_cached(storage)
         .ok()
         .filter(|rules| !rules.is_empty())
         .map(|rules| estimate_cost_with_rules(&rules, model, input, cached, output))
@@ -673,6 +721,7 @@ pub(crate) fn estimate_cost_usd_for_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_rule(
         id: &str,
@@ -718,6 +767,43 @@ mod tests {
             delta < 0.000_000_1,
             "expected {expected}, got {actual}, delta {delta}"
         );
+    }
+
+    fn isolated_test_db_path(name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "codexmanager-{name}-{}-{nanos}.sqlite",
+            std::process::id()
+        ));
+        path.to_string_lossy().into_owned()
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_deref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+            invalidate_price_rule_cache();
+        }
     }
 
     #[test]
@@ -812,5 +898,52 @@ mod tests {
         assert_close(long_context.input_price_per_1m, 5.0);
         assert_close(long_context.cached_input_price_per_1m, 0.5);
         assert_close(long_context.output_price_per_1m, 22.5);
+    }
+
+    #[test]
+    fn estimate_cost_usd_for_log_reuses_cached_enabled_price_rules_until_invalidated() {
+        let _lock = crate::test_env_guard();
+        invalidate_price_rule_cache();
+        let _guard = EnvGuard::set(
+            "CODEXMANAGER_DB_PATH",
+            &isolated_test_db_path("price-cache-test"),
+        );
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        let mut rule = test_rule(
+            "cached-rule",
+            "cache-model",
+            "exact",
+            50_000,
+            1.0,
+            Some(1.0),
+            1.0,
+        );
+        rule.created_at = now;
+        rule.updated_at = now;
+        storage
+            .upsert_model_price_rule(&rule)
+            .expect("insert first price rule");
+
+        let first =
+            estimate_cost_usd_for_log(&storage, Some("cache-model"), Some(1_000_000), None, None);
+        assert_close(first, 1.0);
+
+        rule.input_price_per_1m = Some(2.0);
+        rule.cached_input_price_per_1m = Some(2.0);
+        rule.updated_at = now + 1;
+        storage
+            .upsert_model_price_rule(&rule)
+            .expect("update price rule");
+
+        let cached =
+            estimate_cost_usd_for_log(&storage, Some("cache-model"), Some(1_000_000), None, None);
+        assert_close(cached, 1.0);
+
+        invalidate_price_rule_cache();
+        let refreshed =
+            estimate_cost_usd_for_log(&storage, Some("cache-model"), Some(1_000_000), None, None);
+        assert_close(refreshed, 2.0);
     }
 }

@@ -1,11 +1,11 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, RequestLogListParams};
+use codexmanager_core::storage::Storage;
 
+use crate::storage_helpers::StorageHandle;
 use crate::RpcActor;
-use crate::{
-    requestlog_clear, requestlog_list, requestlog_summary, requestlog_today_summary,
-};
+use crate::{requestlog_clear, requestlog_list, requestlog_summary, requestlog_today_summary};
 
-fn actor_key_ids(actor: &RpcActor) -> Result<Vec<String>, String> {
+fn actor_key_ids_with_storage(storage: &Storage, actor: &RpcActor) -> Result<Vec<String>, String> {
     if actor.is_admin() {
         return Ok(Vec::new());
     }
@@ -13,7 +13,16 @@ fn actor_key_ids(actor: &RpcActor) -> Result<Vec<String>, String> {
         .user_id
         .as_deref()
         .ok_or_else(|| "permission_denied: requestlog requires user session".to_string())?;
-    crate::list_api_key_ids_for_user(user_id)
+    storage
+        .list_api_key_ids_for_user(user_id)
+        .map_err(|err| format!("list api key ids for user failed: {err}"))
+}
+
+fn member_requestlog_scope(actor: &RpcActor) -> Result<(StorageHandle, Vec<String>), String> {
+    let storage =
+        crate::storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let key_ids = actor_key_ids_with_storage(&storage, actor)?;
+    Ok((storage, key_ids))
 }
 
 /// 函数 `try_handle`
@@ -42,8 +51,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 if actor.is_admin() {
                     requestlog_list::read_request_log_page(params)
                 } else {
-                    let key_ids = actor_key_ids(actor)?;
-                    requestlog_list::read_request_log_page_for_key_ids(params, &key_ids)
+                    let (storage, key_ids) = member_requestlog_scope(actor)?;
+                    requestlog_list::read_request_log_page_for_key_ids_with_storage(
+                        &storage, params, &key_ids,
+                    )
                 }
             }))
         }
@@ -60,9 +71,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 if actor.is_admin() {
                     requestlog_summary::read_request_log_filter_summary(params)
                 } else {
-                    let key_ids = actor_key_ids(actor)?;
-                    requestlog_summary::read_request_log_filter_summary_for_key_ids(
-                        params, &key_ids,
+                    let (storage, key_ids) = member_requestlog_scope(actor)?;
+                    requestlog_summary::read_request_log_filter_summary_for_key_ids_with_storage(
+                        &storage, params, &key_ids,
                     )
                 }
             }))
@@ -74,8 +85,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             super::value_or_error(if actor.is_admin() {
                 requestlog_today_summary::read_requestlog_today_summary(day_start_ts, day_end_ts)
             } else {
-                actor_key_ids(actor).and_then(|key_ids| {
-                    requestlog_today_summary::read_requestlog_today_summary_for_key_ids(
+                member_requestlog_scope(actor).and_then(|(storage, key_ids)| {
+                    requestlog_today_summary::read_requestlog_today_summary_for_key_ids_with_storage(
+                        &storage,
                         day_start_ts,
                         day_end_ts,
                         &key_ids,

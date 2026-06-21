@@ -1,12 +1,13 @@
 use bytes::Bytes;
 use codexmanager_core::storage::{Account, Storage, Token};
+use std::collections::HashMap;
 use std::time::Instant;
 use tiny_http::Request;
 
 use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::super::executor::CandidateUpstreamDecision;
 use super::super::support::candidates::{
-    account_model_override, allow_openai_fallback_for_account, free_account_model_override,
+    allow_openai_fallback_for_account, free_account_model_override,
 };
 use super::super::support::deadline;
 use super::candidate_attempt::{
@@ -46,6 +47,37 @@ fn extract_prompt_cache_key_for_trace(body: &[u8]) -> Option<String> {
 
 fn should_forward_thread_anchor_as_prompt_cache_key(protocol_type: &str) -> bool {
     protocol_type != crate::apikey_profile::PROTOCOL_GEMINI_NATIVE
+}
+
+fn account_model_overrides_for_candidates(
+    storage: &Storage,
+    platform_model: Option<&str>,
+    candidates: &[(Account, Token)],
+) -> HashMap<String, String> {
+    let Some(model) = platform_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return HashMap::new();
+    };
+    let account_ids = candidates
+        .iter()
+        .map(|(account, _)| account.id.clone())
+        .collect::<Vec<_>>();
+    match storage.list_enabled_model_source_mappings_for_sources(
+        model,
+        "openai_account",
+        &account_ids,
+    ) {
+        Ok(mappings) => mappings
+            .into_iter()
+            .map(|(account_id, mapping)| (account_id, mapping.upstream_model))
+            .collect(),
+        Err(err) => {
+            log::warn!("gateway account model override prefetch failed: {err}");
+            HashMap::new()
+        }
+    }
 }
 
 pub(in super::super) enum CandidateExecutionResult {
@@ -208,6 +240,8 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut last_attempt_url = None;
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
+    let account_model_overrides =
+        account_model_overrides_for_candidates(storage, model_for_log, &candidates);
     for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
         if deadline::is_expired(request_deadline) {
             let request = request
@@ -239,7 +273,9 @@ pub(in super::super) fn execute_candidate_sequence(
                 )
             })
             .unwrap_or_else(|| incoming_headers.clone());
-        let attempt_model_override = account_model_override(storage, model_for_log, &account)
+        let attempt_model_override = account_model_overrides
+            .get(account.id.as_str())
+            .cloned()
             .or_else(|| free_account_model_override(storage, &account, &token));
         let attempt_allow_openai_fallback =
             allow_openai_fallback && allow_openai_fallback_for_account(storage, &account, &token);

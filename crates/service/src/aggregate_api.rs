@@ -6,7 +6,7 @@ use codexmanager_core::rpc::types::{
     AggregateApiTestResult, ManagedModelSourceModelEntry,
 };
 use codexmanager_core::storage::{
-    now_ts, AggregateApi, AggregateApiSupplierModel, ModelSourceModel,
+    now_ts, AggregateApi, AggregateApiSupplierIdentity, AggregateApiSupplierModel, ModelSourceModel,
 };
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -438,7 +438,7 @@ fn normalize_supplier_model_status(value: Option<String>) -> Result<String, Stri
     }
 }
 
-fn supplier_template_key_for_api(api: &AggregateApi) -> String {
+fn supplier_template_key_for_api(api: &AggregateApiSupplierIdentity) -> String {
     api.supplier_name
         .as_deref()
         .map(str::trim)
@@ -541,8 +541,11 @@ fn normalize_action_override(
 
 #[cfg(test)]
 mod tests {
-    use codexmanager_core::storage::AggregateApi;
+    use codexmanager_core::rpc::types::AggregateApiSupplierModelImportParams;
+    use codexmanager_core::storage::{AggregateApi, AggregateApiSupplierModel, Storage};
     use serde_json::Value;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -551,12 +554,46 @@ mod tests {
     use super::{
         action_path_or_default, build_codex_models_probe_url, claude_probe_fallback_models_for_api,
         extract_custom_balance, extract_generic_balance, extract_model_ids_from_models_response,
-        extract_new_api_balance, normalize_action_override, normalize_custom_balance_query_config,
-        normalize_provider_type, normalize_provider_type_value, probe_claude_endpoint,
-        probe_codex_endpoint, provider_default_url, CustomBalanceQueryConfig,
+        extract_new_api_balance, import_aggregate_api_supplier_models, list_aggregate_apis,
+        normalize_action_override, normalize_custom_balance_query_config, normalize_provider_type,
+        normalize_provider_type_value, probe_claude_endpoint, probe_codex_endpoint,
+        provider_default_url, read_aggregate_api_secret, CustomBalanceQueryConfig,
         AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_GEMINI,
         ALIBABA_CODING_PLAN_PROBE_MODEL, CLAUDE_DEFAULT_PROBE_MODEL,
     };
+
+    static AGGREGATE_API_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn new_test_dir(prefix: &str) -> PathBuf {
+        let seq = AGGREGATE_API_TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("{prefix}-{}-{seq}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         AggregateApi {
@@ -585,6 +622,134 @@ mod tests {
             last_balance_error: None,
             last_balance_json: None,
         }
+    }
+
+    #[test]
+    fn list_aggregate_apis_loads_model_assignments_for_existing_apis_only() {
+        let _lock = crate::test_env_guard();
+        let dir = new_test_dir("aggregate-api-list-assignments");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let mut storage = Storage::open(&db_path).expect("open db");
+        storage.init().expect("init db");
+        let mut api = aggregate_api_with_action(None);
+        api.id = "agg-listed".to_string();
+        storage.insert_aggregate_api(&api).expect("insert api");
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-listed",
+                &["gpt-visible".to_string()],
+            )
+            .expect("assign listed api model");
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-unlisted",
+                &["gpt-hidden".to_string()],
+            )
+            .expect("assign unlisted api model");
+
+        let items = list_aggregate_apis().expect("list aggregate APIs");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "agg-listed");
+        assert_eq!(items[0].model_slugs, vec!["gpt-visible".to_string()]);
+        assert!(!items[0].model_slugs.contains(&"gpt-hidden".to_string()));
+    }
+
+    #[test]
+    fn import_supplier_models_reads_supplier_identity_projection() {
+        let _lock = crate::test_env_guard();
+        let dir = new_test_dir("aggregate-api-import-supplier-models");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open db");
+        storage.init().expect("init db");
+        let mut api = aggregate_api_with_action(None);
+        api.id = "api-import-template".to_string();
+        api.provider_type = "openai-compatible".to_string();
+        api.supplier_name = Some("Template Supplier".to_string());
+        api.url = "https://ignored-fallback.example.test/v1".to_string();
+        api.auth_params_json = Some(r#"{"ignored":"secret"}"#.to_string());
+        api.last_balance_json = Some(r#"{"ignored":true}"#.to_string());
+        storage.insert_aggregate_api(&api).expect("insert api");
+        storage
+            .upsert_aggregate_api_supplier_model(&AggregateApiSupplierModel {
+                supplier_key: "Template Supplier".to_string(),
+                provider_type: "codex".to_string(),
+                upstream_model: "provider-model-a".to_string(),
+                display_name: Some("Provider Model A".to_string()),
+                status: "available".to_string(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("insert available template");
+        storage
+            .upsert_aggregate_api_supplier_model(&AggregateApiSupplierModel {
+                supplier_key: "Template Supplier".to_string(),
+                provider_type: "codex".to_string(),
+                upstream_model: "provider-model-disabled".to_string(),
+                display_name: None,
+                status: "disabled".to_string(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .expect("insert disabled template");
+
+        let result = import_aggregate_api_supplier_models(AggregateApiSupplierModelImportParams {
+            api_id: "api-import-template".to_string(),
+            supplier_key: None,
+            provider_type: None,
+        })
+        .expect("import supplier models");
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].source_id, "api-import-template");
+        assert_eq!(result.items[0].upstream_model, "provider-model-a");
+        let imported = Storage::open(&db_path)
+            .expect("reopen db")
+            .list_model_source_models(Some("aggregate_api"), Some("api-import-template"))
+            .expect("list imported source models");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0].upstream_model, "provider-model-a");
+    }
+
+    #[test]
+    fn read_aggregate_api_secret_uses_auth_type_projection() {
+        let _lock = crate::test_env_guard();
+        let dir = new_test_dir("aggregate-api-read-secret");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open db");
+        storage.init().expect("init db");
+        let mut api = aggregate_api_with_action(None);
+        api.id = "api-userpass-secret".to_string();
+        api.auth_type = "userpass".to_string();
+        api.auth_params_json = Some(r#"{"ignored":"secret"}"#.to_string());
+        api.last_balance_json = Some(r#"{"ignored":true}"#.to_string());
+        storage.insert_aggregate_api(&api).expect("insert api");
+        storage
+            .upsert_aggregate_api_secret(
+                "api-userpass-secret",
+                r#"{"username":"user-a","password":"pass-a"}"#,
+            )
+            .expect("insert secret");
+
+        let result =
+            read_aggregate_api_secret("api-userpass-secret").expect("read aggregate api secret");
+
+        assert_eq!(result.id, "api-userpass-secret");
+        assert_eq!(result.auth_type, "userpass");
+        assert_eq!(result.key, "");
+        assert_eq!(result.username.as_deref(), Some("user-a"));
+        assert_eq!(result.password.as_deref(), Some("pass-a"));
+        let err = read_aggregate_api_secret("api-missing").expect_err("missing api should error");
+        assert_eq!(err, "aggregate api not found");
     }
 
     #[test]
@@ -2355,22 +2520,18 @@ fn probe_gemini_endpoint(
 /// 返回函数执行结果
 pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let items = storage
-        .list_aggregate_apis()
-        .map_err(|err| format!("list aggregate apis failed: {err}"))?;
-    let assignments = storage
-        .list_quota_source_model_assignments()
-        .map_err(|err| format!("list aggregate api model assignments failed: {err}"))?;
+    let snapshot = storage
+        .load_aggregate_api_list_snapshot()
+        .map_err(|err| format!("load aggregate api list failed: {err}"))?;
     let mut models_by_api = std::collections::HashMap::<String, Vec<String>>::new();
-    for assignment in assignments {
-        if assignment.source_kind == "aggregate_api" {
-            models_by_api
-                .entry(assignment.source_id)
-                .or_default()
-                .push(assignment.model_slug);
-        }
+    for assignment in snapshot.model_assignments {
+        models_by_api
+            .entry(assignment.source_id)
+            .or_default()
+            .push(assignment.model_slug);
     }
-    Ok(items
+    Ok(snapshot
+        .items
         .into_iter()
         .map(|item| AggregateApiSummary {
             model_slugs: models_by_api.remove(item.id.as_str()).unwrap_or_default(),
@@ -2470,7 +2631,7 @@ pub(crate) fn import_aggregate_api_supplier_models(
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let api_id = normalize_required_text("apiId", params.api_id)?;
     let api = storage
-        .find_aggregate_api_by_id(api_id.as_str())
+        .find_aggregate_api_supplier_identity_by_id(api_id.as_str())
         .map_err(|err| format!("read aggregate api failed: {err}"))?
         .ok_or_else(|| "aggregate api not found".to_string())?;
     let supplier_key = params
@@ -2737,7 +2898,7 @@ pub(crate) fn update_aggregate_api(
     }
     let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let existing = storage
-        .find_aggregate_api_by_id(api_id)
+        .find_aggregate_api_update_config_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
     let existing_auth_type = normalize_auth_type(Some(existing.auth_type.clone()))
@@ -2971,15 +3132,14 @@ pub(crate) fn read_aggregate_api_secret(api_id: &str) -> Result<AggregateApiSecr
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let config = storage
+        .find_aggregate_api_secret_config_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let key = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let key = config
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let auth_type = normalize_auth_type(Some(api.auth_type))?;
+    let auth_type = normalize_auth_type(Some(config.auth_type))?;
     if auth_type == AGGREGATE_API_AUTH_USERPASS {
         let parsed: UserPassSecret = serde_json::from_str(key.as_str())
             .map_err(|_| "invalid aggregate api secret".to_string())?;

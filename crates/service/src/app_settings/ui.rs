@@ -28,7 +28,7 @@ const VALID_UI_LOCALES: &[&str] = &["zh-CN", "en", "ru", "ko"];
 ///
 /// # 返回
 /// 返回函数执行结果
-fn normalize_ui_theme(raw: Option<&str>) -> String {
+pub(super) fn normalize_ui_theme(raw: Option<&str>) -> String {
     let candidate = raw.unwrap_or(DEFAULT_UI_THEME).trim().to_ascii_lowercase();
     if VALID_UI_THEMES.iter().any(|theme| *theme == candidate) {
         candidate
@@ -48,7 +48,7 @@ fn normalize_ui_theme(raw: Option<&str>) -> String {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn normalize_ui_appearance_preset(raw: Option<&str>) -> String {
+pub(super) fn normalize_ui_appearance_preset(raw: Option<&str>) -> String {
     let candidate = raw
         .unwrap_or(DEFAULT_UI_APPEARANCE_PRESET)
         .trim()
@@ -63,7 +63,7 @@ fn normalize_ui_appearance_preset(raw: Option<&str>) -> String {
     }
 }
 
-fn normalize_ui_locale(raw: Option<&str>) -> String {
+pub(super) fn normalize_ui_locale(raw: Option<&str>) -> String {
     let candidate = raw.unwrap_or(DEFAULT_UI_LOCALE).trim();
     let normalized = candidate.to_ascii_lowercase();
     let next_value = match normalized.as_str() {
@@ -287,10 +287,6 @@ pub fn set_ui_appearance_preset(preset: Option<&str>) -> Result<String, String> 
     let normalized = normalize_ui_appearance_preset(preset);
     save_persisted_app_setting(APP_SETTING_UI_APPEARANCE_PRESET_KEY, Some(&normalized))?;
     Ok(normalized)
-}
-
-pub fn current_ui_locale() -> String {
-    normalize_ui_locale(get_persisted_app_setting(APP_SETTING_UI_LOCALE_KEY).as_deref())
 }
 
 pub fn set_ui_locale(locale: Option<&str>) -> Result<String, String> {

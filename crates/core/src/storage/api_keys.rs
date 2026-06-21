@@ -1,7 +1,10 @@
 use rusqlite::{params_from_iter, Result, Row};
 
 use super::key_id_filters::{key_id_in_clause, normalize_key_ids, SQLITE_IN_CLAUSE_BATCH_SIZE};
-use super::{now_ts, ApiKey, Storage};
+use super::{
+    now_ts, ApiKey, ApiKeyCodexProfileCandidate, ApiKeyListSummary, ApiKeyProfileConfig,
+    ApiKeyQuotaSummary, ApiKeyStatus, Storage,
+};
 
 const API_KEY_SELECT_SQL: &str = "SELECT
     k.id,
@@ -25,6 +28,54 @@ const API_KEY_SELECT_SQL: &str = "SELECT
  FROM api_keys k
  LEFT JOIN api_key_profiles p ON p.key_id = k.id
  LEFT JOIN aggregate_apis a ON a.id = k.aggregate_api_id";
+
+const API_KEY_SUMMARY_SELECT_SQL: &str = "SELECT
+    k.id,
+    k.name,
+    COALESCE(p.default_model, k.model_slug) AS model_slug,
+    COALESCE(p.reasoning_effort, k.reasoning_effort) AS reasoning_effort,
+    p.service_tier,
+    COALESCE(k.rotation_strategy, 'account_rotation') AS rotation_strategy,
+    k.aggregate_api_id,
+    k.account_plan_filter,
+    a.url AS aggregate_api_url,
+    COALESCE(p.client_type, 'codex') AS client_type,
+    COALESCE(p.protocol_type, 'openai_compat') AS protocol_type,
+    COALESCE(p.auth_scheme, 'authorization_bearer') AS auth_scheme,
+    p.upstream_base_url,
+    p.static_headers_json,
+    k.status,
+    q.quota_limit_tokens,
+    k.created_at,
+    k.last_used_at
+ FROM api_keys k
+ LEFT JOIN api_key_profiles p ON p.key_id = k.id
+ LEFT JOIN aggregate_apis a ON a.id = k.aggregate_api_id
+ LEFT JOIN api_key_quota_limits q
+   ON q.key_id = k.id
+  AND q.quota_limit_tokens > 0";
+
+const API_KEY_QUOTA_SUMMARY_SELECT_SQL: &str = "SELECT
+    k.id,
+    k.name,
+    COALESCE(p.default_model, k.model_slug) AS model_slug,
+    k.status,
+    q.quota_limit_tokens,
+    k.last_used_at
+ FROM api_keys k
+ LEFT JOIN api_key_profiles p ON p.key_id = k.id
+ LEFT JOIN api_key_quota_limits q
+   ON q.key_id = k.id
+  AND q.quota_limit_tokens > 0";
+
+const API_KEY_CODEX_PROFILE_CANDIDATE_SELECT_SQL: &str = "SELECT
+    k.id,
+    k.name,
+    COALESCE(p.default_model, k.model_slug) AS model_slug,
+    COALESCE(p.reasoning_effort, k.reasoning_effort) AS reasoning_effort,
+    k.status
+ FROM api_keys k
+ LEFT JOIN api_key_profiles p ON p.key_id = k.id";
 
 impl Storage {
     /// 函数 `insert_api_key`
@@ -109,6 +160,73 @@ impl Storage {
         Ok(out)
     }
 
+    pub fn list_api_key_summaries(&self) -> Result<Vec<ApiKeyListSummary>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "{API_KEY_SUMMARY_SELECT_SQL} ORDER BY k.created_at DESC"
+        ))?;
+        let rows = stmt.query_map([], map_api_key_summary_row)?;
+        rows.collect()
+    }
+
+    pub fn list_api_key_quota_summaries(&self) -> Result<Vec<ApiKeyQuotaSummary>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "{API_KEY_QUOTA_SUMMARY_SELECT_SQL} ORDER BY k.created_at DESC, k.id ASC"
+        ))?;
+        let rows = stmt.query_map([], map_api_key_quota_summary_row)?;
+        rows.collect()
+    }
+
+    pub fn list_api_key_codex_profile_candidates(
+        &self,
+    ) -> Result<Vec<ApiKeyCodexProfileCandidate>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "{API_KEY_CODEX_PROFILE_CANDIDATE_SELECT_SQL}
+             WHERE k.status IS NULL OR LOWER(TRIM(k.status)) <> 'disabled'
+             ORDER BY k.created_at DESC, k.id ASC"
+        ))?;
+        let rows = stmt.query_map([], map_api_key_codex_profile_candidate_row)?;
+        rows.collect()
+    }
+
+    pub fn list_api_key_summaries_for_ids(
+        &self,
+        key_ids: &[String],
+    ) -> Result<Vec<ApiKeyListSummary>> {
+        let key_ids = normalize_key_ids(key_ids);
+        if key_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        for chunk in key_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            out.extend(list_api_key_summaries_for_ids_chunk(self, chunk)?);
+        }
+        out.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(out)
+    }
+
+    pub fn list_api_key_summaries_for_user(&self, user_id: &str) -> Result<Vec<ApiKeyListSummary>> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "{API_KEY_SUMMARY_SELECT_SQL}
+             INNER JOIN api_key_owners owner
+                ON owner.key_id = k.id
+               AND owner.owner_kind = 'user'
+               AND owner.owner_user_id = ?1
+             ORDER BY k.created_at DESC, k.id ASC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([user_id], map_api_key_summary_row)?;
+        rows.collect()
+    }
+
     /// 函数 `list_api_keys_for_ids`
     ///
     /// 作者: gaohongshun
@@ -189,6 +307,68 @@ impl Storage {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn find_api_key_status_by_id(&self, key_id: &str) -> Result<Option<ApiKeyStatus>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, status
+             FROM api_keys
+             WHERE id = ?1
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([key_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ApiKeyStatus {
+                id: row.get(0)?,
+                status: row.get(1)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn find_api_key_profile_config_by_id(
+        &self,
+        key_id: &str,
+    ) -> Result<Option<ApiKeyProfileConfig>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                COALESCE(p.protocol_type, 'openai_compat'),
+                p.upstream_base_url,
+                p.static_headers_json,
+                p.service_tier
+             FROM api_keys k
+             LEFT JOIN api_key_profiles p ON p.key_id = k.id
+             WHERE k.id = ?1
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([key_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ApiKeyProfileConfig {
+                protocol_type: row.get(0)?,
+                upstream_base_url: row.get(1)?,
+                static_headers_json: row.get(2)?,
+                service_tier: row.get(3)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn api_key_exists(&self, key_id: &str) -> Result<bool> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = ?1)",
+            [key_id],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn api_key_hash_exists(&self, key_hash: &str) -> Result<bool> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE key_hash = ?1)",
+            [key_hash],
+            |row| row.get(0),
+        )
     }
 
     /// 函数 `update_api_key_last_used`
@@ -711,16 +891,31 @@ fn list_api_keys_for_ids_chunk(storage: &Storage, key_ids: &[String]) -> Result<
     };
     let sql = format!(
         "{API_KEY_SELECT_SQL}
-         WHERE {clause}
-         ORDER BY k.created_at DESC, k.id ASC"
+         WHERE {clause}"
     );
     let mut stmt = storage.conn.prepare(&sql)?;
-    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut rows = stmt.query(params_from_iter(params))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         out.push(map_api_key_row(row)?);
     }
     Ok(out)
+}
+
+fn list_api_key_summaries_for_ids_chunk(
+    storage: &Storage,
+    key_ids: &[String],
+) -> Result<Vec<ApiKeyListSummary>> {
+    let Some((clause, params)) = key_id_in_clause("k.id", key_ids) else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "{API_KEY_SUMMARY_SELECT_SQL}
+         WHERE {clause}"
+    );
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(params), map_api_key_summary_row)?;
+    rows.collect()
 }
 
 /// 函数 `map_api_key_row`
@@ -754,6 +949,50 @@ fn map_api_key_row(row: &Row<'_>) -> Result<ApiKey> {
         status: row.get(15)?,
         created_at: row.get(16)?,
         last_used_at: row.get(17)?,
+    })
+}
+
+fn map_api_key_summary_row(row: &Row<'_>) -> Result<ApiKeyListSummary> {
+    Ok(ApiKeyListSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        model_slug: row.get(2)?,
+        reasoning_effort: row.get(3)?,
+        service_tier: row.get(4)?,
+        rotation_strategy: row.get(5)?,
+        aggregate_api_id: row.get(6)?,
+        account_plan_filter: row.get(7)?,
+        aggregate_api_url: row.get(8)?,
+        client_type: row.get(9)?,
+        protocol_type: row.get(10)?,
+        auth_scheme: row.get(11)?,
+        upstream_base_url: row.get(12)?,
+        static_headers_json: row.get(13)?,
+        status: row.get(14)?,
+        quota_limit_tokens: row.get(15)?,
+        created_at: row.get(16)?,
+        last_used_at: row.get(17)?,
+    })
+}
+
+fn map_api_key_quota_summary_row(row: &Row<'_>) -> Result<ApiKeyQuotaSummary> {
+    Ok(ApiKeyQuotaSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        model_slug: row.get(2)?,
+        status: row.get(3)?,
+        quota_limit_tokens: row.get(4)?,
+        last_used_at: row.get(5)?,
+    })
+}
+
+fn map_api_key_codex_profile_candidate_row(row: &Row<'_>) -> Result<ApiKeyCodexProfileCandidate> {
+    Ok(ApiKeyCodexProfileCandidate {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        model_slug: row.get(2)?,
+        reasoning_effort: row.get(3)?,
+        status: row.get(4)?,
     })
 }
 

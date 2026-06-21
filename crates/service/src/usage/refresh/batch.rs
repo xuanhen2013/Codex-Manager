@@ -1,17 +1,20 @@
-use crate::account_status::is_account_refresh_blocked_status_reason;
-use codexmanager_core::storage::{Account, AggregateApi, Storage, Token};
+#[cfg(test)]
+use codexmanager_core::storage::AccountTokenCandidate;
+#[cfg(test)]
+use codexmanager_core::storage::AccountUsageRefreshTarget;
+use codexmanager_core::storage::{Storage, Token};
 use crossbeam_channel::unbounded;
-use std::collections::HashSet;
+#[cfg(test)]
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{
-    build_workspace_map_from_accounts, notify_usage_refresh_completed, open_storage,
-    record_usage_refresh_failure, record_usage_refresh_metrics, refresh_usage_for_token,
-    DEFAULT_USAGE_POLL_BATCH_LIMIT, DEFAULT_USAGE_POLL_CYCLE_BUDGET_SECS,
-    ENV_USAGE_POLL_BATCH_LIMIT, ENV_USAGE_POLL_CYCLE_BUDGET_SECS, USAGE_POLL_CURSOR,
-    USAGE_REFRESH_WORKERS,
+    notify_usage_refresh_completed, open_storage, record_usage_refresh_failure,
+    record_usage_refresh_metrics, refresh_usage_for_token, DEFAULT_USAGE_POLL_BATCH_LIMIT,
+    DEFAULT_USAGE_POLL_CYCLE_BUDGET_SECS, ENV_USAGE_POLL_BATCH_LIMIT,
+    ENV_USAGE_POLL_CYCLE_BUDGET_SECS, USAGE_POLL_CURSOR, USAGE_REFRESH_WORKERS,
 };
 
 /// 函数 `refresh_usage_for_all_accounts`
@@ -27,12 +30,7 @@ use super::{
 /// 返回函数执行结果
 pub(crate) fn refresh_usage_for_all_accounts() -> Result<(), String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let accounts = storage.list_accounts().map_err(|e| e.to_string())?;
-    let tasks = build_usage_refresh_tasks(
-        storage.list_tokens().map_err(|e| e.to_string())?,
-        &accounts,
-        &load_banned_account_ids(&storage, &accounts)?,
-    );
+    let tasks = load_refreshable_usage_refresh_tasks(&storage)?;
     if tasks.is_empty() {
         return Ok(());
     }
@@ -55,17 +53,12 @@ pub(crate) fn refresh_usage_for_all_accounts() -> Result<(), String> {
 /// 返回函数执行结果
 pub(crate) fn refresh_usage_for_polling_batch() -> Result<(), String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let accounts = storage.list_accounts().map_err(|e| e.to_string())?;
-    let all_tasks = build_usage_refresh_tasks(
-        storage.list_tokens().map_err(|e| e.to_string())?,
-        &accounts,
-        &load_banned_account_ids(&storage, &accounts)?,
-    );
-    if all_tasks.is_empty() {
+    let tasks = load_refreshable_usage_refresh_tasks(&storage)?;
+    if tasks.is_empty() {
         return Ok(());
     }
 
-    let total = all_tasks.len();
+    let total = tasks.len();
     let start_cursor = USAGE_POLL_CURSOR.load(Ordering::Relaxed) % total;
     let batch_limit = usage_poll_batch_limit(total);
     let cycle_budget = usage_poll_cycle_budget();
@@ -73,7 +66,7 @@ pub(crate) fn refresh_usage_for_polling_batch() -> Result<(), String> {
     let indices = usage_poll_batch_indices(total, start_cursor, batch_limit);
     let selected_tasks = indices
         .into_iter()
-        .map(|index| all_tasks[index].clone())
+        .map(|index| tasks[index].clone())
         .collect::<Vec<_>>();
     let processed = run_usage_refresh_tasks(selected_tasks)?;
 
@@ -123,11 +116,9 @@ pub(crate) fn refresh_usage_and_aggregate_balances_for_polling_cycle() -> Result
 
 fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api_ids = build_aggregate_api_balance_refresh_ids(
-        storage
-            .list_aggregate_apis()
-            .map_err(|err| format!("list aggregate APIs failed: {err}"))?,
-    );
+    let api_ids = storage
+        .list_active_balance_query_aggregate_api_ids()
+        .map_err(|err| format!("list aggregate API balance query IDs failed: {err}"))?;
     drop(storage);
 
     if api_ids.is_empty() {
@@ -174,10 +165,44 @@ fn refresh_aggregate_api_balances_for_polling_cycle() -> Result<(), String> {
     Ok(())
 }
 
-fn build_aggregate_api_balance_refresh_ids(apis: Vec<AggregateApi>) -> Vec<String> {
-    apis.into_iter()
-        .filter(|api| api.balance_query_enabled && api.status.trim().eq_ignore_ascii_case("active"))
-        .map(|api| api.id)
+#[cfg(test)]
+pub(crate) fn load_refreshable_accounts(
+    storage: &Storage,
+) -> Result<Vec<AccountUsageRefreshTarget>, String> {
+    load_refreshable_accounts_impl(storage)
+}
+
+#[cfg(test)]
+fn load_refreshable_accounts_impl(
+    storage: &Storage,
+) -> Result<Vec<AccountUsageRefreshTarget>, String> {
+    storage
+        .list_account_usage_refresh_targets_by_statuses(&refreshable_account_statuses())
+        .map_err(|err| format!("list refreshable accounts failed: {err}"))
+}
+
+fn load_refreshable_usage_refresh_tasks(
+    storage: &Storage,
+) -> Result<Vec<UsageRefreshBatchTask>, String> {
+    storage
+        .list_account_usage_refresh_token_targets_by_statuses(&refreshable_account_statuses())
+        .map_err(|err| format!("list refreshable token accounts failed: {err}"))
+        .map(|targets| {
+            targets
+                .into_iter()
+                .map(|target| UsageRefreshBatchTask {
+                    account_id: target.account_id,
+                    token: target.token,
+                    workspace_id: target.workspace_id,
+                })
+                .collect()
+        })
+}
+
+fn refreshable_account_statuses() -> Vec<String> {
+    ["active", "inactive", "limited", "unavailable", "unknown"]
+        .into_iter()
+        .map(String::from)
         .collect()
 }
 
@@ -185,6 +210,13 @@ fn build_aggregate_api_balance_refresh_ids(apis: Vec<AggregateApi>) -> Vec<Strin
 struct UsageRefreshBatchTask {
     account_id: String,
     token: Token,
+    workspace_id: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct UsageRefreshTaskPlan {
+    account_id: String,
     workspace_id: Option<String>,
 }
 
@@ -201,29 +233,95 @@ struct UsageRefreshBatchTask {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn build_usage_refresh_tasks(
     tokens: Vec<Token>,
-    accounts: &[Account],
+    accounts: &[AccountUsageRefreshTarget],
     banned_ids: &HashSet<String>,
 ) -> Vec<UsageRefreshBatchTask> {
+    let plans = build_usage_refresh_task_plans(
+        tokens
+            .iter()
+            .map(|token| AccountTokenCandidate {
+                account_id: token.account_id.clone(),
+                has_access_token: !token.access_token.trim().is_empty(),
+                has_refresh_token: !token.refresh_token.trim().is_empty(),
+                last_refresh: token.last_refresh,
+            })
+            .collect(),
+        accounts,
+        banned_ids,
+    );
+    hydrate_usage_refresh_tasks(plans, tokens)
+}
+
+#[cfg(test)]
+fn build_usage_refresh_task_plans(
+    tokens: Vec<AccountTokenCandidate>,
+    accounts: &[AccountUsageRefreshTarget],
+    banned_ids: &HashSet<String>,
+) -> Vec<UsageRefreshTaskPlan> {
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<HashSet<_>>();
     let mut skipped_ids = accounts
         .iter()
         .filter(|account| is_account_refresh_skipped(account))
         .map(|account| account.id.clone())
         .collect::<HashSet<_>>();
     skipped_ids.extend(banned_ids.iter().cloned());
-    let workspace_map = build_workspace_map_from_accounts(accounts);
+    let workspace_map = build_workspace_map_from_refresh_targets(accounts);
 
     tokens
         .into_iter()
+        .filter(|token| account_ids.contains(&token.account_id))
+        .filter(|token| token.has_access_token && token.has_refresh_token)
         .filter(|token| !skipped_ids.contains(&token.account_id))
         .map(|token| {
             let account_id = token.account_id.clone();
-            UsageRefreshBatchTask {
+            UsageRefreshTaskPlan {
                 workspace_id: workspace_map.get(&account_id).cloned().unwrap_or(None),
-                token,
                 account_id,
             }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn build_usage_refresh_task_plans_from_targets(
+    accounts: &[AccountUsageRefreshTarget],
+    banned_ids: &HashSet<String>,
+) -> Vec<UsageRefreshTaskPlan> {
+    accounts
+        .iter()
+        .filter(|account| !is_account_refresh_skipped(account))
+        .filter(|account| !banned_ids.contains(&account.id))
+        .map(|account| UsageRefreshTaskPlan {
+            account_id: account.id.clone(),
+            workspace_id: account.workspace_id.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn hydrate_usage_refresh_tasks(
+    plans: Vec<UsageRefreshTaskPlan>,
+    tokens: Vec<Token>,
+) -> Vec<UsageRefreshBatchTask> {
+    let token_map = tokens
+        .into_iter()
+        .map(|token| (token.account_id.clone(), token))
+        .collect::<std::collections::HashMap<_, _>>();
+    plans
+        .into_iter()
+        .filter_map(|plan| {
+            let token = token_map.get(plan.account_id.as_str())?.clone();
+            Some(UsageRefreshBatchTask {
+                account_id: plan.account_id,
+                token,
+                workspace_id: plan.workspace_id,
+            })
         })
         .collect()
 }
@@ -313,36 +411,6 @@ fn run_usage_refresh_task(storage: &Storage, task: UsageRefreshBatchTask) {
     }
 }
 
-/// 函数 `load_banned_account_ids`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - storage: 参数 storage
-/// - accounts: 参数 accounts
-///
-/// # 返回
-/// 返回函数执行结果
-fn load_banned_account_ids(
-    storage: &Storage,
-    accounts: &[Account],
-) -> Result<HashSet<String>, String> {
-    let account_ids = accounts
-        .iter()
-        .map(|account| account.id.clone())
-        .collect::<Vec<_>>();
-    let reasons = storage
-        .latest_account_status_reasons(&account_ids)
-        .map_err(|err| err.to_string())?;
-    Ok(reasons
-        .into_iter()
-        .filter(|(_, reason)| is_account_refresh_blocked_status_reason(reason))
-        .map(|(account_id, _)| account_id)
-        .collect())
-}
-
 /// 函数 `usage_refresh_worker_count`
 ///
 /// 作者: gaohongshun
@@ -369,9 +437,20 @@ fn usage_refresh_worker_count() -> usize {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn is_account_refresh_skipped(account: &Account) -> bool {
+#[cfg(test)]
+fn is_account_refresh_skipped(account: &AccountUsageRefreshTarget) -> bool {
     let normalized = account.status.trim().to_ascii_lowercase();
     normalized == "disabled" || normalized == "banned"
+}
+
+#[cfg(test)]
+fn build_workspace_map_from_refresh_targets(
+    accounts: &[AccountUsageRefreshTarget],
+) -> HashMap<String, Option<String>> {
+    accounts
+        .iter()
+        .map(|account| (account.id.clone(), account.workspace_id.clone()))
+        .collect()
 }
 
 /// 函数 `usage_poll_batch_limit`
@@ -515,8 +594,13 @@ fn next_usage_poll_cursor(total: usize, cursor: usize, processed: usize) -> usiz
 
 #[cfg(test)]
 mod tests {
-    use super::{build_aggregate_api_balance_refresh_ids, build_usage_refresh_tasks};
-    use codexmanager_core::storage::{now_ts, Account, AggregateApi, Token};
+    use super::{
+        build_usage_refresh_task_plans, build_usage_refresh_task_plans_from_targets,
+        build_usage_refresh_tasks, load_refreshable_accounts,
+    };
+    use codexmanager_core::storage::{
+        now_ts, Account, AccountTokenCandidate, AccountUsageRefreshTarget, Storage, Token,
+    };
     use std::collections::HashSet;
 
     /// 函数 `account`
@@ -532,14 +616,26 @@ mod tests {
     ///
     /// # 返回
     /// 返回函数执行结果
+    fn refresh_target(
+        id: &str,
+        status: &str,
+        workspace_id: Option<&str>,
+    ) -> AccountUsageRefreshTarget {
+        AccountUsageRefreshTarget {
+            id: id.to_string(),
+            status: status.to_string(),
+            workspace_id: workspace_id.map(|value| value.to_string()),
+        }
+    }
+
     fn account(id: &str, status: &str, workspace_id: Option<&str>) -> Account {
         Account {
             id: id.to_string(),
-            label: id.to_string(),
-            issuer: "issuer".to_string(),
-            chatgpt_account_id: None,
+            label: "ignored label".to_string(),
+            issuer: "ignored issuer".to_string(),
+            chatgpt_account_id: Some("ignored-chatgpt-account".to_string()),
             workspace_id: workspace_id.map(|value| value.to_string()),
-            group_name: None,
+            group_name: Some("ignored group".to_string()),
             sort: 0,
             status: status.to_string(),
             created_at: now_ts(),
@@ -569,35 +665,6 @@ mod tests {
         }
     }
 
-    fn aggregate_api(id: &str, status: &str, balance_query_enabled: bool) -> AggregateApi {
-        AggregateApi {
-            id: id.to_string(),
-            provider_type: "codex".to_string(),
-            supplier_name: Some(id.to_string()),
-            sort: 0,
-            url: "https://api.example.com/v1".to_string(),
-            auth_type: "apikey".to_string(),
-            auth_params_json: None,
-            action: None,
-            model_override: None,
-            status: status.to_string(),
-            created_at: now_ts(),
-            updated_at: now_ts(),
-            last_test_at: None,
-            last_test_status: None,
-            last_test_error: None,
-            balance_query_enabled,
-            balance_query_template: Some("generic".to_string()),
-            balance_query_base_url: None,
-            balance_query_user_id: None,
-            balance_query_config_json: None,
-            last_balance_at: None,
-            last_balance_status: None,
-            last_balance_error: None,
-            last_balance_json: None,
-        }
-    }
-
     /// 函数 `build_usage_refresh_tasks_skips_disabled_and_banned_accounts`
     ///
     /// 作者: gaohongshun
@@ -621,11 +688,11 @@ mod tests {
                 token("acc-missing"),
             ],
             &[
-                account("acc-active", "active", Some("ws-active")),
-                account("acc-disabled", "disabled", Some("ws-disabled")),
-                account("acc-banned", "banned", Some("ws-banned")),
-                account("acc-inactive", "inactive", Some("ws-inactive")),
-                account("acc-unavailable", "unavailable", Some("ws-unavailable")),
+                refresh_target("acc-active", "active", Some("ws-active")),
+                refresh_target("acc-disabled", "disabled", Some("ws-disabled")),
+                refresh_target("acc-banned", "banned", Some("ws-banned")),
+                refresh_target("acc-inactive", "inactive", Some("ws-inactive")),
+                refresh_target("acc-unavailable", "unavailable", Some("ws-unavailable")),
             ],
             &HashSet::from([String::from("acc-banned")]),
         );
@@ -636,28 +703,99 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             account_ids,
-            vec![
-                "acc-active",
-                "acc-inactive",
-                "acc-unavailable",
-                "acc-missing"
-            ]
+            vec!["acc-active", "acc-inactive", "acc-unavailable"]
         );
         assert_eq!(tasks[0].workspace_id.as_deref(), Some("ws-active"));
         assert_eq!(tasks[1].workspace_id.as_deref(), Some("ws-inactive"));
         assert_eq!(tasks[2].workspace_id.as_deref(), Some("ws-unavailable"));
-        assert_eq!(tasks[3].workspace_id, None);
     }
 
     #[test]
-    fn build_aggregate_api_balance_refresh_ids_skips_disabled_sources() {
-        let ids = build_aggregate_api_balance_refresh_ids(vec![
-            aggregate_api("ag-active", "active", true),
-            aggregate_api("ag-disabled", "disabled", true),
-            aggregate_api("ag-no-balance", "active", false),
-            aggregate_api("ag-active-spaced", " ACTIVE ", true),
-        ]);
+    fn build_usage_refresh_task_plans_accepts_only_usable_token_candidates() {
+        let tasks = build_usage_refresh_task_plans(
+            vec![
+                AccountTokenCandidate {
+                    account_id: "acc-ready".to_string(),
+                    has_access_token: true,
+                    has_refresh_token: true,
+                    last_refresh: 1,
+                },
+                AccountTokenCandidate {
+                    account_id: "acc-no-access".to_string(),
+                    has_access_token: false,
+                    has_refresh_token: true,
+                    last_refresh: 2,
+                },
+                AccountTokenCandidate {
+                    account_id: "acc-no-refresh".to_string(),
+                    has_access_token: true,
+                    has_refresh_token: false,
+                    last_refresh: 3,
+                },
+            ],
+            &[
+                refresh_target("acc-ready", "active", Some("ws-ready")),
+                refresh_target("acc-no-access", "active", Some("ws-no-access")),
+                refresh_target("acc-no-refresh", "active", Some("ws-no-refresh")),
+            ],
+            &HashSet::new(),
+        );
 
-        assert_eq!(ids, vec!["ag-active", "ag-active-spaced"]);
+        let account_ids = tasks
+            .iter()
+            .map(|task| task.account_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(account_ids, vec!["acc-ready"]);
+        assert_eq!(tasks[0].workspace_id.as_deref(), Some("ws-ready"));
+    }
+
+    #[test]
+    fn build_usage_refresh_task_plans_from_targets_skips_blocked_targets() {
+        let tasks = build_usage_refresh_task_plans_from_targets(
+            &[
+                refresh_target("acc-ready", "active", Some("ws-ready")),
+                refresh_target("acc-disabled", "disabled", Some("ws-disabled")),
+                refresh_target("acc-banned-reason", "active", Some("ws-banned")),
+            ],
+            &HashSet::from([String::from("acc-banned-reason")]),
+        );
+
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].account_id, "acc-ready");
+        assert_eq!(tasks[0].workspace_id.as_deref(), Some("ws-ready"));
+    }
+
+    #[test]
+    fn load_refreshable_accounts_skips_disabled_and_banned_rows_in_sql() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        for account in [
+            account("acc-active", "active", None),
+            account("acc-inactive", "inactive", None),
+            account("acc-limited", "limited", None),
+            account("acc-unavailable", "unavailable", None),
+            account("acc-unknown", "unknown", None),
+            account("acc-disabled", "disabled", None),
+            account("acc-banned", "banned", None),
+        ] {
+            storage.insert_account(&account).expect("insert account");
+        }
+
+        let account_ids = load_refreshable_accounts(&storage)
+            .expect("load refreshable accounts")
+            .into_iter()
+            .map(|account| account.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            account_ids,
+            vec![
+                "acc-active".to_string(),
+                "acc-inactive".to_string(),
+                "acc-limited".to_string(),
+                "acc-unavailable".to_string(),
+                "acc-unknown".to_string()
+            ]
+        );
     }
 }

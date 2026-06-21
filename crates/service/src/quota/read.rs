@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use chrono::{Duration, Local, LocalResult, TimeZone};
 use codexmanager_core::rpc::types::{
     AccountQuotaCapacityOverrideResult, AccountQuotaCapacityTemplateResult, BillingRuleResult,
     ModelPriceRuleEntry, ModelPriceRuleListResult, ModelPriceRuleUpsertInput,
-    QuotaAggregateApiOverviewResult, QuotaApiKeyModelUsageItem, QuotaApiKeyOverviewResult,
-    QuotaApiKeyUsageItem, QuotaApiKeyUsageResult, QuotaBillingRulesResult,
+    QuotaAggregateApiOverviewResult, QuotaApiKeyOverviewResult, QuotaBillingRulesResult,
     QuotaCapacityConfigResult, QuotaModelPoolItem, QuotaModelPoolsResult, QuotaModelUsageItem,
     QuotaModelUsageResult, QuotaOpenAiAccountOverviewResult, QuotaOverviewResult,
     QuotaPoolSourceBreakdown, QuotaRefreshSourceResult, QuotaRefreshSourcesResult,
@@ -13,16 +11,19 @@ use codexmanager_core::rpc::types::{
     QuotaSystemPoolResult, QuotaTodayUsageResult,
 };
 use codexmanager_core::storage::{
-    now_ts, Account, AccountQuotaCapacityOverride, AccountQuotaCapacityTemplate, AccountSubscription,
-    AggregateApi, ApiKey, BillingRule, ModelPriceRule, QuotaSourceModelAssignment, Token,
-    UsageSnapshotRecord,
+    now_ts, AccountQuotaCapacityOverride, AccountQuotaCapacityTemplate, AccountQuotaPoolSource,
+    AccountQuotaSourceSummary, AccountSubscription, AccountTokenPlan,
+    AggregateApiQuotaSourceSummary, BillingRule, ModelPriceRule, QuotaSourceModelAssignment,
+    Storage, UsageSnapshotQuotaSourceRow, UsageSnapshotRecord,
 };
 use rand::RngCore;
 use serde_json::Value;
 
+use super::api_key_usage::load_api_key_quota_context;
 use super::model_pricing;
-use crate::account_plan::resolve_effective_account_plan;
-use crate::{refresh_aggregate_api_balance, storage_helpers::open_storage, usage_refresh};
+use crate::{
+    refresh_aggregate_api_balance, storage_helpers::open_storage, time_bounds, usage_refresh,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct QuotaRefreshSourcesInput {
@@ -54,39 +55,28 @@ struct BalanceSnapshot {
     unit: Option<String>,
 }
 
-fn local_day_bounds_ts() -> Result<(i64, i64), String> {
-    let now = Local::now();
-    let today = now.date_naive();
-    let start_naive = today
-        .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| "build local start-of-day failed".to_string())?;
-    let tomorrow_naive = (today + Duration::days(1))
-        .and_hms_opt(0, 0, 0)
-        .ok_or_else(|| "build local end-of-day failed".to_string())?;
-    let start = match Local.from_local_datetime(&start_naive) {
-        LocalResult::Single(value) => value.timestamp(),
-        LocalResult::Ambiguous(a, b) => a.timestamp().min(b.timestamp()),
-        LocalResult::None => now.timestamp(),
-    };
-    let end = match Local.from_local_datetime(&tomorrow_naive) {
-        LocalResult::Single(value) => value.timestamp(),
-        LocalResult::Ambiguous(a, b) => a.timestamp().max(b.timestamp()),
-        LocalResult::None => start + 86_400,
-    };
-    Ok((start, end.max(start)))
+#[derive(Debug, Clone, Copy, Default)]
+struct AggregateBalanceUsdSummary {
+    total_usd: f64,
+    has_valid_snapshot: bool,
+}
+
+impl AggregateBalanceUsdSummary {
+    fn total_usd(self) -> Option<f64> {
+        self.has_valid_snapshot.then_some(self.total_usd.max(0.0))
+    }
 }
 
 fn token_total(input: i64, cached: i64, output: i64) -> i64 {
     input.saturating_sub(cached).saturating_add(output).max(0)
 }
 
-fn parse_balance_snapshot(api: &AggregateApi) -> BalanceSnapshot {
-    let Some(raw) = api
-        .last_balance_json
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+fn parse_quota_source_balance_snapshot(api: &AggregateApiQuotaSourceSummary) -> BalanceSnapshot {
+    parse_balance_snapshot_json(api.last_balance_json.as_deref())
+}
+
+fn parse_balance_snapshot_json(raw: Option<&str>) -> BalanceSnapshot {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return BalanceSnapshot::default();
     };
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
@@ -105,49 +95,44 @@ fn parse_balance_snapshot(api: &AggregateApi) -> BalanceSnapshot {
     }
 }
 
-fn balance_usd(api: &AggregateApi) -> Option<f64> {
-    parse_balance_snapshot(api)
+fn balance_json_usd(raw: &str) -> Option<f64> {
+    parse_balance_snapshot_json(Some(raw))
         .remaining
         .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn summarize_aggregate_balance_usd<'a>(
+    raw_balances: impl IntoIterator<Item = &'a String>,
+) -> AggregateBalanceUsdSummary {
+    let mut summary = AggregateBalanceUsdSummary::default();
+    for balance in raw_balances
+        .into_iter()
+        .filter_map(|raw| balance_json_usd(raw))
+    {
+        summary.total_usd += balance;
+        summary.has_valid_snapshot = true;
+    }
+    summary
+}
+
+fn load_aggregate_balance_usd_summary(
+    storage: &Storage,
+) -> Result<AggregateBalanceUsdSummary, String> {
+    let balances = storage
+        .list_aggregate_api_balance_jsons()
+        .map_err(|err| format!("list aggregate API balance snapshots failed: {err}"))?;
+    Ok(summarize_aggregate_balance_usd(&balances))
 }
 
 fn remaining_percent(used_percent: Option<f64>) -> Option<f64> {
     used_percent.map(|used| (100.0 - used.clamp(0.0, 100.0)).max(0.0))
 }
 
-fn average_percent(values: impl Iterator<Item = Option<f64>>) -> Option<i64> {
-    let mut count = 0_i64;
-    let mut total = 0.0_f64;
-    for value in values.flatten() {
-        total += value;
-        count += 1;
-    }
-    (count > 0).then(|| (total / count as f64).round() as i64)
-}
-
-fn is_low_quota(usage: Option<&UsageSnapshotRecord>) -> bool {
-    let Some(usage) = usage else {
-        return false;
-    };
-    for remain in [
-        remaining_percent(usage.used_percent),
-        remaining_percent(usage.secondary_used_percent),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if remain > 0.0 && remain <= 20.0 {
-            return true;
-        }
-    }
-    false
-}
-
-fn account_is_available(account: &Account) -> bool {
+fn account_source_is_available(account: &AccountQuotaSourceSummary) -> bool {
     matches!(account.status.as_str(), "active" | "available")
 }
 
-fn api_display_name(api: &AggregateApi) -> String {
+fn aggregate_source_display_name(api: &AggregateApiQuotaSourceSummary) -> String {
     api.supplier_name
         .as_deref()
         .map(str::trim)
@@ -156,12 +141,37 @@ fn api_display_name(api: &AggregateApi) -> String {
         .to_string()
 }
 
-fn key_display_name(key: &ApiKey) -> String {
-    key.name
+fn aggregate_source_balance_status(api: &AggregateApiQuotaSourceSummary) -> &'static str {
+    match api.last_balance_status.as_deref() {
+        Some("success") => "ok",
+        Some("error" | "failed") => "error",
+        _ if api.balance_query_enabled => "unknown",
+        _ => "warning",
+    }
+}
+
+fn balance_unit_or_usd(balance: &BalanceSnapshot) -> String {
+    balance
+        .unit
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(key.id.as_str())
+        .unwrap_or("USD")
+        .to_string()
+}
+
+fn account_quota_source_status(account: &AccountQuotaSourceSummary) -> String {
+    if account_source_is_available(account) {
+        "ok".to_string()
+    } else {
+        account.status.clone()
+    }
+}
+
+fn key_display_name(id: &str, name: Option<&str>) -> String {
+    name.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(id)
         .to_string()
 }
 
@@ -214,91 +224,26 @@ fn billing_rule_result(rule: BillingRule) -> BillingRuleResult {
 
 pub(crate) fn read_quota_overview() -> Result<QuotaOverviewResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let _price_rules = model_pricing::load_enabled_price_rules(&storage)?;
+    read_quota_overview_with_storage(&storage)
+}
 
-    let api_keys = storage
-        .list_api_keys()
-        .map_err(|err| format!("list api keys failed: {err}"))?;
-    let quota_limits = storage
-        .list_api_key_quota_limits()
-        .map_err(|err| format!("list api key quota limits failed: {err}"))?;
-    let usage_by_key = storage
-        .summarize_request_token_stats_by_key()
-        .map_err(|err| format!("summarize api key usage failed: {err}"))?;
-    let usage_map = usage_by_key
-        .iter()
-        .map(|item| (item.key_id.as_str(), item))
-        .collect::<HashMap<_, _>>();
+fn read_quota_overview_with_storage(
+    storage: &codexmanager_core::storage::Storage,
+) -> Result<QuotaOverviewResult, String> {
+    let api_key_stats = storage
+        .api_key_quota_overview_stats()
+        .map_err(|err| format!("summarize API key quota overview failed: {err}"))?;
 
-    let mut total_limit_tokens = 0_i64;
-    let mut total_used_tokens = 0_i64;
-    let mut total_remaining_tokens = 0_i64;
-    let mut estimated_cost_usd = 0.0_f64;
-    for key in &api_keys {
-        let used = usage_map
-            .get(key.id.as_str())
-            .map(|item| item.total_tokens.max(0))
-            .unwrap_or(0);
-        total_used_tokens = total_used_tokens.saturating_add(used);
-        estimated_cost_usd += usage_map
-            .get(key.id.as_str())
-            .map(|item| item.estimated_cost_usd.max(0.0))
-            .unwrap_or(0.0);
-        if let Some(limit) = quota_limits
-            .get(key.id.as_str())
-            .copied()
-            .filter(|value| *value > 0)
-        {
-            total_limit_tokens = total_limit_tokens.saturating_add(limit);
-            total_remaining_tokens =
-                total_remaining_tokens.saturating_add(limit.saturating_sub(used));
-        }
-    }
+    let aggregate_stats = storage
+        .aggregate_api_overview_stats()
+        .map_err(|err| format!("summarize aggregate API overview failed: {err}"))?;
+    let aggregate_balance = load_aggregate_balance_usd_summary(storage)?;
 
-    let aggregate_apis = storage
-        .list_aggregate_apis()
-        .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
-    let mut aggregate_ok_count = 0_i64;
-    let mut aggregate_error_count = 0_i64;
-    let mut total_balance_usd = 0.0_f64;
-    let mut has_balance = false;
-    let mut last_refreshed_at: Option<i64> = None;
-    for api in &aggregate_apis {
-        match api.last_balance_status.as_deref() {
-            Some("success") => aggregate_ok_count += 1,
-            Some("error" | "failed") => aggregate_error_count += 1,
-            _ => {}
-        }
-        if let Some(balance) = balance_usd(api) {
-            total_balance_usd += balance;
-            has_balance = true;
-        }
-        if let Some(ts) = api.last_balance_at {
-            last_refreshed_at = Some(last_refreshed_at.map_or(ts, |current| current.max(ts)));
-        }
-    }
+    let account_stats = storage
+        .account_quota_overview_stats()
+        .map_err(|err| format!("summarize account quota overview failed: {err}"))?;
 
-    let accounts = storage
-        .list_accounts()
-        .map_err(|err| format!("list accounts failed: {err}"))?;
-    let usage_items = storage
-        .latest_usage_snapshots_by_account()
-        .map_err(|err| format!("list usage snapshots failed: {err}"))?;
-    let usage_map = usage_items
-        .iter()
-        .map(|item| (item.account_id.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let last_usage_at = usage_items.iter().map(|item| item.captured_at).max();
-    let available_count = accounts
-        .iter()
-        .filter(|account| account_is_available(account))
-        .count() as i64;
-    let low_quota_count = accounts
-        .iter()
-        .filter(|account| is_low_quota(usage_map.get(account.id.as_str()).copied()))
-        .count() as i64;
-
-    let (day_start, day_end) = local_day_bounds_ts()?;
+    let (day_start, day_end) = time_bounds::local_day_bounds_ts()?;
     let today = storage
         .summarize_request_token_stats_between(day_start, day_end)
         .map_err(|err| format!("summarize today token usage failed: {err}"))?;
@@ -308,39 +253,34 @@ pub(crate) fn read_quota_overview() -> Result<QuotaOverviewResult, String> {
 
     Ok(QuotaOverviewResult {
         api_key: QuotaApiKeyOverviewResult {
-            key_count: api_keys.len() as i64,
-            limited_key_count: quota_limits.len() as i64,
-            total_limit_tokens: (total_limit_tokens > 0).then_some(total_limit_tokens),
-            total_used_tokens,
-            total_remaining_tokens: (total_limit_tokens > 0).then_some(total_remaining_tokens),
-            estimated_cost_usd: estimated_cost_usd.max(0.0),
+            key_count: api_key_stats.key_count,
+            limited_key_count: api_key_stats.limited_key_count,
+            total_limit_tokens: (api_key_stats.total_limit_tokens > 0)
+                .then_some(api_key_stats.total_limit_tokens),
+            total_used_tokens: api_key_stats.total_used_tokens,
+            total_remaining_tokens: (api_key_stats.total_limit_tokens > 0)
+                .then_some(api_key_stats.total_remaining_tokens),
+            estimated_cost_usd: api_key_stats.estimated_cost_usd.max(0.0),
         },
         aggregate_api: QuotaAggregateApiOverviewResult {
-            source_count: aggregate_apis.len() as i64,
-            enabled_balance_query_count: aggregate_apis
-                .iter()
-                .filter(|api| api.balance_query_enabled)
-                .count() as i64,
-            ok_count: aggregate_ok_count,
-            error_count: aggregate_error_count,
-            total_balance_usd: has_balance.then_some(total_balance_usd.max(0.0)),
-            last_refreshed_at,
+            source_count: aggregate_stats.source_count,
+            enabled_balance_query_count: aggregate_stats.enabled_balance_query_count,
+            ok_count: aggregate_stats.ok_count,
+            error_count: aggregate_stats.error_count,
+            total_balance_usd: aggregate_balance.total_usd(),
+            last_refreshed_at: aggregate_stats.last_refreshed_at,
         },
         openai_account: QuotaOpenAiAccountOverviewResult {
-            account_count: accounts.len() as i64,
-            available_count,
-            low_quota_count,
-            primary_remain_percent: average_percent(
-                usage_items
-                    .iter()
-                    .map(|item| remaining_percent(item.used_percent)),
-            ),
-            secondary_remain_percent: average_percent(
-                usage_items
-                    .iter()
-                    .map(|item| remaining_percent(item.secondary_used_percent)),
-            ),
-            last_refreshed_at: last_usage_at,
+            account_count: account_stats.account_count,
+            available_count: account_stats.available_count,
+            low_quota_count: account_stats.low_quota_count,
+            primary_remain_percent: account_stats
+                .primary_remain_percent_avg
+                .map(|value| value.round() as i64),
+            secondary_remain_percent: account_stats
+                .secondary_remain_percent_avg
+                .map(|value| value.round() as i64),
+            last_refreshed_at: account_stats.last_refreshed_at,
         },
         today_usage: QuotaTodayUsageResult {
             input_tokens: today_input,
@@ -355,6 +295,10 @@ pub(crate) fn read_quota_overview() -> Result<QuotaOverviewResult, String> {
 
 pub(crate) fn read_billing_rules() -> Result<QuotaBillingRulesResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    read_billing_rules_with_storage(&storage)
+}
+
+fn read_billing_rules_with_storage(storage: &Storage) -> Result<QuotaBillingRulesResult, String> {
     let items = storage
         .list_billing_rules()
         .map_err(|err| format!("list billing rules failed: {err}"))?
@@ -383,20 +327,18 @@ pub(crate) fn upsert_billing_rule(
     }
     let user_id = normalize_optional_text(input.user_id);
     if let Some(user_id) = user_id.as_deref() {
-        if storage
-            .find_app_user_by_id(user_id)
+        if !storage
+            .app_user_exists(user_id)
             .map_err(|err| format!("read app user failed: {err}"))?
-            .is_none()
         {
             return Err("计费规则用户不存在".to_string());
         }
     }
     let api_key_id = normalize_optional_text(input.api_key_id);
     if let Some(api_key_id) = api_key_id.as_deref() {
-        if storage
-            .find_api_key_by_id(api_key_id)
+        if !storage
+            .api_key_exists(api_key_id)
             .map_err(|err| format!("read api key failed: {err}"))?
-            .is_none()
         {
             return Err("计费规则 API Key 不存在".to_string());
         }
@@ -424,7 +366,7 @@ pub(crate) fn upsert_billing_rule(
             updated_at: now,
         })
         .map_err(|err| format!("save billing rule failed: {err}"))?;
-    read_billing_rules()
+    read_billing_rules_with_storage(&storage)
 }
 
 pub(crate) fn delete_billing_rule(id: &str) -> Result<QuotaBillingRulesResult, String> {
@@ -436,7 +378,7 @@ pub(crate) fn delete_billing_rule(id: &str) -> Result<QuotaBillingRulesResult, S
     storage
         .delete_billing_rule(id)
         .map_err(|err| format!("delete billing rule failed: {err}"))?;
-    read_billing_rules()
+    read_billing_rules_with_storage(&storage)
 }
 
 pub(crate) fn read_quota_model_usage(
@@ -444,57 +386,34 @@ pub(crate) fn read_quota_model_usage(
     end_ts: Option<i64>,
 ) -> Result<QuotaModelUsageResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let price_rules = model_pricing::load_enabled_price_rules(&storage)?;
+    read_quota_model_usage_with_storage(&storage, start_ts, end_ts)
+}
+
+fn read_quota_model_usage_with_storage(
+    storage: &Storage,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+) -> Result<QuotaModelUsageResult, String> {
+    let price_rules = model_pricing::load_enabled_price_rules(storage)?;
     let usage = storage
         .summarize_request_token_stats_by_model(start_ts, end_ts)
         .map_err(|err| format!("summarize token usage by model failed: {err}"))?;
-    let quota_limits = storage
-        .list_api_key_quota_limits()
-        .map_err(|err| format!("list api key quota limits failed: {err}"))?;
-    let key_usage = storage
-        .summarize_request_token_stats_by_key()
-        .map_err(|err| format!("summarize key usage failed: {err}"))?;
-    let api_key_remaining_tokens = quota_limits
-        .iter()
-        .map(|(key_id, limit)| {
-            let used = key_usage
-                .iter()
-                .find(|item| item.key_id == *key_id)
-                .map(|item| item.total_tokens.max(0))
-                .unwrap_or(0);
-            limit.saturating_sub(used)
-        })
-        .sum::<i64>();
+    let api_key_remaining_tokens = storage
+        .api_key_remaining_quota_tokens()
+        .map_err(|err| format!("summarize api key remaining quota failed: {err}"))?;
 
-    let aggregate_balance_usd = storage
-        .list_aggregate_apis()
-        .map_err(|err| format!("list aggregate APIs failed: {err}"))?
-        .iter()
-        .filter_map(balance_usd)
-        .sum::<f64>();
-    let aggregate_balance_usd = (aggregate_balance_usd > 0.0).then_some(aggregate_balance_usd);
+    let aggregate_balance_usd = load_aggregate_balance_usd_summary(storage)?.total_usd();
 
-    let accounts = storage
-        .list_accounts()
-        .map_err(|err| format!("list accounts failed: {err}"))?;
-    let usage_items = storage
-        .latest_usage_snapshots_by_account()
-        .map_err(|err| format!("list usage snapshots failed: {err}"))?;
-
-    let openai_available_account_count = accounts
-        .iter()
-        .filter(|account| account_is_available(account))
-        .count() as i64;
-    let openai_primary_remain_percent = average_percent(
-        usage_items
-            .iter()
-            .map(|item| remaining_percent(item.used_percent)),
-    );
-    let openai_secondary_remain_percent = average_percent(
-        usage_items
-            .iter()
-            .map(|item| remaining_percent(item.secondary_used_percent)),
-    );
+    let account_stats = storage
+        .account_quota_overview_stats()
+        .map_err(|err| format!("summarize account quota overview failed: {err}"))?;
+    let openai_available_account_count = account_stats.available_count;
+    let openai_primary_remain_percent = account_stats
+        .primary_remain_percent_avg
+        .map(|value| value.round() as i64);
+    let openai_secondary_remain_percent = account_stats
+        .secondary_remain_percent_avg
+        .map(|value| value.round() as i64);
 
     Ok(QuotaModelUsageResult {
         items: usage
@@ -564,10 +483,45 @@ struct AccountCapacity {
     secondary_window_tokens: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct AccountCapacityConfig {
+    templates: Vec<AccountQuotaCapacityTemplate>,
+}
+
+#[derive(Debug, Default)]
+struct AccountPoolContext {
+    accounts: Vec<AccountQuotaPoolSource>,
+    usage_by_account: HashMap<String, UsageSnapshotQuotaSourceRow>,
+    tokens_by_account: HashMap<String, AccountTokenPlan>,
+    subscriptions_by_account: HashMap<String, AccountSubscription>,
+    usage_plan_fallback_by_account: HashMap<String, UsageSnapshotRecord>,
+    overrides_by_account: HashMap<String, AccountQuotaCapacityOverride>,
+}
+
+impl AccountCapacityConfig {
+    fn template_map(&self) -> HashMap<String, AccountQuotaCapacityTemplate> {
+        self.templates
+            .iter()
+            .cloned()
+            .map(|item| (item.plan_type.to_ascii_lowercase(), item))
+            .collect()
+    }
+
+    fn template_results(&self) -> Vec<AccountQuotaCapacityTemplateResult> {
+        capacity_template_results_with_slots(self.templates.clone())
+    }
+}
+
 const ACCOUNT_CAPACITY_TEMPLATE_SLOTS: &[&str] = &["free", "plus", "pro", "team", "enterprise"];
 
 pub(crate) fn read_quota_capacity_config() -> Result<QuotaCapacityConfigResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    read_quota_capacity_config_with_storage(&storage)
+}
+
+fn read_quota_capacity_config_with_storage(
+    storage: &Storage,
+) -> Result<QuotaCapacityConfigResult, String> {
     Ok(QuotaCapacityConfigResult {
         source_assignments: build_source_assignment_results(
             storage
@@ -597,8 +551,7 @@ pub(crate) fn set_quota_source_models(
     storage
         .set_quota_source_model_assignments(source_kind, source_id, model_slugs.as_slice())
         .map_err(|err| format!("set quota source model assignments failed: {err}"))?;
-    drop(storage);
-    read_quota_capacity_config()
+    read_quota_capacity_config_with_storage(&storage)
 }
 
 pub(crate) fn update_account_quota_capacity_template(
@@ -614,8 +567,7 @@ pub(crate) fn update_account_quota_capacity_template(
             secondary_window_tokens,
         )
         .map_err(|err| format!("update account quota capacity template failed: {err}"))?;
-    drop(storage);
-    read_quota_capacity_config()
+    read_quota_capacity_config_with_storage(&storage)
 }
 
 pub(crate) fn update_account_quota_capacity_override(
@@ -631,20 +583,25 @@ pub(crate) fn update_account_quota_capacity_override(
             secondary_window_tokens,
         )
         .map_err(|err| format!("update account quota capacity override failed: {err}"))?;
-    drop(storage);
-    read_quota_capacity_config()
+    read_quota_capacity_config_with_storage(&storage)
 }
 
 pub(crate) fn read_quota_model_pools() -> Result<QuotaModelPoolsResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let price_rules = model_pricing::load_enabled_price_rules(&storage)?;
-    let api_models = api_available_model_slugs(&storage, &price_rules)?;
+    let api_models = api_available_model_slugs(&storage, Some(&price_rules))?;
     let assignments = assignment_map(
-        storage
-            .list_quota_source_model_assignments()
+        list_pool_source_model_assignments(&storage)
             .map_err(|err| format!("list quota source assignments failed: {err}"))?,
     );
-    let pools = build_model_pool_accumulators(&storage, &price_rules, &api_models, &assignments)?;
+    let capacity_config = load_account_capacity_config(&storage)?;
+    let pools = build_model_pool_accumulators(
+        &storage,
+        &price_rules,
+        &api_models,
+        &assignments,
+        &capacity_config,
+    )?;
     let mut items = pools
         .into_iter()
         .map(|(model, pool)| pool_to_model_item(model, pool))
@@ -667,11 +624,7 @@ pub(crate) fn read_quota_model_pools() -> Result<QuotaModelPoolsResult, String> 
     });
     Ok(QuotaModelPoolsResult {
         items,
-        templates: capacity_template_results_with_slots(
-            storage
-                .list_account_quota_capacity_templates()
-                .map_err(|err| format!("list account quota capacity templates failed: {err}"))?,
-        ),
+        templates: capacity_config.template_results(),
         account_overrides: storage
             .list_account_quota_capacity_overrides()
             .map_err(|err| format!("list account quota capacity overrides failed: {err}"))?
@@ -686,7 +639,7 @@ pub(crate) fn read_quota_system_pool(
 ) -> Result<QuotaSystemPoolResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let price_rules = model_pricing::load_enabled_price_rules(&storage)?;
-    let api_models = api_available_model_slugs(&storage, &price_rules)?;
+    let api_models = api_available_model_slugs(&storage, Some(&price_rules))?;
     let reference_model = reference_model
         .as_deref()
         .map(str::trim)
@@ -694,13 +647,18 @@ pub(crate) fn read_quota_system_pool(
         .map(ToString::to_string)
         .or_else(|| api_models.first().cloned())
         .unwrap_or_else(|| "unknown".to_string());
-    let assignments = assignment_map(
-        storage
-            .list_quota_source_model_assignments()
-            .map_err(|err| format!("list quota source assignments failed: {err}"))?,
-    );
-    let mut pools =
-        build_model_pool_accumulators(&storage, &price_rules, &api_models, &assignments)?;
+    let assignments = target_model_assignment_map(&storage, reference_model.as_str())
+        .map_err(|err| format!("list quota source assignments failed: {err}"))?;
+    let target_models = HashSet::from([reference_model.clone()]);
+    let capacity_config = load_account_capacity_config(&storage)?;
+    let mut pools = build_model_pool_accumulators_for_models(
+        &storage,
+        &price_rules,
+        &api_models,
+        &assignments,
+        Some(&target_models),
+        &capacity_config,
+    )?;
     let pool = pools.remove(reference_model.as_str()).unwrap_or_else(|| {
         let mut pool = PoolAccumulator {
             price_status: "missing".to_string(),
@@ -763,11 +721,62 @@ fn build_model_pool_accumulators(
     price_rules: &[ModelPriceRule],
     api_models: &[String],
     assignments: &HashMap<(String, String), Vec<String>>,
+    capacity_config: &AccountCapacityConfig,
+) -> Result<BTreeMap<String, PoolAccumulator>, String> {
+    build_model_pool_accumulators_for_models(
+        storage,
+        price_rules,
+        api_models,
+        assignments,
+        None,
+        capacity_config,
+    )
+}
+
+#[cfg(test)]
+fn build_model_pool_accumulators_from_storage(
+    storage: &codexmanager_core::storage::Storage,
+    price_rules: &[ModelPriceRule],
+    api_models: &[String],
+    assignments: &HashMap<(String, String), Vec<String>>,
+) -> Result<BTreeMap<String, PoolAccumulator>, String> {
+    let capacity_config = load_account_capacity_config(storage)?;
+    build_model_pool_accumulators(
+        storage,
+        price_rules,
+        api_models,
+        assignments,
+        &capacity_config,
+    )
+}
+
+fn build_model_pool_accumulators_for_models(
+    storage: &codexmanager_core::storage::Storage,
+    price_rules: &[ModelPriceRule],
+    api_models: &[String],
+    assignments: &HashMap<(String, String), Vec<String>>,
+    target_models: Option<&HashSet<String>>,
+    capacity_config: &AccountCapacityConfig,
 ) -> Result<BTreeMap<String, PoolAccumulator>, String> {
     let mut pools = BTreeMap::<String, PoolAccumulator>::new();
-    seed_model_pools(&mut pools, price_rules, api_models);
-    add_aggregate_api_pools(storage, price_rules, api_models, assignments, &mut pools)?;
-    add_account_pools(storage, price_rules, api_models, assignments, &mut pools)?;
+    seed_model_pools(&mut pools, price_rules, api_models, target_models);
+    add_aggregate_api_pools(
+        storage,
+        price_rules,
+        api_models,
+        assignments,
+        target_models,
+        &mut pools,
+    )?;
+    add_account_pools(
+        storage,
+        price_rules,
+        api_models,
+        assignments,
+        target_models,
+        capacity_config,
+        &mut pools,
+    )?;
     Ok(pools)
 }
 
@@ -775,8 +784,12 @@ fn seed_model_pools(
     pools: &mut BTreeMap<String, PoolAccumulator>,
     price_rules: &[ModelPriceRule],
     api_models: &[String],
+    target_models: Option<&HashSet<String>>,
 ) {
     for model in api_models {
+        if !model_matches_target(model, target_models) {
+            continue;
+        }
         let price = model_pricing::resolve_model_price_from_rules(price_rules, model, 0)
             .or_else(|| model_pricing::resolve_model_price(model, 0));
         let entry = pools
@@ -801,33 +814,23 @@ fn add_aggregate_api_pools(
     price_rules: &[ModelPriceRule],
     api_models: &[String],
     assignments: &HashMap<(String, String), Vec<String>>,
+    target_models: Option<&HashSet<String>>,
     pools: &mut BTreeMap<String, PoolAccumulator>,
 ) -> Result<(), String> {
     let aggregate_apis = storage
-        .list_aggregate_apis()
+        .list_aggregate_api_quota_source_summaries()
         .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
     for api in aggregate_apis {
         if api.status == "disabled" {
             continue;
         }
-        let balance = parse_balance_snapshot(&api);
+        let balance = parse_quota_source_balance_snapshot(&api);
         let models = source_models("aggregate_api", &api.id, assignments, api_models);
-        let balance_unit = balance
-            .unit
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("USD")
-            .to_string();
-        let status = match api.last_balance_status.as_deref() {
-            Some("success") => "ok",
-            Some("error" | "failed") => "error",
-            _ if api.balance_query_enabled => "unknown",
-            _ => "warning",
-        };
+        let balance_unit = balance_unit_or_usd(&balance);
+        let status = aggregate_source_balance_status(&api);
         for model in models {
             let model = model.trim().to_string();
-            if model.is_empty() {
+            if model.is_empty() || !model_matches_target(&model, target_models) {
                 continue;
             }
             let provider = model_pricing::resolve_model_price_from_rules(price_rules, &model, 0)
@@ -853,7 +856,7 @@ fn add_aggregate_api_pools(
             let source = QuotaPoolSourceBreakdown {
                 source_kind: "aggregate_api".to_string(),
                 source_id: api.id.clone(),
-                name: api_display_name(&api),
+                name: aggregate_source_display_name(&api),
                 status: status.to_string(),
                 remaining_tokens,
                 raw_remaining: balance.remaining,
@@ -897,55 +900,29 @@ fn add_account_pools(
     price_rules: &[ModelPriceRule],
     api_models: &[String],
     assignments: &HashMap<(String, String), Vec<String>>,
+    target_models: Option<&HashSet<String>>,
+    capacity_config: &AccountCapacityConfig,
     pools: &mut BTreeMap<String, PoolAccumulator>,
 ) -> Result<(), String> {
-    let accounts = storage
-        .list_accounts()
-        .map_err(|err| format!("list accounts failed: {err}"))?;
-    let usage_map = storage
-        .latest_usage_snapshots_by_account()
-        .map_err(|err| format!("list usage snapshots failed: {err}"))?
-        .into_iter()
-        .map(|item| (item.account_id.clone(), item))
-        .collect::<HashMap<String, UsageSnapshotRecord>>();
-    let token_map = storage
-        .list_tokens()
-        .map_err(|err| format!("list account tokens failed: {err}"))?
-        .into_iter()
-        .map(|item| (item.account_id.clone(), item))
-        .collect::<HashMap<String, Token>>();
-    let subscription_map = storage
-        .list_account_subscriptions()
-        .map_err(|err| format!("list account subscriptions failed: {err}"))?
-        .into_iter()
-        .map(|item| (item.account_id.clone(), item))
-        .collect::<HashMap<String, AccountSubscription>>();
-    let template_map = storage
-        .list_account_quota_capacity_templates()
-        .map_err(|err| format!("list account quota capacity templates failed: {err}"))?
-        .into_iter()
-        .map(|item| (item.plan_type.to_ascii_lowercase(), item))
-        .collect::<HashMap<String, AccountQuotaCapacityTemplate>>();
-    let override_map = storage
-        .list_account_quota_capacity_overrides()
-        .map_err(|err| format!("list account quota capacity overrides failed: {err}"))?
-        .into_iter()
-        .map(|item| (item.account_id.clone(), item))
-        .collect::<HashMap<String, AccountQuotaCapacityOverride>>();
+    let context = load_account_pool_context(storage)?;
+    let template_map = capacity_config.template_map();
 
-    for account in accounts {
-        if !account_is_available(&account) {
-            continue;
-        }
+    for account in context.accounts {
         let account_id = account.id.clone();
-        let usage = usage_map.get(account_id.as_str());
-        let plan_type =
-            resolve_account_plan_type(&account_id, &token_map, &usage_map, &subscription_map);
+        let usage = context.usage_by_account.get(account_id.as_str());
+        let plan_type = resolve_account_plan_type_from_sources(
+            &account_id,
+            &context.tokens_by_account,
+            context
+                .usage_plan_fallback_by_account
+                .get(account_id.as_str()),
+            &context.subscriptions_by_account,
+        );
         let capacity = resolve_account_capacity(
             &account_id,
             plan_type.as_deref(),
             &template_map,
-            &override_map,
+            &context.overrides_by_account,
         );
         let primary_remaining = capacity.as_ref().and_then(|capacity| {
             estimate_window_remaining_tokens(
@@ -981,7 +958,7 @@ fn add_account_pools(
         let models = source_models("openai_account", &account.id, assignments, api_models);
         for model in models {
             let model = model.trim().to_string();
-            if model.is_empty() {
+            if model.is_empty() || !model_matches_target(&model, target_models) {
                 continue;
             }
             let provider = model_pricing::resolve_model_price_from_rules(price_rules, &model, 0)
@@ -1037,6 +1014,68 @@ fn add_account_pools(
     Ok(())
 }
 
+fn load_account_pool_context(
+    storage: &codexmanager_core::storage::Storage,
+) -> Result<AccountPoolContext, String> {
+    let accounts = storage
+        .list_available_account_quota_pool_sources()
+        .map_err(|err| format!("list accounts failed: {err}"))?;
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    if account_ids.is_empty() {
+        return Ok(AccountPoolContext {
+            accounts,
+            ..AccountPoolContext::default()
+        });
+    }
+
+    let usage_by_account = storage
+        .latest_usage_quota_source_rows_for_accounts(&account_ids)
+        .map_err(|err| format!("list usage snapshots failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<String, UsageSnapshotQuotaSourceRow>>();
+    let tokens_by_account = storage
+        .list_account_token_plans_for_accounts(&account_ids)
+        .map_err(|err| format!("list account tokens failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<String, AccountTokenPlan>>();
+    let subscriptions_by_account = storage
+        .list_account_subscriptions_for_accounts(&account_ids)
+        .map_err(|err| format!("list account subscriptions failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<String, AccountSubscription>>();
+    let usage_plan_fallback_by_account = load_usage_plan_fallback_snapshots(
+        storage,
+        &account_ids,
+        &tokens_by_account,
+        &subscriptions_by_account,
+    )?;
+    let overrides_by_account = storage
+        .list_account_quota_capacity_overrides_for_accounts(&account_ids)
+        .map_err(|err| format!("list account quota capacity overrides failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<String, AccountQuotaCapacityOverride>>();
+
+    Ok(AccountPoolContext {
+        accounts,
+        usage_by_account,
+        tokens_by_account,
+        subscriptions_by_account,
+        usage_plan_fallback_by_account,
+        overrides_by_account,
+    })
+}
+
+fn model_matches_target(model: &str, target_models: Option<&HashSet<String>>) -> bool {
+    target_models.is_none_or(|targets| targets.contains(model.trim()))
+}
+
 fn pool_to_model_item(model: String, pool: PoolAccumulator) -> QuotaModelPoolItem {
     QuotaModelPoolItem {
         model,
@@ -1086,6 +1125,31 @@ fn build_source_assignment_results(
         .collect()
 }
 
+fn list_pool_source_model_assignments(
+    storage: &Storage,
+) -> rusqlite::Result<Vec<QuotaSourceModelAssignment>> {
+    let mut assignments = Vec::new();
+    assignments.extend(storage.list_quota_source_model_assignments_for_kind("aggregate_api")?);
+    assignments.extend(storage.list_quota_source_model_assignments_for_kind("openai_account")?);
+    Ok(assignments)
+}
+
+fn list_pool_source_model_assignments_for_sources(
+    storage: &Storage,
+    aggregate_api_ids: &[String],
+    account_ids: &[String],
+) -> rusqlite::Result<Vec<QuotaSourceModelAssignment>> {
+    let mut assignments = Vec::new();
+    assignments.extend(
+        storage
+            .list_quota_source_model_assignments_for_sources("aggregate_api", aggregate_api_ids)?,
+    );
+    assignments.extend(
+        storage.list_quota_source_model_assignments_for_sources("openai_account", account_ids)?,
+    );
+    Ok(assignments)
+}
+
 fn assignment_map(
     assignments: Vec<QuotaSourceModelAssignment>,
 ) -> HashMap<(String, String), Vec<String>> {
@@ -1102,6 +1166,39 @@ fn assignment_map(
         .collect()
 }
 
+fn load_account_capacity_config(storage: &Storage) -> Result<AccountCapacityConfig, String> {
+    Ok(AccountCapacityConfig {
+        templates: storage
+            .list_account_quota_capacity_templates()
+            .map_err(|err| format!("list account quota capacity templates failed: {err}"))?,
+    })
+}
+
+fn target_model_assignment_map(
+    storage: &Storage,
+    model_slug: &str,
+) -> rusqlite::Result<HashMap<(String, String), Vec<String>>> {
+    let model_slug = model_slug.trim();
+    if model_slug.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut assignments = assignment_map(vec![]);
+    for source_kind in ["aggregate_api", "openai_account"] {
+        for assignment in
+            storage.list_quota_source_model_assignment_targets_for_model(source_kind, model_slug)?
+        {
+            let models = assignments
+                .entry((assignment.source_kind, assignment.source_id))
+                .or_default();
+            if !assignment.model_slug.trim().is_empty() {
+                models.push(assignment.model_slug);
+            }
+        }
+    }
+    Ok(assignments)
+}
+
 fn source_models(
     source_kind: &str,
     source_id: &str,
@@ -1110,29 +1207,20 @@ fn source_models(
 ) -> Vec<String> {
     assignments
         .get(&(source_kind.to_string(), source_id.to_string()))
-        .filter(|models| !models.is_empty())
         .cloned()
         .unwrap_or_else(|| api_models.to_vec())
 }
 
 fn api_available_model_slugs(
     storage: &codexmanager_core::storage::Storage,
-    price_rules: &[ModelPriceRule],
+    price_rules: Option<&[ModelPriceRule]>,
 ) -> Result<Vec<String>, String> {
     let mut models = Vec::new();
     let mut seen = HashSet::new();
     for slug in storage
-        .list_model_catalog_models("default")
+        .list_api_available_model_catalog_slugs("default")
         .map_err(|err| format!("list model catalog failed: {err}"))?
         .into_iter()
-        .filter(|item| item.supported_in_api.unwrap_or(true))
-        .filter(|item| {
-            !matches!(
-                item.visibility.as_deref(),
-                Some("hidden" | "disabled" | "unavailable")
-            )
-        })
-        .map(|item| item.slug)
     {
         let normalized = slug.trim();
         if normalized.is_empty() || !seen.insert(normalized.to_string()) {
@@ -1142,6 +1230,13 @@ fn api_available_model_slugs(
     }
 
     if models.is_empty() {
+        let fallback_price_rules;
+        let price_rules = if let Some(price_rules) = price_rules {
+            price_rules
+        } else {
+            fallback_price_rules = model_pricing::load_enabled_price_rules(storage)?;
+            fallback_price_rules.as_slice()
+        };
         for rule in price_rules {
             let normalized = rule.model_pattern.trim();
             if normalized.is_empty()
@@ -1157,18 +1252,47 @@ fn api_available_model_slugs(
     Ok(models)
 }
 
-fn resolve_account_plan_type(
+fn resolve_account_plan_type_from_sources(
     account_id: &str,
-    tokens: &HashMap<String, Token>,
-    usages: &HashMap<String, UsageSnapshotRecord>,
+    tokens: &HashMap<String, AccountTokenPlan>,
+    usage: Option<&UsageSnapshotRecord>,
     subscriptions: &HashMap<String, AccountSubscription>,
 ) -> Option<String> {
-    resolve_effective_account_plan(
+    crate::account_plan::resolve_effective_account_plan(
         tokens.get(account_id),
-        usages.get(account_id),
+        usage,
         subscriptions.get(account_id),
     )
     .map(|plan| plan.normalized)
+}
+
+fn load_usage_plan_fallback_snapshots(
+    storage: &codexmanager_core::storage::Storage,
+    account_ids: &[String],
+    tokens: &HashMap<String, AccountTokenPlan>,
+    subscriptions: &HashMap<String, AccountSubscription>,
+) -> Result<HashMap<String, UsageSnapshotRecord>, String> {
+    let fallback_ids = account_ids
+        .iter()
+        .filter(|account_id| {
+            resolve_account_plan_type_from_sources(account_id, tokens, None, subscriptions)
+                .is_none()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if fallback_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    storage
+        .latest_usage_snapshots_for_accounts(&fallback_ids)
+        .map_err(|err| format!("list usage plan fallback snapshots failed: {err}"))
+        .map(|items| {
+            items
+                .into_iter()
+                .map(|item| (item.account_id.clone(), item))
+                .collect()
+        })
 }
 
 fn resolve_account_capacity(
@@ -1249,110 +1373,31 @@ fn override_result(item: AccountQuotaCapacityOverride) -> AccountQuotaCapacityOv
     }
 }
 
-pub(crate) fn read_quota_api_key_usage() -> Result<QuotaApiKeyUsageResult, String> {
-    let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let price_rules = model_pricing::load_enabled_price_rules(&storage)?;
-    let api_keys = storage
-        .list_api_keys()
-        .map_err(|err| format!("list api keys failed: {err}"))?;
-    let quota_limits = storage
-        .list_api_key_quota_limits()
-        .map_err(|err| format!("list api key quota limits failed: {err}"))?;
-    let usage_by_key = storage
-        .summarize_request_token_stats_by_key()
-        .map_err(|err| format!("summarize api key usage failed: {err}"))?;
-    let usage_map = usage_by_key
-        .iter()
-        .map(|item| (item.key_id.as_str(), item))
-        .collect::<HashMap<_, _>>();
-    let model_usage = storage
-        .summarize_request_token_stats_by_key_and_model(None, None)
-        .map_err(|err| format!("summarize api key model usage failed: {err}"))?;
-    let mut models_by_key: BTreeMap<String, Vec<QuotaApiKeyModelUsageItem>> = BTreeMap::new();
-    for item in model_usage {
-        let cost = model_pricing::estimate_cost_with_rules(
-            &price_rules,
-            Some(item.model.as_str()),
-            item.input_tokens,
-            item.cached_input_tokens,
-            item.output_tokens,
-        );
-        models_by_key
-            .entry(item.key_id)
-            .or_default()
-            .push(QuotaApiKeyModelUsageItem {
-                model: item.model,
-                input_tokens: item.input_tokens,
-                cached_input_tokens: item.cached_input_tokens,
-                output_tokens: item.output_tokens,
-                reasoning_output_tokens: item.reasoning_output_tokens,
-                total_tokens: item.total_tokens,
-                estimated_cost_usd: cost.cost_usd,
-                price_status: cost.price_status.to_string(),
-            });
-    }
-
-    Ok(QuotaApiKeyUsageResult {
-        items: api_keys
-            .into_iter()
-            .map(|key| {
-                let used = usage_map
-                    .get(key.id.as_str())
-                    .map(|item| item.total_tokens.max(0))
-                    .unwrap_or(0);
-                let limit = quota_limits.get(key.id.as_str()).copied();
-                QuotaApiKeyUsageItem {
-                    key_id: key.id.clone(),
-                    name: key.name,
-                    model_slug: key.model_slug,
-                    quota_limit_tokens: limit,
-                    used_tokens: used,
-                    remaining_tokens: limit.map(|value| value.saturating_sub(used)),
-                    estimated_cost_usd: usage_map
-                        .get(key.id.as_str())
-                        .map(|item| item.estimated_cost_usd.max(0.0))
-                        .unwrap_or(0.0),
-                    models: models_by_key.remove(key.id.as_str()).unwrap_or_default(),
-                }
-            })
-            .collect(),
-    })
-}
-
 pub(crate) fn read_quota_source_list() -> Result<QuotaSourceListResult, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let price_rules = model_pricing::load_enabled_price_rules(&storage)?;
-    let api_models = api_available_model_slugs(&storage, &price_rules)?;
-    let assignments = assignment_map(
-        storage
-            .list_quota_source_model_assignments()
-            .map_err(|err| format!("list quota source assignments failed: {err}"))?,
-    );
+    read_quota_source_list_with_storage(&storage)
+}
+
+fn read_quota_source_list_with_storage(storage: &Storage) -> Result<QuotaSourceListResult, String> {
+    let api_models = api_available_model_slugs(storage, None)?;
     let mut items = Vec::new();
 
-    let api_keys = storage
-        .list_api_keys()
-        .map_err(|err| format!("list api keys failed: {err}"))?;
-    let quota_limits = storage
-        .list_api_key_quota_limits()
-        .map_err(|err| format!("list api key quota limits failed: {err}"))?;
-    let usage_by_key = storage
-        .summarize_request_token_stats_by_key()
-        .map_err(|err| format!("summarize api key usage failed: {err}"))?;
-    let usage_map = usage_by_key
+    let api_key_context = load_api_key_quota_context(storage)?;
+    let usage_map = api_key_context
+        .usage_by_key
         .iter()
         .map(|item| (item.key_id.as_str(), item))
         .collect::<HashMap<_, _>>();
-    for key in api_keys {
+    for key in api_key_context.api_keys {
         let used = usage_map
             .get(key.id.as_str())
             .map(|item| item.total_tokens.max(0))
             .unwrap_or(0);
-        let limit = quota_limits.get(key.id.as_str()).copied();
+        let limit = key.quota_limit_tokens;
         items.push(QuotaSourceSummary {
             id: key.id.clone(),
             kind: "api_key".to_string(),
-            name: key_display_name(&key),
+            name: key_display_name(&key.id, key.name.as_deref()),
             status: key.status,
             metric_kind: "token_limit".to_string(),
             remaining: limit.map(|value| value.saturating_sub(used) as f64),
@@ -1366,27 +1411,38 @@ pub(crate) fn read_quota_source_list() -> Result<QuotaSourceListResult, String> 
         });
     }
 
-    for api in storage
-        .list_aggregate_apis()
-        .map_err(|err| format!("list aggregate APIs failed: {err}"))?
-    {
-        let balance = parse_balance_snapshot(&api);
-        let status = match api.last_balance_status.as_deref() {
-            Some("success") => "ok",
-            Some("error" | "failed") => "error",
-            _ if api.balance_query_enabled => "unknown",
-            _ => "warning",
-        };
+    let aggregate_apis = storage
+        .list_aggregate_api_quota_source_summaries()
+        .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
+    let accounts = storage
+        .list_account_quota_source_summaries()
+        .map_err(|err| format!("list accounts failed: {err}"))?;
+    let aggregate_api_ids = aggregate_apis
+        .iter()
+        .map(|api| api.id.clone())
+        .collect::<Vec<_>>();
+    let account_ids = accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let assignments = assignment_map(
+        list_pool_source_model_assignments_for_sources(storage, &aggregate_api_ids, &account_ids)
+            .map_err(|err| format!("list quota source assignments failed: {err}"))?,
+    );
+
+    for api in aggregate_apis {
+        let balance = parse_quota_source_balance_snapshot(&api);
+        let status = aggregate_source_balance_status(&api);
         items.push(QuotaSourceSummary {
             id: api.id.clone(),
             kind: "aggregate_api".to_string(),
-            name: api_display_name(&api),
+            name: aggregate_source_display_name(&api),
             status: status.to_string(),
             metric_kind: "money_balance".to_string(),
             remaining: balance.remaining,
             total: balance.total,
             used: balance.used,
-            unit: Some(balance.unit.unwrap_or_else(|| "USD".to_string())),
+            unit: Some(balance_unit_or_usd(&balance)),
             models: source_models("aggregate_api", &api.id, &assignments, &api_models),
             provider: Some(api.provider_type),
             captured_at: api.last_balance_at,
@@ -1394,26 +1450,22 @@ pub(crate) fn read_quota_source_list() -> Result<QuotaSourceListResult, String> 
         });
     }
 
-    for account in storage
-        .list_accounts()
-        .map_err(|err| format!("list accounts failed: {err}"))?
-    {
-        let usage = storage
-            .latest_usage_snapshot_for_account(&account.id)
-            .map_err(|err| format!("read account usage failed: {err}"))?;
-        let remaining = usage
-            .as_ref()
-            .and_then(|item| remaining_percent(item.used_percent));
-        let used = usage.as_ref().and_then(|item| item.used_percent);
+    let usage_by_account = storage
+        .latest_usage_quota_source_rows_for_accounts(&account_ids)
+        .map_err(|err| format!("read account usage failed: {err}"))?
+        .into_iter()
+        .map(|item| (item.account_id.clone(), item))
+        .collect::<HashMap<_, _>>();
+
+    for account in accounts {
+        let usage: Option<&UsageSnapshotQuotaSourceRow> = usage_by_account.get(account.id.as_str());
+        let remaining = usage.and_then(|item| remaining_percent(item.used_percent));
+        let used = usage.and_then(|item| item.used_percent);
         items.push(QuotaSourceSummary {
             id: account.id.clone(),
             kind: "openai_account".to_string(),
             name: account.label.clone(),
-            status: if account_is_available(&account) {
-                "ok".to_string()
-            } else {
-                account.status
-            },
+            status: account_quota_source_status(&account),
             metric_kind: "window_percent".to_string(),
             remaining,
             total: Some(100.0),
@@ -1438,23 +1490,23 @@ pub(crate) fn refresh_quota_sources(
     } else {
         input.kinds.into_iter().collect::<HashSet<_>>()
     };
-    let source_ids = input.source_ids.into_iter().collect::<HashSet<_>>();
+    let source_ids = normalize_source_ids(input.source_ids);
     let mut items = Vec::new();
 
     if kinds.contains("aggregate_api") {
-        let aggregate_apis = storage
-            .list_aggregate_apis()
-            .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
-        for api in aggregate_apis {
-            if !source_ids.is_empty() && !source_ids.contains(api.id.as_str()) {
-                continue;
-            }
-            if !api.balance_query_enabled {
-                continue;
-            }
-            let result = refresh_aggregate_api_balance(api.id.as_str());
+        let aggregate_api_ids = if source_ids.is_empty() {
+            storage
+                .list_balance_query_aggregate_api_ids()
+                .map_err(|err| format!("list aggregate APIs failed: {err}"))?
+        } else {
+            storage
+                .list_balance_query_aggregate_api_ids_for_ids(&source_ids)
+                .map_err(|err| format!("list aggregate APIs failed: {err}"))?
+        };
+        for id in aggregate_api_ids {
+            let result = refresh_aggregate_api_balance(id.as_str());
             items.push(QuotaRefreshSourceResult {
-                id: api.id,
+                id,
                 kind: "aggregate_api".to_string(),
                 ok: result.is_ok(),
                 error: result.err(),
@@ -1463,16 +1515,19 @@ pub(crate) fn refresh_quota_sources(
     }
 
     if kinds.contains("openai_account") {
-        let accounts = storage
-            .list_accounts()
-            .map_err(|err| format!("list accounts failed: {err}"))?;
-        for account in accounts {
-            if !source_ids.is_empty() && !source_ids.contains(account.id.as_str()) {
-                continue;
-            }
-            let result = usage_refresh::refresh_usage_for_account(account.id.as_str());
+        let account_ids = if source_ids.is_empty() {
+            storage
+                .list_account_ids()
+                .map_err(|err| format!("list accounts failed: {err}"))?
+        } else {
+            storage
+                .list_account_ids_for_ids(&source_ids)
+                .map_err(|err| format!("list accounts failed: {err}"))?
+        };
+        for id in account_ids {
+            let result = usage_refresh::refresh_usage_for_account(id.as_str());
             items.push(QuotaRefreshSourceResult {
-                id: account.id,
+                id,
                 kind: "openai_account".to_string(),
                 ok: result.is_ok(),
                 error: result.err(),
@@ -1481,6 +1536,17 @@ pub(crate) fn refresh_quota_sources(
     }
 
     Ok(QuotaRefreshSourcesResult { items })
+}
+
+fn normalize_source_ids(source_ids: Vec<String>) -> Vec<String> {
+    let mut source_ids = source_ids
+        .into_iter()
+        .map(|source_id| source_id.trim().to_string())
+        .filter(|source_id| !source_id.is_empty())
+        .collect::<Vec<_>>();
+    source_ids.sort();
+    source_ids.dedup();
+    source_ids
 }
 
 pub(crate) fn list_model_price_rules() -> Result<ModelPriceRuleListResult, String> {
@@ -1497,18 +1563,10 @@ pub(crate) fn read_model_price_rule(
     model_pattern: &str,
 ) -> Result<Option<ModelPriceRuleEntry>, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let rules = storage
-        .list_enabled_model_price_rules()
-        .map_err(|err| format!("list model price rules failed: {err}"))?;
-    let normalized = model_pattern.trim().to_ascii_lowercase();
-    Ok(rules
-        .into_iter()
-        .find(|rule| {
-            rule.source == "custom"
-                && rule.match_type.eq_ignore_ascii_case("exact")
-                && rule.model_pattern.to_ascii_lowercase() == normalized
-        })
-        .map(price_rule_entry))
+    storage
+        .find_enabled_custom_exact_model_price_rule(model_pattern)
+        .map_err(|err| format!("read model price rule failed: {err}"))
+        .map(|rule| rule.map(price_rule_entry))
 }
 
 pub(crate) fn upsert_model_price_rule(
@@ -1526,13 +1584,11 @@ pub(crate) fn upsert_model_price_rule(
         .unwrap_or_else(|| format!("user-{}", model_pattern));
     let rule = ModelPriceRule {
         id,
-        provider: input
-            .provider
-            .unwrap_or_else(|| crate::quota::model_pricing::infer_provider(&model_pattern).to_string()),
+        provider: input.provider.unwrap_or_else(|| {
+            crate::quota::model_pricing::infer_provider(&model_pattern).to_string()
+        }),
         model_pattern,
-        match_type: input
-            .match_type
-            .unwrap_or_else(|| "exact".to_string()),
+        match_type: input.match_type.unwrap_or_else(|| "exact".to_string()),
         billing_mode: "standard".to_string(),
         currency: "USD".to_string(),
         unit: "per_1m_tokens".to_string(),
@@ -1573,6 +1629,7 @@ pub(crate) fn upsert_model_price_rule(
     storage
         .upsert_model_price_rule(&rule)
         .map_err(|err| format!("upsert model price rule failed: {err}"))?;
+    model_pricing::invalidate_price_rule_cache();
     Ok(price_rule_entry(rule))
 }
 
@@ -1596,7 +1653,76 @@ fn price_rule_entry(rule: ModelPriceRule) -> ModelPriceRuleEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codexmanager_core::storage::{ModelCatalogModelRecord, Storage};
+    use codexmanager_core::storage::{
+        Account, AggregateApi, ApiKey, AppUser, ModelCatalogModelRecord,
+        QuotaSourceModelAssignment, RequestTokenStat, Storage, UsageSnapshotRecord,
+    };
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::{quota::api_key_usage, test_env_guard};
+
+    static QUOTA_READ_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    fn new_test_dir(prefix: &str) -> PathBuf {
+        let seq = QUOTA_READ_TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("{prefix}-{}-{seq}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn account(id: &str, status: &str, now: i64) -> Account {
+        Account {
+            id: id.to_string(),
+            label: id.to_string(),
+            issuer: "https://auth.openai.com".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: status.to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn usage(account_id: &str, used_percent: f64, now: i64) -> UsageSnapshotRecord {
+        UsageSnapshotRecord {
+            account_id: account_id.to_string(),
+            used_percent: Some(used_percent),
+            window_minutes: Some(300),
+            resets_at: None,
+            secondary_used_percent: None,
+            secondary_window_minutes: None,
+            secondary_resets_at: None,
+            credits_json: None,
+            captured_at: now,
+        }
+    }
 
     fn model_record(slug: &str, sort_index: i64) -> ModelCatalogModelRecord {
         ModelCatalogModelRecord {
@@ -1609,6 +1735,72 @@ mod tests {
             sort_index,
             updated_at: 1,
             ..ModelCatalogModelRecord::default()
+        }
+    }
+
+    fn aggregate_api(id: &str, balance_json: Option<&str>, now: i64) -> AggregateApi {
+        AggregateApi {
+            id: id.to_string(),
+            provider_type: "openai-compatible".to_string(),
+            supplier_name: Some(id.to_string()),
+            sort: 0,
+            url: format!("https://{id}.example.test/v1"),
+            auth_type: "bearer".to_string(),
+            auth_params_json: None,
+            action: None,
+            model_override: None,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+            balance_query_enabled: true,
+            balance_query_template: None,
+            balance_query_base_url: None,
+            balance_query_user_id: None,
+            balance_query_config_json: None,
+            last_balance_at: Some(now),
+            last_balance_status: Some("success".to_string()),
+            last_balance_error: None,
+            last_balance_json: balance_json.map(str::to_string),
+        }
+    }
+
+    fn test_app_user(id: &str, username: &str, now: i64) -> AppUser {
+        AppUser {
+            id: id.to_string(),
+            username: username.to_string(),
+            display_name: None,
+            password_hash: "hash".to_string(),
+            role: "member".to_string(),
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+            last_login_at: None,
+        }
+    }
+
+    fn test_api_key(id: &str, now: i64) -> ApiKey {
+        ApiKey {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            model_slug: Some("gpt-5-mini".to_string()),
+            reasoning_effort: None,
+            service_tier: None,
+            rotation_strategy: "account_rotation".to_string(),
+            aggregate_api_id: None,
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: format!("hash-{id}"),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
         }
     }
 
@@ -1631,8 +1823,600 @@ mod tests {
             ])
             .expect("upsert models");
 
-        let models = api_available_model_slugs(&storage, &[]).expect("available models");
+        let models = api_available_model_slugs(&storage, Some(&[])).expect("available models");
 
         assert_eq!(models, vec!["z-model", "a-model"]);
+    }
+
+    #[test]
+    fn api_available_model_slugs_avoids_price_seed_when_catalog_has_models() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        storage
+            .upsert_model_catalog_models(&[model_record("catalog-model", 0)])
+            .expect("upsert models");
+
+        let models = api_available_model_slugs(&storage, None).expect("available models");
+
+        assert_eq!(models, vec!["catalog-model"]);
+        assert_eq!(
+            storage
+                .count_model_price_rules_for_seed(model_pricing::PRICE_SEED_VERSION)
+                .expect("count price seed rows"),
+            0
+        );
+    }
+
+    #[test]
+    fn billing_rule_upsert_validates_user_and_api_key_with_exists_helpers() {
+        let _lock = test_env_guard();
+        let dir = new_test_dir("billing-rule-upsert");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_app_user(&test_app_user("billing-user", "billing-user", now))
+            .expect("insert app user");
+        storage
+            .insert_api_key(&test_api_key("billing-key", now))
+            .expect("insert api key");
+
+        let result = upsert_billing_rule(BillingRuleUpsertInput {
+            id: Some("billing-rule".to_string()),
+            name: "Billing Rule".to_string(),
+            status: Some("active".to_string()),
+            priority: Some(1),
+            multiplier_millis: 1_500,
+            model_pattern: Some("gpt-5-mini".to_string()),
+            user_id: Some("billing-user".to_string()),
+            api_key_id: Some("billing-key".to_string()),
+            ..BillingRuleUpsertInput::default()
+        })
+        .expect("upsert billing rule");
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].id, "billing-rule");
+
+        let missing_user = upsert_billing_rule(BillingRuleUpsertInput {
+            name: "Missing User".to_string(),
+            multiplier_millis: 1_000,
+            user_id: Some("missing-user".to_string()),
+            ..BillingRuleUpsertInput::default()
+        })
+        .expect_err("missing user should fail");
+        assert!(missing_user.contains("计费规则用户不存在"));
+
+        let missing_key = upsert_billing_rule(BillingRuleUpsertInput {
+            name: "Missing Key".to_string(),
+            multiplier_millis: 1_000,
+            api_key_id: Some("missing-key".to_string()),
+            ..BillingRuleUpsertInput::default()
+        })
+        .expect_err("missing api key should fail");
+        assert!(missing_key.contains("计费规则 API Key 不存在"));
+    }
+
+    #[test]
+    fn quota_api_key_usage_limits_model_usage_to_existing_keys() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_api_key(&test_api_key("visible-key", now))
+            .expect("insert api key");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: 1,
+                key_id: Some("visible-key".to_string()),
+                model: Some("gpt-visible".to_string()),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
+                estimated_cost_usd: Some(0.01),
+                created_at: now,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert visible token stat");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: 2,
+                key_id: Some("orphan-key".to_string()),
+                model: Some("gpt-orphan".to_string()),
+                input_tokens: Some(100),
+                output_tokens: Some(50),
+                total_tokens: Some(150),
+                estimated_cost_usd: Some(1.0),
+                created_at: now,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert orphan token stat");
+
+        let result = api_key_usage::read_quota_api_key_usage_with_storage(&storage)
+            .expect("read api key usage");
+
+        assert_eq!(result.items.len(), 1);
+        let item = &result.items[0];
+        assert_eq!(item.key_id, "visible-key");
+        assert_eq!(item.used_tokens, 15);
+        assert_eq!(item.models.len(), 1);
+        assert_eq!(item.models[0].model, "gpt-visible");
+
+        let overview = read_quota_overview_with_storage(&storage).expect("read quota overview");
+        assert_eq!(overview.api_key.key_count, 1);
+        assert_eq!(overview.api_key.total_used_tokens, 15);
+        assert_eq!(overview.api_key.estimated_cost_usd, 0.01);
+    }
+
+    #[test]
+    fn quota_api_key_usage_empty_keys_returns_empty() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+
+        let result = api_key_usage::read_quota_api_key_usage_with_storage(&storage)
+            .expect("read api key usage");
+
+        assert!(result.items.is_empty());
+    }
+
+    #[test]
+    fn quota_capacity_updates_return_config_from_same_storage_handle() {
+        let _lock = test_env_guard();
+        let dir = new_test_dir("quota-capacity-update");
+        let db_path = dir.join("codexmanager.db");
+        let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_account(&account("acc-capacity", "active", now))
+            .expect("insert account");
+
+        let assigned = set_quota_source_models(
+            "openai_account",
+            "acc-capacity",
+            vec!["gpt-5".to_string(), "gpt-5-mini".to_string()],
+        )
+        .expect("set source models");
+        let assignment = assigned
+            .source_assignments
+            .iter()
+            .find(|item| item.source_kind == "openai_account" && item.source_id == "acc-capacity")
+            .expect("source assignment returned");
+        assert_eq!(
+            assignment.model_slugs,
+            vec!["gpt-5".to_string(), "gpt-5-mini".to_string()]
+        );
+
+        let templated = update_account_quota_capacity_template("pro", Some(10_000), Some(20_000))
+            .expect("update capacity template");
+        let pro_template = templated
+            .templates
+            .iter()
+            .find(|item| item.plan_type == "pro")
+            .expect("pro template returned");
+        assert_eq!(pro_template.primary_window_tokens, Some(10_000));
+        assert_eq!(pro_template.secondary_window_tokens, Some(20_000));
+
+        let overridden =
+            update_account_quota_capacity_override("acc-capacity", Some(30_000), Some(40_000))
+                .expect("update capacity override");
+        let override_item = overridden
+            .account_overrides
+            .iter()
+            .find(|item| item.account_id == "acc-capacity")
+            .expect("account override returned");
+        assert_eq!(override_item.primary_window_tokens, Some(30_000));
+        assert_eq!(override_item.secondary_window_tokens, Some(40_000));
+    }
+
+    #[test]
+    fn quota_overview_low_quota_counts_only_available_accounts() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_account(&account("acc-active-low", "active", now))
+            .expect("insert active account");
+        storage
+            .insert_account(&account("acc-disabled-low", "disabled", now))
+            .expect("insert disabled account");
+        storage
+            .insert_usage_snapshot(&usage("acc-active-low", 90.0, now))
+            .expect("insert active usage");
+        storage
+            .insert_usage_snapshot(&usage("acc-disabled-low", 10.0, now))
+            .expect("insert disabled usage");
+
+        let result = read_quota_overview_with_storage(&storage).expect("read quota overview");
+
+        assert_eq!(result.openai_account.account_count, 2);
+        assert_eq!(result.openai_account.available_count, 1);
+        assert_eq!(result.openai_account.low_quota_count, 1);
+        assert_eq!(result.openai_account.primary_remain_percent, Some(10));
+    }
+
+    #[test]
+    fn quota_model_usage_counts_only_available_accounts() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_account(&account("acc-active-model", "active", now))
+            .expect("insert active account");
+        storage
+            .insert_account(&account("acc-disabled-model", "disabled", now))
+            .expect("insert disabled account");
+        storage
+            .insert_usage_snapshot(&usage("acc-active-model", 25.0, now))
+            .expect("insert active usage");
+        storage
+            .insert_usage_snapshot(&usage("acc-disabled-model", 1.0, now))
+            .expect("insert disabled usage");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: 1,
+                key_id: Some("key-model".to_string()),
+                account_id: Some("acc-active-model".to_string()),
+                model: Some("gpt-test".to_string()),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
+                created_at: now,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert token stat");
+
+        let result =
+            read_quota_model_usage_with_storage(&storage, None, None).expect("read model usage");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].model, "gpt-test");
+        assert_eq!(result.items[0].openai_available_account_count, 1);
+        assert_eq!(result.items[0].openai_primary_remain_percent, Some(75));
+    }
+
+    #[test]
+    fn quota_model_usage_reads_aggregate_balance_from_balance_snapshots_only() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_aggregate_api(&aggregate_api(
+                "agg-valid-a",
+                Some(r#"{"remaining":2.5,"unit":"USD"}"#),
+                now,
+            ))
+            .expect("insert valid aggregate api a");
+        storage
+            .insert_aggregate_api(&aggregate_api(
+                "agg-valid-b",
+                Some(r#"{"remaining":1.5,"unit":"USD"}"#),
+                now,
+            ))
+            .expect("insert valid aggregate api b");
+        storage
+            .insert_aggregate_api(&aggregate_api("agg-invalid", Some("not-json"), now))
+            .expect("insert invalid aggregate api");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: 1,
+                key_id: Some("key-model".to_string()),
+                account_id: None,
+                model: Some("gpt-5-mini".to_string()),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
+                created_at: now,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert token stat");
+
+        let result =
+            read_quota_model_usage_with_storage(&storage, None, None).expect("read model usage");
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].aggregate_balance_usd, Some(4.0));
+        assert!(result.items[0]
+            .aggregate_estimated_remaining_tokens
+            .is_some());
+    }
+
+    #[test]
+    fn quota_model_usage_preserves_known_zero_aggregate_balance() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_aggregate_api(&aggregate_api(
+                "agg-zero",
+                Some(r#"{"remaining":0.0,"unit":"USD"}"#),
+                now,
+            ))
+            .expect("insert zero balance aggregate api");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: 1,
+                key_id: Some("key-model".to_string()),
+                account_id: None,
+                model: Some("gpt-5-mini".to_string()),
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
+                created_at: now,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert token stat");
+
+        let overview = read_quota_overview_with_storage(&storage).expect("read quota overview");
+        let model_usage =
+            read_quota_model_usage_with_storage(&storage, None, None).expect("read model usage");
+
+        assert_eq!(overview.aggregate_api.total_balance_usd, Some(0.0));
+        assert_eq!(model_usage.items.len(), 1);
+        assert_eq!(model_usage.items[0].aggregate_balance_usd, Some(0.0));
+        assert_eq!(
+            model_usage.items[0].aggregate_estimated_remaining_tokens,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn quota_source_list_uses_account_source_summaries_with_usage_and_models() {
+        let mut storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        let mut account = account("acc-source", "active", now);
+        account.label = "Source Account".to_string();
+        account.issuer = "ignored-issuer".to_string();
+        account.workspace_id = Some("ignored-workspace".to_string());
+        storage
+            .insert_account(&account)
+            .expect("insert account source");
+        storage
+            .insert_usage_snapshot(&usage("acc-source", 42.0, now))
+            .expect("insert account usage");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-source",
+                &["gpt-source".to_string()],
+            )
+            .expect("assign account source model");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-unlisted",
+                &["gpt-should-not-load".to_string()],
+            )
+            .expect("assign unlisted account source model");
+
+        let result = read_quota_source_list_with_storage(&storage).expect("read quota source list");
+        let item = result
+            .items
+            .iter()
+            .find(|item| item.kind == "openai_account" && item.id == "acc-source")
+            .expect("account source item exists");
+
+        assert_eq!(item.name, "Source Account");
+        assert_eq!(item.status, "ok");
+        assert_eq!(item.metric_kind, "window_percent");
+        assert_eq!(item.remaining, Some(58.0));
+        assert_eq!(item.used, Some(42.0));
+        assert_eq!(item.models, vec!["gpt-source".to_string()]);
+        assert!(!result
+            .items
+            .iter()
+            .any(|item| item.models.contains(&"gpt-should-not-load".to_string())));
+    }
+
+    #[test]
+    fn model_pool_accounts_skip_unavailable_sources_before_batch_loading() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_account(&account("acc-active", "active", now))
+            .expect("insert active account");
+        storage
+            .insert_account(&account("acc-unavailable", "unavailable", now))
+            .expect("insert unavailable account");
+        storage
+            .insert_usage_snapshot(&UsageSnapshotRecord {
+                secondary_used_percent: Some(10.0),
+                ..usage("acc-active", 25.0, now)
+            })
+            .expect("insert active usage");
+        storage
+            .insert_usage_snapshot(&usage("acc-unavailable", 1.0, now))
+            .expect("insert unavailable usage");
+        storage
+            .upsert_account_quota_capacity_override("acc-active", Some(100), Some(200))
+            .expect("insert active capacity");
+        storage
+            .upsert_account_quota_capacity_override("acc-unavailable", Some(100), None)
+            .expect("insert unavailable capacity");
+
+        let assignments = assignment_map(vec![
+            QuotaSourceModelAssignment {
+                source_kind: "openai_account".to_string(),
+                source_id: "acc-active".to_string(),
+                model_slug: "gpt-test".to_string(),
+                updated_at: now,
+            },
+            QuotaSourceModelAssignment {
+                source_kind: "openai_account".to_string(),
+                source_id: "acc-unavailable".to_string(),
+                model_slug: "gpt-test".to_string(),
+                updated_at: now,
+            },
+        ]);
+        let pools = build_model_pool_accumulators_from_storage(
+            &storage,
+            &[],
+            &["gpt-test".to_string()],
+            &assignments,
+        )
+        .expect("build pools");
+        let pool = pools.get("gpt-test").expect("pool exists");
+
+        let source_ids = pool
+            .sources
+            .iter()
+            .filter(|source| source.source_kind == "openai_account")
+            .map(|source| source.source_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(source_ids, vec!["acc-active"]);
+        assert_eq!(pool.account_primary_remaining_tokens, 75);
+        assert_eq!(pool.account_secondary_remaining_tokens, 180);
+        assert_eq!(pool.account_estimated_remaining_tokens, 180);
+    }
+
+    #[test]
+    fn pool_source_assignment_loader_limits_to_pool_source_kinds() {
+        let mut storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-source",
+                &["gpt-aggregate".to_string()],
+            )
+            .expect("set aggregate assignment");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-source",
+                &["gpt-account".to_string()],
+            )
+            .expect("set account assignment");
+        storage
+            .set_quota_source_model_assignments(
+                "future_source",
+                "future-source",
+                &["gpt-future".to_string()],
+            )
+            .expect("set future source assignment");
+
+        let assignment_map = assignment_map(
+            list_pool_source_model_assignments(&storage).expect("list pool assignments"),
+        );
+
+        assert!(
+            assignment_map.contains_key(&("aggregate_api".to_string(), "agg-source".to_string()))
+        );
+        assert!(
+            assignment_map.contains_key(&("openai_account".to_string(), "acc-source".to_string()))
+        );
+        assert!(!assignment_map
+            .contains_key(&("future_source".to_string(), "future-source".to_string())));
+    }
+
+    #[test]
+    fn model_pool_builder_can_limit_work_to_reference_model() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        storage
+            .insert_account(&account("acc-reference", "active", now))
+            .expect("insert account");
+        storage
+            .insert_usage_snapshot(&usage("acc-reference", 10.0, now))
+            .expect("insert usage");
+        storage
+            .upsert_account_quota_capacity_override("acc-reference", Some(100), None)
+            .expect("insert capacity");
+
+        let assignments = assignment_map(vec![QuotaSourceModelAssignment {
+            source_kind: "openai_account".to_string(),
+            source_id: "acc-reference".to_string(),
+            model_slug: "gpt-reference".to_string(),
+            updated_at: now,
+        }]);
+        let target_models = HashSet::from(["gpt-reference".to_string()]);
+        let capacity_config = load_account_capacity_config(&storage).expect("load capacity");
+        let pools = build_model_pool_accumulators_for_models(
+            &storage,
+            &[],
+            &["gpt-reference".to_string(), "gpt-other".to_string()],
+            &assignments,
+            Some(&target_models),
+            &capacity_config,
+        )
+        .expect("build targeted pools");
+
+        assert_eq!(
+            pools.keys().cloned().collect::<Vec<_>>(),
+            vec!["gpt-reference"]
+        );
+        let pool = pools.get("gpt-reference").expect("reference pool exists");
+        assert_eq!(pool.account_estimated_remaining_tokens, 90);
+        assert_eq!(pool.sources.len(), 1);
+        assert_eq!(pool.sources[0].source_id, "acc-reference");
+    }
+
+    #[test]
+    fn target_model_assignment_map_preserves_explicit_and_implicit_source_semantics() {
+        let mut storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+
+        for (account_id, used_percent) in [
+            ("acc-target", 10.0),
+            ("acc-other-model", 30.0),
+            ("acc-implicit", 20.0),
+        ] {
+            storage
+                .insert_account(&account(account_id, "active", now))
+                .expect("insert account");
+            storage
+                .insert_usage_snapshot(&usage(account_id, used_percent, now))
+                .expect("insert usage");
+            storage
+                .upsert_account_quota_capacity_override(account_id, Some(100), None)
+                .expect("insert capacity");
+        }
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-target",
+                &["gpt-target".to_string()],
+            )
+            .expect("set target assignment");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-other-model",
+                &["gpt-other".to_string()],
+            )
+            .expect("set other assignment");
+
+        let assignments =
+            target_model_assignment_map(&storage, "gpt-target").expect("build assignment map");
+        let target_models = HashSet::from(["gpt-target".to_string()]);
+        let capacity_config = load_account_capacity_config(&storage).expect("load capacity");
+        let pools = build_model_pool_accumulators_for_models(
+            &storage,
+            &[],
+            &["gpt-target".to_string(), "gpt-other".to_string()],
+            &assignments,
+            Some(&target_models),
+            &capacity_config,
+        )
+        .expect("build targeted pools");
+
+        let pool = pools.get("gpt-target").expect("target pool exists");
+        let source_ids = pool
+            .sources
+            .iter()
+            .filter(|source| source.source_kind == "openai_account")
+            .map(|source| source.source_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(source_ids, vec!["acc-implicit", "acc-target"]);
+        assert_eq!(pool.account_estimated_remaining_tokens, 170);
     }
 }

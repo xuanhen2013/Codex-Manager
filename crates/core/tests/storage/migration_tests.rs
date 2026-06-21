@@ -331,6 +331,177 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 068 migration");
     assert_eq!(applied_068, 1);
+    for version in [
+        "069_request_logs_filter_indexes",
+        "070_request_token_stats_reporting_indexes",
+        "071_model_source_lookup_indexes",
+        "072_accounts_group_name_filter_index",
+        "073_events_account_status_lookup_index",
+        "074_plugin_task_due_lookup_index",
+        "075_billing_rules_active_order_index",
+        "076_app_users_lower_username_index",
+        "077_api_key_owners_user_key_lookup_index",
+        "078_plugin_run_logs_task_lookup_index",
+        "079_wallet_ledger_entry_kind_index",
+        "080_accounts_identity_lookup_indexes",
+        "081_aggregate_api_balance_query_lookup_index",
+        "082_aggregate_api_status_order_index",
+        "083_aggregate_api_balance_query_order_index",
+        "084_aggregate_api_provider_status_order_index",
+        "085_model_price_rules_custom_exact_lookup_index",
+        "086_model_price_rules_enabled_pattern_lookup_index",
+        "087_request_token_stats_actual_source",
+        "088_request_token_stat_hourly_rollups",
+        "089_request_logs_ordered_filter_indexes",
+        "090_drop_redundant_request_log_filter_indexes",
+        "091_aggregate_api_list_order_index",
+        "092_drop_redundant_model_source_indexes",
+        "093_drop_redundant_account_manager_indexes",
+        "094_plugin_installs_list_order_index",
+        "095_model_catalog_scope_order_index",
+        "096_api_keys_list_order_index",
+        "097_tokens_refresh_due_order_index",
+    ] {
+        let applied: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(1) FROM schema_migrations WHERE version = ?1",
+                [version],
+                |row| row.get(0),
+            )
+            .expect("count reporting index migration");
+        assert_eq!(applied, 1, "migration {version} should be applied");
+    }
+
+    for redundant_index in [
+        "idx_request_logs_status_code_created_at",
+        "idx_request_logs_method_created_at",
+        "idx_request_logs_key_id_created_at",
+        "idx_request_logs_account_id_created_at",
+        "idx_request_logs_trace_id_created_at",
+        "idx_request_logs_model_created_at",
+        "idx_request_logs_request_type_created_at",
+        "idx_request_logs_gateway_mode_created_at",
+        "idx_request_logs_route_strategy_created_at",
+        "idx_request_logs_route_source_created_at",
+        "idx_request_logs_actual_source_id_created_at",
+    ] {
+        let exists: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [redundant_index],
+                |row| row.get(0),
+            )
+            .expect("check redundant request log index");
+        assert_eq!(exists, 0, "index {redundant_index} should be dropped");
+    }
+
+    let plugin_installs_list_order_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_plugin_installs_list_order'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check plugin installs list order index");
+    assert_eq!(
+        plugin_installs_list_order_index, 1,
+        "idx_plugin_installs_list_order should exist"
+    );
+
+    let old_model_catalog_scope_sort_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_model_catalog_models_scope_sort'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check old model catalog scope sort index");
+    assert_eq!(
+        old_model_catalog_scope_sort_index, 0,
+        "idx_model_catalog_models_scope_sort should be dropped"
+    );
+
+    let model_catalog_scope_order_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_model_catalog_models_scope_order'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check model catalog scope order index");
+    assert_eq!(
+        model_catalog_scope_order_index, 1,
+        "idx_model_catalog_models_scope_order should exist"
+    );
+
+    for ordered_index in [
+        "idx_request_logs_status_code_created_at_id",
+        "idx_request_logs_method_created_at_id",
+        "idx_request_logs_key_id_created_at_id",
+        "idx_request_logs_account_id_created_at_id",
+        "idx_request_logs_trace_id_created_at_id",
+        "idx_request_logs_model_created_at_id",
+        "idx_request_logs_request_type_created_at_id",
+        "idx_request_logs_gateway_mode_created_at_id",
+        "idx_request_logs_route_strategy_created_at_id",
+        "idx_request_logs_route_source_created_at_id",
+        "idx_request_logs_actual_source_id_created_at_id",
+    ] {
+        let exists: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [ordered_index],
+                |row| row.get(0),
+            )
+            .expect("check ordered request log index");
+        assert_eq!(exists, 1, "index {ordered_index} should exist");
+    }
+
+    let old_aggregate_api_created_at_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_aggregate_apis_created_at'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check old aggregate API created_at index");
+    assert_eq!(
+        old_aggregate_api_created_at_index, 0,
+        "idx_aggregate_apis_created_at should be dropped after list-order index migration"
+    );
+
+    let aggregate_api_list_order_index: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_aggregate_apis_list_order'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check aggregate API list order index");
+    assert_eq!(
+        aggregate_api_list_order_index, 1,
+        "idx_aggregate_apis_list_order should exist"
+    );
+
+    for redundant_index in [
+        "idx_model_source_models_source",
+        "idx_model_source_mappings_platform",
+        "idx_app_wallets_owner",
+        "idx_billing_rules_status_priority",
+    ] {
+        let exists: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [redundant_index],
+                |row| row.get(0),
+            )
+            .expect("check redundant model source index");
+        assert_eq!(exists, 0, "index {redundant_index} should be dropped");
+    }
 
     assert!(!storage
         .has_column("accounts", "note")
@@ -344,6 +515,15 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("request_token_stats", "total_tokens")
         .expect("check request_token_stats.total_tokens"));
+    assert!(storage
+        .has_column("request_token_stats", "actual_source_kind")
+        .expect("check request_token_stats.actual_source_kind"));
+    assert!(storage
+        .has_column("request_token_stats", "actual_source_id")
+        .expect("check request_token_stats.actual_source_id"));
+    assert!(storage
+        .has_table("request_token_stat_hourly_rollups")
+        .expect("check request_token_stat_hourly_rollups table"));
     let gateway_error_log_table: i64 = storage
         .conn
         .query_row(
@@ -1374,13 +1554,23 @@ fn observability_storage_compaction_migration_rolls_up_and_prunes_legacy_rows() 
     let rolled_total_tokens: i64 = storage
         .conn
         .query_row(
-            "SELECT total_tokens FROM request_token_stat_rollups
+            "SELECT SUM(total_tokens) FROM request_token_stat_hourly_rollups
              WHERE key_id = 'key-migrate' AND account_id = 'acc-migrate' AND model = 'gpt-5'",
             [],
             |row| row.get(0),
         )
-        .expect("load rollup row");
+        .expect("load hourly rollup total");
     assert_eq!(rolled_total_tokens, 330);
+
+    let remaining_old_token_stats: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM request_token_stats WHERE created_at < ?1",
+            [2_000_000_i64],
+            |row| row.get(0),
+        )
+        .expect("count old token stats");
+    assert_eq!(remaining_old_token_stats, 0);
 
     let remaining_recent_token_stats: i64 = storage
         .conn

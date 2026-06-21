@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
-use rusqlite::{params, Result, Row};
+use rusqlite::{params, params_from_iter, types::Value, Result, Row};
 
+use super::key_id_filters::{normalize_text_ids, text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{
     now_ts, AccountQuotaCapacityOverride, AccountQuotaCapacityTemplate, QuotaSourceModelAssignment,
     Storage,
@@ -19,6 +20,147 @@ impl Storage {
         for row in rows {
             items.push(row?);
         }
+        Ok(items)
+    }
+
+    pub fn list_quota_source_model_assignments_for_kind(
+        &self,
+        source_kind: &str,
+    ) -> Result<Vec<QuotaSourceModelAssignment>> {
+        let source_kind = normalize_required_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT source_kind, source_id, model_slug, updated_at
+             FROM quota_source_model_assignments
+             WHERE source_kind = ?1
+             ORDER BY source_kind ASC, source_id ASC, model_slug ASC",
+        )?;
+        let rows = stmt.query_map([source_kind], map_quota_source_model_assignment_row)?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
+    pub fn list_quota_source_model_assignments_for_model(
+        &self,
+        source_kind: &str,
+        model_slug: &str,
+    ) -> Result<Vec<QuotaSourceModelAssignment>> {
+        let source_kind = normalize_required_text(source_kind);
+        let model_slug = normalize_required_text(model_slug);
+        if source_kind.is_empty() || model_slug.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT source_kind, source_id, model_slug, updated_at
+             FROM quota_source_model_assignments
+             WHERE source_kind = ?1 AND model_slug = ?2
+             ORDER BY source_kind ASC, source_id ASC, model_slug ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![source_kind, model_slug],
+            map_quota_source_model_assignment_row,
+        )?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
+    pub fn list_quota_source_model_assignment_targets_for_model(
+        &self,
+        source_kind: &str,
+        model_slug: &str,
+    ) -> Result<Vec<QuotaSourceModelAssignment>> {
+        let source_kind = normalize_required_text(source_kind);
+        let model_slug = normalize_required_text(model_slug);
+        if source_kind.is_empty() || model_slug.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                sources.source_kind,
+                sources.source_id,
+                COALESCE(matches.model_slug, '') AS model_slug,
+                COALESCE(matches.updated_at, 0) AS updated_at
+             FROM (
+                SELECT DISTINCT source_kind, source_id
+                FROM quota_source_model_assignments
+                WHERE source_kind = ?1
+             ) sources
+             LEFT JOIN quota_source_model_assignments matches
+                ON matches.source_kind = sources.source_kind
+               AND matches.source_id = sources.source_id
+               AND matches.model_slug = ?2
+             ORDER BY sources.source_kind ASC, sources.source_id ASC, model_slug ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![source_kind, model_slug],
+            map_quota_source_model_assignment_row,
+        )?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
+    pub fn list_quota_assignment_source_ids_for_kind(
+        &self,
+        source_kind: &str,
+    ) -> Result<Vec<String>> {
+        let source_kind = normalize_required_text(source_kind);
+        if source_kind.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT source_id
+             FROM quota_source_model_assignments
+             WHERE source_kind = ?1
+             ORDER BY source_id ASC",
+        )?;
+        let rows = stmt.query_map([source_kind], |row| row.get(0))?;
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
+    pub fn list_quota_source_model_assignments_for_sources(
+        &self,
+        source_kind: &str,
+        source_ids: &[String],
+    ) -> Result<Vec<QuotaSourceModelAssignment>> {
+        let source_kind = normalize_required_text(source_kind);
+        let source_ids = normalize_text_ids(source_ids);
+        if source_kind.is_empty() || source_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut items = Vec::new();
+        for chunk in source_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            items.extend(list_quota_source_model_assignments_for_sources_chunk(
+                self,
+                &source_kind,
+                chunk,
+            )?);
+        }
+        items.sort_by(|a, b| {
+            a.source_kind
+                .cmp(&b.source_kind)
+                .then_with(|| a.source_id.cmp(&b.source_id))
+                .then_with(|| a.model_slug.cmp(&b.model_slug))
+        });
         Ok(items)
     }
 
@@ -131,6 +273,25 @@ impl Storage {
         Ok(items)
     }
 
+    pub fn list_account_quota_capacity_overrides_for_accounts(
+        &self,
+        account_ids: &[String],
+    ) -> Result<Vec<AccountQuotaCapacityOverride>> {
+        let account_ids = normalize_text_ids(account_ids);
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut items = Vec::new();
+        for chunk in account_ids.chunks(SQLITE_IN_CLAUSE_BATCH_SIZE) {
+            items.extend(list_account_quota_capacity_overrides_for_accounts_chunk(
+                self, chunk,
+            )?);
+        }
+        items.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+        Ok(items)
+    }
+
     pub fn upsert_account_quota_capacity_override(
         &self,
         account_id: &str,
@@ -202,6 +363,34 @@ fn map_quota_source_model_assignment_row(row: &Row<'_>) -> Result<QuotaSourceMod
     })
 }
 
+fn list_quota_source_model_assignments_for_sources_chunk(
+    storage: &Storage,
+    source_kind: &str,
+    source_ids: &[String],
+) -> Result<Vec<QuotaSourceModelAssignment>> {
+    let Some((source_condition, source_params)) = text_id_in_clause("source_id", source_ids) else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "SELECT source_kind, source_id, model_slug, updated_at
+         FROM quota_source_model_assignments
+         WHERE source_kind = ? AND {source_condition}"
+    );
+    let mut values = Vec::with_capacity(source_params.len() + 1);
+    values.push(Value::Text(source_kind.to_string()));
+    values.extend(source_params);
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params_from_iter(values),
+        map_quota_source_model_assignment_row,
+    )?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?);
+    }
+    Ok(items)
+}
+
 fn map_account_quota_capacity_template_row(row: &Row<'_>) -> Result<AccountQuotaCapacityTemplate> {
     Ok(AccountQuotaCapacityTemplate {
         plan_type: row.get(0)?,
@@ -218,6 +407,30 @@ fn map_account_quota_capacity_override_row(row: &Row<'_>) -> Result<AccountQuota
         secondary_window_tokens: row.get(2)?,
         updated_at: row.get(3)?,
     })
+}
+
+fn list_account_quota_capacity_overrides_for_accounts_chunk(
+    storage: &Storage,
+    account_ids: &[String],
+) -> Result<Vec<AccountQuotaCapacityOverride>> {
+    let Some((condition, params)) = text_id_in_clause("account_id", account_ids) else {
+        return Ok(Vec::new());
+    };
+    let sql = format!(
+        "SELECT account_id, primary_window_tokens, secondary_window_tokens, updated_at
+         FROM account_quota_capacity_overrides
+         WHERE {condition}"
+    );
+    let mut stmt = storage.conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params_from_iter(params),
+        map_account_quota_capacity_override_row,
+    )?;
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row?);
+    }
+    Ok(items)
 }
 
 fn normalize_required_text(value: &str) -> String {
@@ -238,4 +451,361 @@ fn normalize_model_slugs(values: &[String]) -> Vec<String> {
 
 fn positive_tokens(value: Option<i64>) -> Option<i64> {
     value.filter(|tokens| *tokens > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{now_ts, Account};
+
+    fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
+        let mut stmt = storage.conn.prepare(sql).expect("prepare explain");
+        let mut rows = stmt.query([]).expect("query explain");
+        let mut details = Vec::new();
+        while let Some(row) = rows.next().expect("next explain row") {
+            let detail: String = row.get(3).expect("detail");
+            details.push(detail.to_ascii_lowercase());
+        }
+        details
+    }
+
+    fn sample_account(id: &str, now: i64) -> Account {
+        Account {
+            id: id.to_string(),
+            label: id.to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn account_quota_helpers_filter_to_requested_accounts() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+
+        for account_id in ["acc-a", "acc-b"] {
+            storage
+                .insert_account(&sample_account(account_id, now))
+                .expect("insert account");
+            storage
+                .upsert_account_quota_capacity_override(account_id, Some(100), None)
+                .expect("upsert override");
+            storage
+                .set_quota_source_model_assignments(
+                    "openai_account",
+                    account_id,
+                    &[format!("model-{account_id}")],
+                )
+                .expect("set assignments");
+        }
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "acc-b",
+                &["aggregate-model".to_string()],
+            )
+            .expect("set aggregate assignments");
+
+        let requested = vec!["acc-b".to_string(), "missing".to_string()];
+        let overrides = storage
+            .list_account_quota_capacity_overrides_for_accounts(&requested)
+            .expect("list overrides");
+        let assignments = storage
+            .list_quota_source_model_assignments_for_sources("openai_account", &requested)
+            .expect("list assignments");
+
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].account_id, "acc-b");
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].source_kind, "openai_account");
+        assert_eq!(assignments[0].source_id, "acc-b");
+        assert_eq!(assignments[0].model_slug, "model-acc-b");
+    }
+
+    #[test]
+    fn quota_source_model_assignments_for_kind_filters_source_kind() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        storage
+            .set_quota_source_model_assignments("aggregate_api", "agg-b", &["model-b".to_string()])
+            .expect("set aggregate b assignments");
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-a",
+                &["model-c".to_string(), "model-a".to_string()],
+            )
+            .expect("set aggregate a assignments");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "agg-a",
+                &["account-model".to_string()],
+            )
+            .expect("set account assignments");
+
+        let assignments = storage
+            .list_quota_source_model_assignments_for_kind("aggregate_api")
+            .expect("list aggregate assignments");
+
+        assert_eq!(
+            assignments
+                .into_iter()
+                .map(|item| (item.source_kind, item.source_id, item.model_slug))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "aggregate_api".to_string(),
+                    "agg-a".to_string(),
+                    "model-a".to_string()
+                ),
+                (
+                    "aggregate_api".to_string(),
+                    "agg-a".to_string(),
+                    "model-c".to_string()
+                ),
+                (
+                    "aggregate_api".to_string(),
+                    "agg-b".to_string(),
+                    "model-b".to_string()
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn quota_source_model_assignments_for_model_filters_with_model_index() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-a",
+                &["gpt-target".to_string(), "gpt-other".to_string()],
+            )
+            .expect("set account a assignments");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-b",
+                &["gpt-other".to_string()],
+            )
+            .expect("set account b assignments");
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-a",
+                &["gpt-target".to_string()],
+            )
+            .expect("set aggregate assignments");
+
+        let assignments = storage
+            .list_quota_source_model_assignments_for_model("openai_account", "gpt-target")
+            .expect("list model assignments");
+
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].source_kind, "openai_account");
+        assert_eq!(assignments[0].source_id, "acc-a");
+        assert_eq!(assignments[0].model_slug, "gpt-target");
+
+        let plan = storage
+            .conn
+            .query_row(
+                "EXPLAIN QUERY PLAN
+                 SELECT source_kind, source_id, model_slug, updated_at
+                 FROM quota_source_model_assignments
+                 WHERE source_kind = 'openai_account' AND model_slug = 'gpt-target'",
+                [],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("explain query plan");
+        assert!(
+            plan.contains("idx_quota_source_model_assignments_model"),
+            "quota assignment model lookup should use model index, got {plan}"
+        );
+    }
+
+    #[test]
+    fn quota_assignment_source_ids_for_kind_lists_distinct_sources() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-b",
+                &["gpt-b".to_string(), "gpt-a".to_string()],
+            )
+            .expect("set account b assignments");
+        storage
+            .set_quota_source_model_assignments("openai_account", "acc-a", &["gpt-a".to_string()])
+            .expect("set account a assignments");
+        storage
+            .set_quota_source_model_assignments("aggregate_api", "agg-a", &["gpt-a".to_string()])
+            .expect("set aggregate assignments");
+
+        let source_ids = storage
+            .list_quota_assignment_source_ids_for_kind("openai_account")
+            .expect("list source ids");
+
+        assert_eq!(source_ids, vec!["acc-a".to_string(), "acc-b".to_string()]);
+    }
+
+    #[test]
+    fn quota_source_model_assignment_targets_for_model_preserve_empty_implicit_sources() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-target",
+                &["gpt-target".to_string()],
+            )
+            .expect("set target assignment");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                "acc-other",
+                &["gpt-other".to_string()],
+            )
+            .expect("set other assignment");
+        storage
+            .set_quota_source_model_assignments(
+                "aggregate_api",
+                "agg-target",
+                &["gpt-target".to_string()],
+            )
+            .expect("set aggregate assignment");
+
+        let targets = storage
+            .list_quota_source_model_assignment_targets_for_model("openai_account", "gpt-target")
+            .expect("list target assignments");
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|item| {
+                    (
+                        item.source_kind.as_str(),
+                        item.source_id.as_str(),
+                        item.model_slug.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("openai_account", "acc-other", ""),
+                ("openai_account", "acc-target", "gpt-target")
+            ]
+        );
+
+        let details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT
+                sources.source_kind,
+                sources.source_id,
+                COALESCE(matches.model_slug, '') AS model_slug,
+                COALESCE(matches.updated_at, 0) AS updated_at
+             FROM (
+                SELECT DISTINCT source_kind, source_id
+                FROM quota_source_model_assignments
+                WHERE source_kind = 'openai_account'
+             ) sources
+             LEFT JOIN quota_source_model_assignments matches
+                ON matches.source_kind = sources.source_kind
+               AND matches.source_id = sources.source_id
+               AND matches.model_slug = 'gpt-target'",
+        );
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("idx_quota_source_model_assignments_source")
+                    || detail.contains("sqlite_autoindex_quota_source_model_assignments")
+            }),
+            "target assignment source lookup should use source index, got {details:?}"
+        );
+    }
+
+    #[test]
+    fn account_quota_helpers_chunk_large_account_sets() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+
+        let target = "acc-0949";
+        storage
+            .insert_account(&sample_account(target, now))
+            .expect("insert target account");
+        storage
+            .upsert_account_quota_capacity_override(target, Some(250), Some(500))
+            .expect("upsert override");
+        storage
+            .set_quota_source_model_assignments(
+                "openai_account",
+                target,
+                &["gpt-large".to_string()],
+            )
+            .expect("set assignments");
+
+        let requested = (0..950)
+            .map(|index| format!("acc-{index:04}"))
+            .collect::<Vec<_>>();
+        let overrides = storage
+            .list_account_quota_capacity_overrides_for_accounts(&requested)
+            .expect("list overrides");
+        let assignments = storage
+            .list_quota_source_model_assignments_for_sources("openai_account", &requested)
+            .expect("list assignments");
+
+        assert_eq!(overrides.len(), 1);
+        assert_eq!(overrides[0].account_id, target);
+        assert_eq!(overrides[0].primary_window_tokens, Some(250));
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].source_id, target);
+        assert_eq!(assignments[0].model_slug, "gpt-large");
+    }
+
+    #[test]
+    fn quota_helper_chunk_queries_defer_final_ordering_to_rust() {
+        let storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+
+        let assignment_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT source_kind, source_id, model_slug, updated_at
+             FROM quota_source_model_assignments
+             WHERE source_kind = 'openai_account'
+               AND source_id IN ('acc-a', 'acc-b')",
+        );
+        let override_details = collect_query_plan_details(
+            &storage,
+            "EXPLAIN QUERY PLAN
+             SELECT account_id, primary_window_tokens, secondary_window_tokens, updated_at
+             FROM account_quota_capacity_overrides
+             WHERE account_id IN ('acc-a', 'acc-b')",
+        );
+
+        assert!(
+            !assignment_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "quota assignment chunk query should avoid per-chunk ORDER BY temp sorting, got {assignment_details:?}"
+        );
+        assert!(
+            !override_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "quota override chunk query should avoid per-chunk ORDER BY temp sorting, got {override_details:?}"
+        );
+    }
 }

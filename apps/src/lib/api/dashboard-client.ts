@@ -290,6 +290,7 @@ export const dashboardClient = {
     userId?: string | null;
     dayStartTs?: number;
     dayEndTs?: number;
+    includeDetails?: boolean;
   }): Promise<MemberDashboardSummary> {
     const result = await invoke<unknown>(
       "service_dashboard_member_summary",
@@ -297,6 +298,7 @@ export const dashboardClient = {
         userId: params?.userId ?? null,
         dayStartTs: params?.dayStartTs ?? null,
         dayEndTs: params?.dayEndTs ?? null,
+        includeDetails: params?.includeDetails ?? null,
       }),
     );
     return readMemberDashboardSummary(result);

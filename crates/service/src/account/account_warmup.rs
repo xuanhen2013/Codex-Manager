@@ -8,7 +8,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::account_status::mark_account_unavailable_for_auth_error;
-use crate::apikey_models::read_managed_model_catalog_from_storage;
 use crate::storage_helpers::open_storage;
 use crate::usage_account_meta::workspace_header_for_account;
 use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh_ahead_secs};
@@ -36,6 +35,11 @@ pub(crate) struct AccountWarmupItemResult {
     pub(crate) account_name: String,
     pub(crate) ok: bool,
     pub(crate) message: String,
+}
+
+struct AccountWarmupTarget {
+    account: Account,
+    token: Token,
 }
 
 /// 函数 `warmup_accounts`
@@ -91,29 +95,25 @@ pub(crate) fn warmup_accounts(
 fn resolve_target_accounts(
     storage: &Storage,
     account_ids: &[String],
-) -> Result<Vec<Account>, String> {
-    let accounts = storage
-        .list_gateway_candidates()
-        .map_err(|err| err.to_string())?
-        .into_iter()
-        .map(|(account, _token)| account)
-        .collect::<Vec<_>>();
-
+) -> Result<Vec<AccountWarmupTarget>, String> {
     if account_ids.is_empty() {
-        return Ok(accounts);
+        return storage
+            .list_gateway_candidates()
+            .map_err(|err| err.to_string())
+            .map(gateway_candidate_warmup_targets);
     }
 
-    let mut selected = Vec::new();
-    for account_id in account_ids {
-        let normalized = account_id.trim();
-        if normalized.is_empty() {
-            continue;
-        }
-        if let Some(account) = accounts.iter().find(|item| item.id == normalized) {
-            selected.push(account.clone());
-        }
-    }
-    Ok(selected)
+    storage
+        .list_gateway_candidates_for_accounts(account_ids)
+        .map_err(|err| err.to_string())
+        .map(gateway_candidate_warmup_targets)
+}
+
+fn gateway_candidate_warmup_targets(candidates: Vec<(Account, Token)>) -> Vec<AccountWarmupTarget> {
+    candidates
+        .into_iter()
+        .map(|(account, token)| AccountWarmupTarget { account, token })
+        .collect()
 }
 
 fn normalize_warmup_message(message: &str) -> String {
@@ -145,76 +145,52 @@ fn build_warmup_client() -> Result<Client, String> {
 fn warmup_single_account(
     storage: &Storage,
     client: &Client,
-    account: Account,
+    target: AccountWarmupTarget,
     model_slug: &str,
     message: &str,
 ) -> AccountWarmupItemResult {
+    let AccountWarmupTarget { account, mut token } = target;
     let account_name = account.label.clone();
     let started_at = Instant::now();
-    match load_account_token(storage, &account) {
-        Ok(mut token) => {
-            let mut outcome =
-                send_warmup_request_with_fallback(client, &account, &token, model_slug, message);
+    let mut outcome =
+        send_warmup_request_with_fallback(client, &account, &token, model_slug, message);
 
-            if let Err(err) = outcome.as_ref() {
-                if should_retry_warmup_with_refresh(&token, err) {
-                    let issuer = std::env::var("CODEXMANAGER_ISSUER")
-                        .unwrap_or_else(|_| codexmanager_core::auth::DEFAULT_ISSUER.to_string());
-                    let client_id = std::env::var("CODEXMANAGER_CLIENT_ID")
-                        .unwrap_or_else(|_| codexmanager_core::auth::DEFAULT_CLIENT_ID.to_string());
-                    outcome = refresh_and_persist_access_token(
-                        storage,
-                        &mut token,
-                        &issuer,
-                        &client_id,
-                        token_refresh_ahead_secs(),
-                    )
-                    .and_then(|_| {
-                        send_warmup_request_with_fallback(
-                            client, &account, &token, model_slug, message,
-                        )
-                    });
-                }
-            }
+    if let Err(err) = outcome.as_ref() {
+        if should_retry_warmup_with_refresh(&token, err) {
+            let issuer = std::env::var("CODEXMANAGER_ISSUER")
+                .unwrap_or_else(|_| codexmanager_core::auth::DEFAULT_ISSUER.to_string());
+            let client_id = std::env::var("CODEXMANAGER_CLIENT_ID")
+                .unwrap_or_else(|_| codexmanager_core::auth::DEFAULT_CLIENT_ID.to_string());
+            outcome = refresh_and_persist_access_token(
+                storage,
+                &mut token,
+                &issuer,
+                &client_id,
+                token_refresh_ahead_secs(),
+            )
+            .and_then(|_| {
+                send_warmup_request_with_fallback(client, &account, &token, model_slug, message)
+            });
+        }
+    }
 
-            match outcome {
-                Ok(ok_message) => {
-                    persist_warmup_observability(
-                        storage,
-                        &account,
-                        200,
-                        None,
-                        model_slug,
-                        started_at.elapsed().as_millis() as i64,
-                        ok_message.as_str(),
-                    );
-                    let _ = crate::usage_refresh::enqueue_usage_refresh_for_account(&account.id);
-                    AccountWarmupItemResult {
-                        account_id: account.id,
-                        account_name,
-                        ok: true,
-                        message: ok_message,
-                    }
-                }
-                Err(err) => {
-                    let _ = maybe_mark_account_auth_error(storage, &account.id, &err);
-                    let status_code = extract_status_code_from_message(&err);
-                    persist_warmup_observability(
-                        storage,
-                        &account,
-                        status_code,
-                        Some(err.as_str()),
-                        model_slug,
-                        started_at.elapsed().as_millis() as i64,
-                        "预热失败",
-                    );
-                    AccountWarmupItemResult {
-                        account_id: account.id,
-                        account_name,
-                        ok: false,
-                        message: err,
-                    }
-                }
+    match outcome {
+        Ok(ok_message) => {
+            persist_warmup_observability(
+                storage,
+                &account,
+                200,
+                None,
+                model_slug,
+                started_at.elapsed().as_millis() as i64,
+                ok_message.as_str(),
+            );
+            let _ = crate::usage_refresh::enqueue_usage_refresh_for_account(&account.id);
+            AccountWarmupItemResult {
+                account_id: account.id,
+                account_name,
+                ok: true,
+                message: ok_message,
             }
         }
         Err(err) => {
@@ -297,23 +273,11 @@ fn extract_status_code_from_message(message: &str) -> i64 {
     digits.parse::<i64>().unwrap_or(500)
 }
 
-fn load_account_token(storage: &Storage, account: &Account) -> Result<Token, String> {
-    storage
-        .find_token_by_account_id(&account.id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| "missing token".to_string())
-}
-
 fn resolve_warmup_model_slug(storage: &Storage) -> String {
-    read_managed_model_catalog_from_storage(storage)
+    storage
+        .find_first_api_available_model_catalog_slug("default")
         .ok()
-        .and_then(|catalog| {
-            catalog
-                .items
-                .into_iter()
-                .find(|item| item.model.supported_in_api)
-                .map(|item| item.model.slug)
-        })
+        .flatten()
         .filter(|slug| !slug.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_WARMUP_MODEL.to_string())
 }
@@ -531,6 +495,7 @@ mod tests {
                 slug: slug.to_string(),
                 display_name: slug.to_string(),
                 supported_in_api,
+                visibility: Some("list".to_string()),
                 ..ModelInfo::default()
             },
             sort_index,
@@ -542,11 +507,14 @@ mod tests {
     fn resolve_warmup_model_slug_uses_first_supported_model_from_catalog_order() {
         let storage = Storage::open_in_memory().expect("open in-memory storage");
         storage.init().expect("init in-memory storage");
+        let mut hidden = make_model("gpt-hidden", 0, true);
+        hidden.model.visibility = Some("hidden".to_string());
         save_managed_model_catalog_with_storage(
             &storage,
             &ManagedModelCatalogResult {
                 items: vec![
-                    make_model("gpt-hidden", 0, false),
+                    hidden,
+                    make_model("gpt-unsupported", 1, false),
                     make_model("gpt-latest", 1, true),
                     make_model("gpt-older", 2, true),
                 ],
@@ -633,7 +601,8 @@ mod tests {
 
         let all_targets = resolve_target_accounts(&storage, &[]).expect("resolve all targets");
         assert_eq!(all_targets.len(), 1);
-        assert_eq!(all_targets[0].id, "acc-active");
+        assert_eq!(all_targets[0].account.id, "acc-active");
+        assert_eq!(all_targets[0].token.account_id, "acc-active");
 
         let selected_targets = resolve_target_accounts(
             &storage,
@@ -645,7 +614,8 @@ mod tests {
         )
         .expect("resolve selected targets");
         assert_eq!(selected_targets.len(), 1);
-        assert_eq!(selected_targets[0].id, "acc-active");
+        assert_eq!(selected_targets[0].account.id, "acc-active");
+        assert_eq!(selected_targets[0].token.account_id, "acc-active");
     }
 
     #[test]

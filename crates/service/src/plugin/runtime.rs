@@ -1,5 +1,7 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
-use codexmanager_core::storage::{now_ts, PluginInstall, PluginRunLog, PluginTask};
+use codexmanager_core::storage::{
+    now_ts, PluginRunLog, PluginRuntimeInstall, PluginTask, PluginTaskExecutionRow,
+};
 use rhai::{Array, Dynamic, Engine, Map, Scope};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -7,6 +9,19 @@ use std::time::Duration;
 
 use crate::account_cleanup::{delete_banned_accounts, delete_unavailable_free_accounts};
 use crate::storage_helpers::open_storage;
+
+fn task_execution_row_from_task(task: PluginTask) -> PluginTaskExecutionRow {
+    PluginTaskExecutionRow {
+        id: task.id,
+        plugin_id: task.plugin_id,
+        name: task.name,
+        description: task.description,
+        entrypoint: task.entrypoint,
+        schedule_kind: task.schedule_kind,
+        interval_seconds: task.interval_seconds,
+        enabled: task.enabled,
+    }
+}
 
 /// 函数 `handle_task_run`
 ///
@@ -65,8 +80,16 @@ pub(crate) fn run_plugin_task(task_id: &str, input: Option<Value>) -> Result<Val
     else {
         return Err(format!("task not found: {task_id}"));
     };
+    run_loaded_plugin_task(&storage, task_execution_row_from_task(task), input)
+}
+
+pub(super) fn run_loaded_plugin_task(
+    storage: &codexmanager_core::storage::Storage,
+    task: PluginTaskExecutionRow,
+    input: Option<Value>,
+) -> Result<Value, String> {
     let Some(plugin) = storage
-        .find_plugin_install(&task.plugin_id)
+        .find_plugin_runtime_install(&task.plugin_id)
         .map_err(|err| err.to_string())?
     else {
         return Err(format!("plugin not found: {}", task.plugin_id));
@@ -171,8 +194,8 @@ pub(crate) fn fetch_text(url: &str) -> Result<String, String> {
 /// # 返回
 /// 返回函数执行结果
 fn execute_plugin_script(
-    plugin: &PluginInstall,
-    task: &PluginTask,
+    plugin: &PluginRuntimeInstall,
+    task: &PluginTaskExecutionRow,
     input: Option<Value>,
     permissions: &HashSet<String>,
     run_started_at: i64,
@@ -192,13 +215,13 @@ fn execute_plugin_script(
 
     if permissions.contains("settings:read") {
         let settings_map = crate::app_settings::list_app_settings_map();
+        let get_setting_map = settings_map.clone();
         engine.register_fn("get_setting", move |key: String| -> Dynamic {
-            settings_map
+            get_setting_map
                 .get(key.trim())
                 .map(|value| Dynamic::from(value.clone()))
                 .unwrap_or(Dynamic::UNIT)
         });
-        let settings_map = crate::app_settings::list_app_settings_map();
         engine.register_fn("list_settings", move || -> Dynamic {
             dynamic_from_json(json!(settings_map))
         });
@@ -342,7 +365,7 @@ fn parse_permissions(raw: &str) -> HashSet<String> {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn next_run_time_for_task(task: &PluginTask, finished_at: i64) -> Option<i64> {
+fn next_run_time_for_task(task: &PluginTaskExecutionRow, finished_at: i64) -> Option<i64> {
     if task.schedule_kind == "manual" {
         return None;
     }

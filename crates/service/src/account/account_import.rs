@@ -2,7 +2,9 @@ use codexmanager_core::auth::{
     extract_chatgpt_account_id, extract_chatgpt_user_id, extract_workspace_id,
     parse_id_token_claims, IdTokenClaims, DEFAULT_ISSUER,
 };
-use codexmanager_core::storage::{now_ts, Account, Storage, Token};
+use codexmanager_core::storage::{
+    now_ts, Account, AccountImportSnapshot, AccountImportTokenSubject, Storage, Token,
+};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -11,7 +13,7 @@ use std::time::Instant;
 
 use crate::account_identity::{
     build_account_storage_id, build_fallback_subject_key, clean_value,
-    pick_existing_account_id_by_identity,
+    pick_existing_account_id_by_identity, AccountIdentityView,
 };
 use crate::storage_helpers::{account_key, open_storage};
 
@@ -64,7 +66,7 @@ struct ImportAccountMeta {
 
 #[derive(Default)]
 struct ExistingAccountIndex {
-    by_id: HashMap<String, Account>,
+    by_id: HashMap<String, AccountImportSnapshot>,
     by_subject_storage_id: HashMap<String, String>,
     by_subject_key: HashMap<String, String>,
     ambiguous_subject_keys: HashSet<String>,
@@ -84,7 +86,9 @@ impl ExistingAccountIndex {
     /// # 返回
     /// 返回函数执行结果
     fn build(storage: &Storage) -> Result<Self, String> {
-        let accounts = storage.list_accounts().map_err(|e| e.to_string())?;
+        let accounts = storage
+            .list_account_import_snapshots()
+            .map_err(|e| e.to_string())?;
         let mut idx = ExistingAccountIndex::default();
         for account in accounts {
             idx.next_sort = idx
@@ -92,7 +96,10 @@ impl ExistingAccountIndex {
                 .max(account.sort.saturating_add(ACCOUNT_SORT_STEP));
             idx.by_id.insert(account.id.clone(), account);
         }
-        for token in storage.list_tokens().map_err(|e| e.to_string())? {
+        for token in storage
+            .list_account_import_token_subjects()
+            .map_err(|e| e.to_string())?
+        {
             if let Some(account) = idx.by_id.get(&token.account_id).cloned() {
                 idx.index_token_subject(&account, &token);
             }
@@ -198,7 +205,10 @@ impl ExistingAccountIndex {
     /// # 返回
     /// 无
     fn upsert_index(&mut self, account: &Account) {
-        self.by_id.insert(account.id.clone(), account.clone());
+        self.by_id.insert(
+            account.id.clone(),
+            account_import_snapshot_from_account(account),
+        );
     }
 
     /// 函数 `index_token_subject`
@@ -214,7 +224,11 @@ impl ExistingAccountIndex {
     ///
     /// # 返回
     /// 无
-    fn index_token_subject(&mut self, account: &Account, token: &Token) {
+    fn index_token_subject(
+        &mut self,
+        account: &AccountImportSnapshot,
+        token: &AccountImportTokenSubject,
+    ) {
         let Some(subject_account_id) = extract_import_subject_account_id(
             None,
             &token.id_token,
@@ -269,8 +283,22 @@ impl ExistingAccountIndex {
     }
 }
 
+impl AccountIdentityView for AccountImportSnapshot {
+    fn account_id(&self) -> &str {
+        self.id.as_str()
+    }
+
+    fn chatgpt_account_id(&self) -> Option<&str> {
+        self.chatgpt_account_id.as_deref()
+    }
+
+    fn workspace_id(&self) -> Option<&str> {
+        self.workspace_id.as_deref()
+    }
+}
+
 fn account_scope_matches(
-    account: &Account,
+    account: &AccountImportSnapshot,
     chatgpt_account_id: Option<&str>,
     workspace_id: Option<&str>,
 ) -> bool {
@@ -294,7 +322,7 @@ fn account_scope_matches(
 }
 
 fn resolve_scoped_account_id_collision(
-    existing: &HashMap<String, Account>,
+    existing: &HashMap<String, AccountImportSnapshot>,
     account_id: String,
     chatgpt_account_id: Option<&str>,
     workspace_id: Option<&str>,
@@ -324,6 +352,18 @@ fn resolve_scoped_account_id_collision(
         suffix = suffix.saturating_add(1);
     }
     candidate
+}
+
+fn account_import_snapshot_from_account(account: &Account) -> AccountImportSnapshot {
+    AccountImportSnapshot {
+        id: account.id.clone(),
+        label: account.label.clone(),
+        issuer: account.issuer.clone(),
+        chatgpt_account_id: account.chatgpt_account_id.clone(),
+        workspace_id: account.workspace_id.clone(),
+        sort: account.sort,
+        created_at: account.created_at,
+    }
 }
 
 /// 函数 `import_account_auth_json`
@@ -828,12 +868,7 @@ fn import_single_item_with_account_id(
                 },
                 chatgpt_account_id: merged_chatgpt_account_id,
                 workspace_id: merged_workspace_id,
-                group_name: existing
-                    .group_name
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .or(group_name)
-                    .or_else(|| Some("IMPORT".to_string())),
+                group_name,
                 sort: existing.sort,
                 status: "active".to_string(),
                 created_at: existing.created_at,
@@ -849,7 +884,7 @@ fn import_single_item_with_account_id(
                 issuer,
                 chatgpt_account_id: chatgpt_account_id.clone(),
                 workspace_id,
-                group_name: group_name.or_else(|| Some("IMPORT".to_string())),
+                group_name,
                 sort: next_sort,
                 status: "active".to_string(),
                 created_at: now,
@@ -887,7 +922,14 @@ fn import_single_item_with_account_id(
     };
     storage.insert_token(&token).map_err(|e| e.to_string())?;
     index.upsert_index(&account);
-    index.index_token_subject(&account, &token);
+    let account_snapshot = account_import_snapshot_from_account(&account);
+    let token_subject = AccountImportTokenSubject {
+        account_id: token.account_id.clone(),
+        id_token: token.id_token.clone(),
+        access_token: token.access_token.clone(),
+        refresh_token: token.refresh_token.clone(),
+    };
+    index.index_token_subject(&account_snapshot, &token_subject);
     Ok(ImportedAccount {
         account_id,
         created,
