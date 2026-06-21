@@ -799,7 +799,10 @@ impl Storage {
         now: i64,
         limit: i64,
     ) -> Result<Vec<PluginTaskExecutionRow>> {
-        let normalized_limit = limit.max(1);
+        if limit <= 0 {
+            return Ok(Vec::new());
+        }
+
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.plugin_id, t.name, t.description, t.entrypoint, t.schedule_kind, t.interval_seconds,
                 t.enabled
@@ -812,7 +815,7 @@ impl Storage {
              ORDER BY IFNULL(t.next_run_at, t.created_at) ASC, t.created_at ASC
              LIMIT ?2",
         )?;
-        let mut rows = stmt.query(params![now, normalized_limit])?;
+        let mut rows = stmt.query(params![now, limit])?;
         let mut items = Vec::new();
         while let Some(row) = rows.next()? {
             items.push(PluginTaskExecutionRow {
@@ -1311,6 +1314,21 @@ mod tests {
         assert_eq!(due[0].schedule_kind, "interval");
         assert_eq!(due[0].interval_seconds, Some(60));
         assert!(due[0].enabled);
+    }
+
+    #[test]
+    fn list_due_plugin_tasks_short_circuits_non_positive_limit() {
+        let storage = Storage::open_in_memory().expect("open storage");
+
+        let zero_limit = storage
+            .list_due_plugin_tasks(100, 0)
+            .expect("zero limit should not query storage");
+        let negative_limit = storage
+            .list_due_plugin_tasks(100, -1)
+            .expect("negative limit should not query storage");
+
+        assert!(zero_limit.is_empty());
+        assert!(negative_limit.is_empty());
     }
 
     #[test]
