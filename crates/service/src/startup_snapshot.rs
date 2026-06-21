@@ -36,6 +36,7 @@ pub(crate) fn read_startup_snapshot(
     day_end_ts: Option<i64>,
     include_api_models: bool,
     include_api_keys: bool,
+    include_account_runtime: bool,
     include_account_details: bool,
 ) -> Result<StartupSnapshotResult, String> {
     let request_log_limit = normalize_startup_request_log_limit(request_log_limit);
@@ -57,8 +58,13 @@ pub(crate) fn read_startup_snapshot(
     let account_context = account_list::build_account_summary_context_from_rows_with_options(
         &storage,
         accounts,
-        AccountSummaryStorageSnapshotOptions {
-            include_details: include_account_details,
+        if include_account_runtime {
+            AccountSummaryStorageSnapshotOptions {
+                include_details: include_account_details,
+                ..AccountSummaryStorageSnapshotOptions::default()
+            }
+        } else {
+            AccountSummaryStorageSnapshotOptions::dashboard_light()
         },
     )?;
     let usage_aggregate_summary =
@@ -110,6 +116,7 @@ pub(crate) fn read_startup_snapshot_for_actor(
     day_end_ts: Option<i64>,
     include_api_models: bool,
     include_api_keys: bool,
+    include_account_runtime: bool,
     include_account_details: bool,
 ) -> Result<StartupSnapshotResult, String> {
     if actor.is_admin() {
@@ -119,6 +126,7 @@ pub(crate) fn read_startup_snapshot_for_actor(
             day_end_ts,
             include_api_models,
             include_api_keys,
+            include_account_runtime,
             include_account_details,
         );
     }

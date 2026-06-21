@@ -28,6 +28,7 @@ export function buildStartupSnapshotQueryKey(
   dayEndTs?: number | null,
   includeApiModels = true,
   includeApiKeys = true,
+  includeAccountRuntime = true,
   includeAccountDetails = true,
 ) {
   return [
@@ -38,6 +39,7 @@ export function buildStartupSnapshotQueryKey(
     dayEndTs || null,
     includeApiModels,
     includeApiKeys,
+    includeAccountRuntime,
     includeAccountDetails,
   ] as const;
 }

@@ -161,12 +161,18 @@ pub struct AccountSummaryStorageSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AccountSummaryStorageSnapshotOptions {
+    pub include_preferred: bool,
+    pub include_status_reasons: bool,
+    pub include_tokens: bool,
     pub include_details: bool,
 }
 
 impl Default for AccountSummaryStorageSnapshotOptions {
     fn default() -> Self {
         Self {
+            include_preferred: true,
+            include_status_reasons: true,
+            include_tokens: true,
             include_details: true,
         }
     }
@@ -175,6 +181,18 @@ impl Default for AccountSummaryStorageSnapshotOptions {
 impl AccountSummaryStorageSnapshotOptions {
     pub fn light() -> Self {
         Self {
+            include_preferred: true,
+            include_status_reasons: true,
+            include_tokens: true,
+            include_details: false,
+        }
+    }
+
+    pub fn dashboard_light() -> Self {
+        Self {
+            include_preferred: false,
+            include_status_reasons: false,
+            include_tokens: false,
             include_details: false,
         }
     }

@@ -47,6 +47,7 @@ export const serviceClient = {
       dayEndTs?: number;
       includeApiModels?: boolean;
       includeApiKeys?: boolean;
+      includeAccountRuntime?: boolean;
       includeAccountDetails?: boolean;
     }
   ): Promise<StartupSnapshot> {

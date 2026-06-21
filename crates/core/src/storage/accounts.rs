@@ -573,9 +573,21 @@ impl Storage {
                 Default::default()
             };
         Ok(AccountSummaryStorageSnapshot {
-            preferred_account_id: self.preferred_account_id()?,
-            status_reasons: self.latest_account_status_reasons(account_ids)?,
-            tokens: self.list_account_token_plans_for_accounts(account_ids)?,
+            preferred_account_id: if options.include_preferred {
+                self.preferred_account_id()?
+            } else {
+                None
+            },
+            status_reasons: if options.include_status_reasons {
+                self.latest_account_status_reasons(account_ids)?
+            } else {
+                Default::default()
+            },
+            tokens: if options.include_tokens {
+                self.list_account_token_plans_for_accounts(account_ids)?
+            } else {
+                Vec::new()
+            },
             usage_snapshots: self.latest_usage_snapshots_for_accounts(account_ids)?,
             metadata,
             subscriptions,
@@ -3030,6 +3042,61 @@ mod tests {
             .expect("load light account summary snapshot");
 
         assert_eq!(snapshot.tokens.len(), 1);
+        assert_eq!(snapshot.usage_snapshots.len(), 1);
+        assert!(snapshot.metadata.is_empty());
+        assert!(snapshot.subscriptions.is_empty());
+        assert!(snapshot.model_assignments.is_empty());
+        assert!(snapshot.quota_overrides.is_empty());
+    }
+
+    #[test]
+    fn dashboard_light_account_summary_snapshot_keeps_usage_but_skips_runtime_rows() {
+        let mut storage = Storage::open_in_memory().expect("open");
+        storage.init().expect("init");
+        let now = now_ts();
+        let account_id = "acc-summary-dashboard-light";
+
+        storage
+            .insert_account(&sample_account(account_id, "active", now))
+            .expect("insert account");
+        storage
+            .set_preferred_account(Some(account_id))
+            .expect("set preferred account");
+        storage
+            .insert_token(&sample_token(account_id, now))
+            .expect("insert token");
+        storage
+            .insert_event(&Event {
+                account_id: Some(account_id.to_string()),
+                event_type: "account_status".to_string(),
+                message: "status=unavailable reason=usage_http_401".to_string(),
+                created_at: now,
+            })
+            .expect("insert status reason event");
+        storage
+            .insert_usage_snapshot(&UsageSnapshotRecord {
+                account_id: account_id.to_string(),
+                used_percent: Some(18.0),
+                window_minutes: Some(180),
+                resets_at: Some(now + 300),
+                secondary_used_percent: Some(28.0),
+                secondary_window_minutes: Some(10_080),
+                secondary_resets_at: Some(now + 600),
+                credits_json: None,
+                captured_at: now,
+            })
+            .expect("insert usage snapshot");
+
+        let snapshot = storage
+            .load_account_summary_storage_snapshot_with_options(
+                &[account_id.to_string()],
+                AccountSummaryStorageSnapshotOptions::dashboard_light(),
+            )
+            .expect("load dashboard light account summary snapshot");
+
+        assert!(snapshot.preferred_account_id.is_none());
+        assert!(snapshot.status_reasons.is_empty());
+        assert!(snapshot.tokens.is_empty());
         assert_eq!(snapshot.usage_snapshots.len(), 1);
         assert!(snapshot.metadata.is_empty());
         assert!(snapshot.subscriptions.is_empty());

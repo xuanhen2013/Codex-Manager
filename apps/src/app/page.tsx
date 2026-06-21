@@ -872,6 +872,7 @@ function AdminDashboard() {
     includeAccountHints: false,
     includeApiModels: false,
     includeApiKeys: false,
+    includeAccountRuntime: false,
     includeAccountDetails: false,
   });
   const { isDirectAccountMode } = useCodexProfileModeStatus({
