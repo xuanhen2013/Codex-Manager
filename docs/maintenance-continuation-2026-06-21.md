@@ -5647,3 +5647,30 @@
   - No SQLite migration or new index was added; this slice centralizes existing by-key usage SQL and guards against accidentally dropping one of the usage sources.
   - No feature removal was attempted; no current safe-removal proof was found.
   - Goal remains active after this slice.
+
+## 2026-06-22 continuation - request token model summary SQL helpers
+
+- Latest completed slice in this continuation:
+  - Continued the SQLite/core maintainability track in `crates/core/src/storage/request_token_stats.rs` after the by-key summary helper commit.
+  - Found two remaining production inline `WITH combined` wrappers in request-token usage summary paths:
+    - `query_request_token_stats_by_model(...)`, used by quota reads and member dashboard top-model summaries.
+    - `query_request_token_stats_by_key_and_model(...)`, used by API-key/model usage and member dashboard today breakdowns.
+  - Added storage-local SQL helpers:
+    - `request_token_stats_by_model_sql(combined_selects, limit_clause)`
+    - `request_token_stats_by_key_and_model_sql(combined_selects)`
+  - Updated the production methods to use the helpers while leaving branch-specific raw/hourly/legacy source selection, range predicates, key filters, grouping, and limits in the existing call sites.
+  - Added EXPLAIN coverage:
+    - `by_model_usage_summary_query_includes_key_scoped_sources`
+    - `by_key_model_usage_summary_query_includes_key_scoped_sources`
+  - The new tests verify helper-backed key-scoped model summaries still include raw token stats, hourly rollups, and legacy rollups using existing key-related indexes.
+- Validation passed for this slice:
+  - `cargo test -p codexmanager-core usage_summary_query_includes_key_scoped_sources -- --nocapture` passed: 2 matching core library tests.
+  - `cargo test -p codexmanager-core request_token_stats -- --nocapture` passed: 22 matching core library tests and 2 matching storage integration tests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed; Git only reported LF-to-CRLF working-copy conversion warnings.
+  - `cargo test -p codexmanager-core` passed with 343 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doc-tests.
+- Notes:
+  - No SQLite migration or new index was added; this slice is helper consolidation plus query-plan regression coverage.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - `apply_patch` still fails in this workspace with sandbox helper `0xc0000005`; edits used PowerShell/.NET exact marker replacement with uniqueness checks.
+  - Goal remains active after this slice.

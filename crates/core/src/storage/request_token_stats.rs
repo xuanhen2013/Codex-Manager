@@ -327,6 +327,46 @@ fn request_token_stats_by_key_sql(
     )
 }
 
+fn request_token_stats_by_model_sql(combined_selects: &str, limit_clause: &str) -> String {
+    format!(
+        "WITH combined AS (
+            {combined_selects}
+         )
+         SELECT
+            s.normalized_model,
+            IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+            IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+            IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+            IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
+            IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+         FROM combined s
+         WHERE 1 = 1
+         GROUP BY s.normalized_model
+         ORDER BY total_tokens DESC, s.normalized_model ASC{limit_clause}"
+    )
+}
+
+fn request_token_stats_by_key_and_model_sql(combined_selects: &str) -> String {
+    format!(
+        "WITH combined AS (
+            {combined_selects}
+         )
+         SELECT
+            s.key_id,
+            s.normalized_model,
+            IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
+            IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+            IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
+            IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
+            IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+         FROM combined s
+         WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''
+         GROUP BY s.key_id, s.normalized_model
+         ORDER BY total_tokens DESC, s.key_id ASC, s.normalized_model ASC"
+    )
+}
 fn raw_token_rollup_select(
     select_prefix: &str,
     where_clause: &str,
@@ -964,23 +1004,8 @@ impl Storage {
             selects.push(legacy);
         }
         let combined_selects = union_all_selects(selects);
-        let sql = format!(
-            "WITH combined AS (
-                {combined_selects}
-             )
-             SELECT
-                s.normalized_model,
-                IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
-                IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
-                IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
-                IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
-                IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM combined s
-             WHERE 1 = 1
-             GROUP BY s.normalized_model
-             ORDER BY total_tokens DESC, s.normalized_model ASC{limit_clause}"
-        );
+        let sql = request_token_stats_by_model_sql(&combined_selects, &limit_clause);
+
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = if let Some(params) = optional_range_params(start_ts, end_ts) {
             stmt.query(params_from_iter(params))?
@@ -1101,24 +1126,8 @@ impl Storage {
             selects.push(legacy);
         }
         let combined_selects = union_all_selects(selects);
-        let sql = format!(
-            "WITH combined AS (
-                {combined_selects}
-             )
-             SELECT
-                s.key_id,
-                s.normalized_model,
-                IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
-                IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
-                IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
-                IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
-                IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
-                IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM combined s
-             WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''
-             GROUP BY s.key_id, s.normalized_model
-             ORDER BY total_tokens DESC, s.key_id ASC, s.normalized_model ASC"
-        );
+        let sql = request_token_stats_by_key_and_model_sql(&combined_selects);
+
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = if let Some(params) = optional_range_params(start_ts, end_ts) {
             stmt.query(params_from_iter(params))?
