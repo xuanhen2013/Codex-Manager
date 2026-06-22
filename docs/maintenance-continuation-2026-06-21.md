@@ -4960,3 +4960,36 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+## 2026-06-22 tail marker - account exists SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - File touched: `crates/core/src/storage/accounts.rs`.
+  - Added storage-local SQL helper for account existence checks:
+    - `account_exists_sql()`
+  - Updated production method `account_exists(...)` to use the helper without changing behavior.
+  - Expanded EXPLAIN coverage:
+    - `account_write_helpers_use_primary_key_indexes` now verifies the account-exists helper uses the account primary-key lookup path.
+- Validation:
+  - `cargo test -p codexmanager-core account_write_helpers_use_primary_key_indexes -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo test -p codexmanager-core accounts -- --nocapture` passed:
+    - 73 matching core library tests.
+    - 2 matching storage integration tests.
+  - `cargo fmt` passed.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core` passed:
+    - 337 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+  - `git diff --check` passed with only LF-to-CRLF warnings.
+- Notes:
+  - No SQLite migration or new index was added; inspected account-exists path uses the existing primary-key index.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.

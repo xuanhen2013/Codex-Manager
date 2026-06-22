@@ -905,11 +905,8 @@ impl Storage {
     }
 
     pub fn account_exists(&self, account_id: &str) -> Result<bool> {
-        self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)",
-            [account_id],
-            |row| row.get(0),
-        )
+        self.conn
+            .query_row(account_exists_sql(), [account_id], |row| row.get(0))
     }
 
     pub fn find_account_by_identity(
@@ -1479,6 +1476,10 @@ fn build_account_where_clause(
 /// 返回函数执行结果
 fn qualified_column(table_name: &str, column: &str) -> String {
     format!("{table_name}.{column}")
+}
+
+fn account_exists_sql() -> &'static str {
+    "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1)"
 }
 
 fn update_account_sort_sql() -> &'static str {
@@ -4670,6 +4671,12 @@ mod tests {
             );
         }
 
+        assert_account_pk(
+            &storage,
+            "account exists",
+            account_exists_sql(),
+            rusqlite::params!["acc-a"],
+        );
         assert_account_pk(
             &storage,
             "sort update",
