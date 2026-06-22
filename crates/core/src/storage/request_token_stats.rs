@@ -374,6 +374,21 @@ fn request_token_stats_daily_rollup_sql(raw: &str, hourly: &str) -> String {
          ORDER BY bucket_start ASC"
     )
 }
+fn request_token_stats_by_user_rollup_sql(raw: &str, hourly: &str, limit_clause: &str) -> String {
+    format!(
+        "WITH combined AS (
+            {raw}
+            UNION ALL
+            {hourly}
+         )
+         SELECT
+            user_id,
+            {COMBINED_ROLLUP_COLUMNS}
+         FROM combined
+         GROUP BY user_id
+         ORDER BY total_tokens DESC, user_id ASC{limit_clause}"
+    )
+}
 fn request_token_stats_by_model_sql(combined_selects: &str, limit_clause: &str) -> String {
     format!(
         "WITH combined AS (
@@ -1236,19 +1251,8 @@ impl Storage {
             ),
             "GROUP BY user_id",
         );
-        let sql = format!(
-            "WITH combined AS (
-                {raw}
-                UNION ALL
-                {hourly}
-             )
-             SELECT
-                user_id,
-                {COMBINED_ROLLUP_COLUMNS}
-             FROM combined
-             GROUP BY user_id
-             ORDER BY total_tokens DESC, user_id ASC{limit_clause}"
-        );
+        let sql = request_token_stats_by_user_rollup_sql(&raw, &hourly, &limit_clause);
+
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query(params![start_ts, end_ts])?;
         let mut items = Vec::new();

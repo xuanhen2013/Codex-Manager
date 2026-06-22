@@ -700,6 +700,46 @@ fn daily_range_query_matches_created_at_index() {
 }
 
 #[test]
+fn by_user_rollup_query_includes_raw_and_hourly_sources() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let raw = super::raw_token_rollup_select(
+        &format!("{} AS user_id,", super::USER_OWNER_EXPR),
+        &format!(
+            "t.created_at >= ?1 AND t.created_at < ?2 AND {} IS NOT NULL",
+            super::USER_OWNER_EXPR
+        ),
+        "GROUP BY user_id",
+        true,
+    );
+    let hourly = super::hourly_token_rollup_select(
+        "NULLIF(TRIM(h.owner_user_id), '') AS user_id,",
+        &format!(
+            "{} AND NULLIF(TRIM(h.owner_user_id), '') IS NOT NULL",
+            super::hourly_rollup_range_clause()
+        ),
+        "GROUP BY user_id",
+    );
+    let sql = super::request_token_stats_by_user_rollup_sql(&raw, &hourly, "");
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!("EXPLAIN QUERY PLAN {sql}"),
+        vec![Value::Integer(0), Value::Integer(604800)],
+    );
+
+    assert_uses_index(
+        &details,
+        "idx_request_token_stats_created_at",
+        "by-user raw rollup",
+    );
+    assert_uses_index(
+        &details,
+        "idx_request_token_stat_hourly_rollups_bucket_start",
+        "by-user hourly rollup",
+    );
+}
+#[test]
 fn total_rollup_query_includes_raw_and_hourly_sources() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");

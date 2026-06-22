@@ -5737,3 +5737,22 @@
   - No SQLite migration or new index was added; existing usage and owner indexes are still used.
   - No feature removal was attempted; no current safe-removal proof was found.
   - Goal remains active after this slice.
+## 2026-06-22 continuation - request token by-user rollup SQL helper
+
+- Latest completed slice in this continuation:
+  - Continued the SQLite/core maintainability track in `crates/core/src/storage/request_token_stats.rs` after the by-key-for-user helper commit.
+  - Found remaining inline all-user rollup wrapper in `summarize_request_token_stats_by_user_between_limited(...)`.
+  - Added storage-local SQL helper:
+    - `request_token_stats_by_user_rollup_sql(raw, hourly, limit_clause)`
+  - Updated the production all-user rollup path to use the helper while preserving the raw `USER_OWNER_EXPR`, owner joins, hourly owner filter, grouping, and optional limit at the call site.
+  - Added EXPLAIN coverage in `by_user_rollup_query_includes_raw_and_hourly_sources` to verify the helper-backed all-user rollup query still reads raw token stats via `idx_request_token_stats_created_at` and hourly rollups via `idx_request_token_stat_hourly_rollups_bucket_start`.
+- Validation passed for this slice:
+  - `cargo test -p codexmanager-core by_user_rollup_query_includes_raw_and_hourly_sources -- --nocapture` passed: 1 matching core library test.
+  - `cargo test -p codexmanager-core request_token_stats -- --nocapture` passed: 26 matching core library tests and 2 matching storage integration tests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed; Git only reported LF-to-CRLF working-copy conversion warnings.
+  - `cargo test -p codexmanager-core` passed with 347 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doc-tests.
+- Notes:
+  - No SQLite migration or new index was added; the all-user hourly query has no owner equality predicate, so the bucket range index is the expected plan.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.
