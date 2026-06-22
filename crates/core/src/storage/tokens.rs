@@ -1027,6 +1027,10 @@ mod tests {
             "expected token refresh due order index in plan, got {plan}"
         );
         assert!(
+            plan.contains("idx_events_account_status_lookup"),
+            "expected latest status CTE to use event status lookup index, got {plan}"
+        );
+        assert!(
             !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
             "expected refresh due query to avoid a temp sort, got {plan}"
         );

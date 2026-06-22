@@ -5797,3 +5797,21 @@
   - No SQLite migration or new index was added; the existing latest-usage indexes are still the intended plan anchors.
   - No feature removal was attempted; no current safe-removal proof was found.
   - Goal remains active after this slice.
+
+## 2026-06-22 continuation - token refresh status query-plan coverage
+
+- Latest completed slice in this continuation:
+  - Continued the SQLite/core query-plan evidence track after the latest usage snapshot helper commit.
+  - Re-scanned `crates/core/src/storage/tokens.rs` because `tokens_due_for_refresh_sql()` is a startup/background refresh path that joins candidate tokens with latest account status events.
+  - File touched: `crates/core/src/storage/tokens.rs`.
+  - Expanded existing EXPLAIN coverage in `list_tokens_due_for_refresh_uses_due_order_index` to verify the latest-status CTE still uses `idx_events_account_status_lookup` in addition to `idx_tokens_refresh_due_order`.
+- Validation passed for this slice:
+  - `cargo test -p codexmanager-core list_tokens_due_for_refresh_uses_due_order_index -- --nocapture` passed: 1 matching core library test.
+  - `cargo test -p codexmanager-core tokens -- --nocapture` passed: 21 matching core library tests and 3 matching storage integration tests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed; Git only reported LF-to-CRLF working-copy conversion warnings.
+  - `cargo test -p codexmanager-core` passed with 348 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doc-tests.
+- Notes:
+  - No SQLite migration or new index was added; this slice proves the existing event status lookup index is still used by the token refresh eligibility query.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.
