@@ -5274,3 +5274,36 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+## 2026-06-22 tail marker - model source mapping list SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - Continued `model_sources` storage scan after extracting the source-model list SQL builder.
+  - File touched: `crates/core/src/storage/model_sources.rs`.
+  - Added storage-local SQL helper:
+    - `model_source_mappings_list_sql(has_platform_slug)`
+  - Updated production method `list_model_source_mappings(...)` to use the helper while preserving both filtered/unfiltered sort clauses.
+  - Expanded EXPLAIN coverage:
+    - `model_source_lookup_queries_use_composite_indexes` now verifies platform-filtered mapping list queries use `idx_model_source_mappings_platform_enabled_priority_weight`.
+- Validation:
+  - `cargo test -p codexmanager-core model_source_lookup_queries_use_composite_indexes -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt` passed.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core model_sources -- --nocapture` passed:
+    - 6 matching core library tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added.
+  - The mapping list sort order intentionally remains unchanged; the filtered query can use the platform index, but this slice does not force a no-temp-sort assertion because the historical ORDER BY does not include `weight`.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.

@@ -319,23 +319,9 @@ impl Storage {
         let normalized_slug = platform_model_slug
             .map(normalize_text)
             .filter(|value| !value.is_empty());
-        let mut stmt = if normalized_slug.is_some() {
-            self.conn.prepare(
-                "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
-                        enabled, priority, weight, billing_model_slug, created_at, updated_at
-                 FROM model_source_mappings
-                 WHERE platform_model_slug = ?1
-                 ORDER BY enabled DESC, priority DESC, source_kind ASC, source_id ASC, upstream_model ASC",
-            )?
-        } else {
-            self.conn.prepare(
-                "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
-                        enabled, priority, weight, billing_model_slug, created_at, updated_at
-                 FROM model_source_mappings
-                 ORDER BY platform_model_slug ASC, enabled DESC, priority DESC,
-                          source_kind ASC, source_id ASC, upstream_model ASC",
-            )?
-        };
+        let mut stmt = self
+            .conn
+            .prepare(model_source_mappings_list_sql(normalized_slug.is_some()))?;
         let rows = if let Some(slug) = normalized_slug {
             stmt.query_map(params![slug], map_source_mapping)?
         } else {
@@ -998,6 +984,22 @@ fn available_source_model_exists_sql() -> &'static str {
      LIMIT 1"
 }
 
+fn model_source_mappings_list_sql(has_platform_slug: bool) -> &'static str {
+    if has_platform_slug {
+        "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+                enabled, priority, weight, billing_model_slug, created_at, updated_at
+         FROM model_source_mappings
+         WHERE platform_model_slug = ?1
+         ORDER BY enabled DESC, priority DESC, source_kind ASC, source_id ASC, upstream_model ASC"
+    } else {
+        "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
+                enabled, priority, weight, billing_model_slug, created_at, updated_at
+         FROM model_source_mappings
+         ORDER BY platform_model_slug ASC, enabled DESC, priority DESC,
+                  source_kind ASC, source_id ASC, upstream_model ASC"
+    }
+}
+
 fn enabled_model_source_mappings_for_platform_sql() -> &'static str {
     "SELECT id, platform_model_slug, source_kind, source_id, upstream_model,
             enabled, priority, weight, billing_model_slug, created_at, updated_at
@@ -1235,6 +1237,18 @@ mod tests {
         assert!(available_source_model_details
             .iter()
             .any(|detail| { detail.contains("idx_model_source_models_source_status_upstream") }));
+
+        let mapping_list_details = collect_query_plan_details_with_params(
+            &storage,
+            &format!(
+                "EXPLAIN QUERY PLAN {}",
+                model_source_mappings_list_sql(true)
+            ),
+            vec![Value::Text("gpt-platform".to_string())],
+        );
+        assert!(mapping_list_details.iter().any(|detail| {
+            detail.contains("idx_model_source_mappings_platform_enabled_priority_weight")
+        }));
 
         let platform_details = collect_query_plan_details_with_params(
             &storage,
