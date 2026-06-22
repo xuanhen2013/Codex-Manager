@@ -5241,3 +5241,36 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+## 2026-06-22 tail marker - model source list SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - Scanned `model_sources` after wiring migration `109_model_source_platform_kind_order_index` in the previous SQLite slice.
+  - Confirmed the 109 platform/kind index is already represented in `ensure_model_source_tables()` and covered by existing EXPLAIN assertions.
+  - File touched: `crates/core/src/storage/model_sources.rs`.
+  - Added storage-local SQL builder helper:
+    - `model_source_models_list_sql(has_source_kind, has_source_id)`
+  - Updated production method `list_model_source_models(...)` to use the helper while preserving the same normalized-parameter branches.
+  - Expanded EXPLAIN coverage:
+    - `model_source_lookup_queries_use_composite_indexes` now verifies source-kind/source-id model listing uses `sqlite_autoindex_model_source_models_1` and avoids a temp ORDER BY sort.
+- Validation:
+  - `cargo test -p codexmanager-core model_source_lookup_queries_use_composite_indexes -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt` passed.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core model_sources -- --nocapture` passed:
+    - 6 matching core library tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added; the inspected list query already aligns with the primary-key order.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.

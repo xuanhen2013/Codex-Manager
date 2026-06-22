@@ -124,19 +124,9 @@ impl Storage {
         source_kind: Option<&str>,
         source_id: Option<&str>,
     ) -> Result<Vec<ModelSourceModel>> {
-        let mut sql = "SELECT source_kind, source_id, upstream_model, display_name, status,
-                            discovery_kind, last_synced_at, extra_json, created_at, updated_at
-                       FROM model_source_models"
-            .to_string();
         let normalized_kind = source_kind.map(normalize_text).filter(|v| !v.is_empty());
         let normalized_id = source_id.map(normalize_text).filter(|v| !v.is_empty());
-        match (&normalized_kind, &normalized_id) {
-            (Some(_), Some(_)) => sql.push_str(" WHERE source_kind = ?1 AND source_id = ?2"),
-            (Some(_), None) => sql.push_str(" WHERE source_kind = ?1"),
-            (None, Some(_)) => sql.push_str(" WHERE source_id = ?1"),
-            (None, None) => {}
-        }
-        sql.push_str(" ORDER BY source_kind ASC, source_id ASC, upstream_model ASC");
+        let sql = model_source_models_list_sql(normalized_kind.is_some(), normalized_id.is_some());
 
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = match (&normalized_kind, &normalized_id) {
@@ -923,6 +913,21 @@ fn list_enabled_model_source_mappings_for_sources_chunk(
     rows.collect()
 }
 
+fn model_source_models_list_sql(has_source_kind: bool, has_source_id: bool) -> String {
+    let mut sql = "SELECT source_kind, source_id, upstream_model, display_name, status,
+                        discovery_kind, last_synced_at, extra_json, created_at, updated_at
+                   FROM model_source_models"
+        .to_string();
+    match (has_source_kind, has_source_id) {
+        (true, true) => sql.push_str(" WHERE source_kind = ?1 AND source_id = ?2"),
+        (true, false) => sql.push_str(" WHERE source_kind = ?1"),
+        (false, true) => sql.push_str(" WHERE source_id = ?1"),
+        (false, false) => {}
+    }
+    sql.push_str(" ORDER BY source_kind ASC, source_id ASC, upstream_model ASC");
+    sql
+}
+
 fn enabled_model_source_mappings_for_sources_chunk_sql(source_condition: &str) -> String {
     format!(
         "WITH ranked AS (
@@ -1166,6 +1171,27 @@ mod tests {
     fn model_source_lookup_queries_use_composite_indexes() {
         let storage = Storage::open_in_memory().expect("open in memory");
         storage.init().expect("init schema");
+
+        let source_model_list_details = collect_query_plan_details_with_params(
+            &storage,
+            &format!(
+                "EXPLAIN QUERY PLAN {}",
+                model_source_models_list_sql(true, true)
+            ),
+            vec![
+                Value::Text("openai_account".to_string()),
+                Value::Text("acc-routing-1".to_string()),
+            ],
+        );
+        assert!(source_model_list_details
+            .iter()
+            .any(|detail| { detail.contains("sqlite_autoindex_model_source_models_1") }));
+        assert!(
+            !source_model_list_details
+                .iter()
+                .any(|detail| detail.contains("use temp b-tree for order by")),
+            "model source list query should preserve primary-key order without temp sorting, got {source_model_list_details:?}"
+        );
 
         let source_model_details = collect_query_plan_details_with_params(
             &storage,
