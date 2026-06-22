@@ -399,21 +399,7 @@ impl Storage {
         if source_kind.is_empty() {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare(
-            "SELECT source_id
-             FROM (
-                SELECT source_id
-                FROM model_source_models
-                WHERE source_kind = ?1
-                  AND TRIM(source_id) <> ''
-                UNION
-                SELECT source_id
-                FROM model_source_mappings
-                WHERE source_kind = ?1
-                  AND TRIM(source_id) <> ''
-             )
-             ORDER BY source_id ASC",
-        )?;
+        let mut stmt = self.conn.prepare(model_route_source_ids_for_kind_sql())?;
         let rows = stmt.query_map(params![source_kind], |row| row.get::<_, String>(0))?;
         rows.collect()
     }
@@ -1034,6 +1020,22 @@ fn model_source_mapping_source_ids_for_kind_sql() -> &'static str {
      ORDER BY source_id ASC"
 }
 
+fn model_route_source_ids_for_kind_sql() -> &'static str {
+    "SELECT source_id
+     FROM (
+        SELECT source_id
+        FROM model_source_models
+        WHERE source_kind = ?1
+          AND TRIM(source_id) <> ''
+        UNION
+        SELECT source_id
+        FROM model_source_mappings
+        WHERE source_kind = ?1
+          AND TRIM(source_id) <> ''
+     )
+     ORDER BY source_id ASC"
+}
+
 fn model_source_mapping_preferences_for_source_sql() -> &'static str {
     "SELECT source_kind, source_id, upstream_model, preference, updated_at
      FROM model_source_mapping_preferences
@@ -1642,6 +1644,25 @@ mod tests {
         let source_ids = storage
             .list_model_route_source_ids_for_kind(" aggregate_api ")
             .expect("list route source ids");
+
+        let plan = collect_query_plan_details_with_params(
+            &storage,
+            &format!(
+                "EXPLAIN QUERY PLAN {}",
+                model_route_source_ids_for_kind_sql()
+            ),
+            vec![Value::Text("aggregate_api".to_string())],
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_model_source_models_source_status_upstream")),
+            "expected route source model side to use source model covering index, got {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("idx_model_source_mappings_source")),
+            "expected route mapping side to use mapping source index, got {plan:?}"
+        );
 
         assert_eq!(
             source_ids,

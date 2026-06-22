@@ -5306,4 +5306,26 @@
   - Goal remains active.
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
+  - Continue feature removal only with current call-site evidence plus tests proving it is safe.## 2026-06-22 tail marker - model route source IDs SQL helper alignment
+
+- Latest completed slice in this continuation:
+  - Continued `model_sources` storage scan after extracting model source and mapping list SQL helpers.
+  - File touched: `crates/core/src/storage/model_sources.rs`.
+  - Added storage-local SQL helper:
+    - `model_route_source_ids_for_kind_sql()`
+  - Updated production method `list_model_route_source_ids_for_kind(...)` to use the helper while preserving the existing UNION and `ORDER BY source_id ASC` behavior.
+  - Expanded EXPLAIN coverage:
+    - `list_model_route_source_ids_for_kind_unions_models_and_mappings` now verifies the model side uses `idx_model_source_models_source_status_upstream`.
+    - The same test verifies the mapping side uses `idx_model_source_mappings_source`.
+- Validation:
+  - `cargo test -p codexmanager-core list_model_route_source_ids_for_kind_unions_models_and_mappings -- --nocapture` passed:
+    - 1 matching core library test.
+- Notes:
+  - No SQLite migration or new index was added; the route-source UNION already uses existing indexes on both sides.
+  - The query still uses SQLite temp b-trees for UNION/ORDER BY, matching the prior DISTINCT/ordered behavior; this slice does not change visible ordering or de-duplication semantics.
+  - No feature removal was attempted; no current safe-removal proof was found.
+- Next continuation constraints:
+  - Goal remains active.
+  - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
+  - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
