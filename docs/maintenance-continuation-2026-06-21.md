@@ -5923,3 +5923,20 @@
   - No SQLite migration or new index was added in this service-layer test-module split.
   - No feature removal was attempted; this was a low-risk maintainability cleanup.
   - Goal remains active after this slice.
+## 2026-06-22 continuation - aggregate API tests module split
+
+- Latest completed slice in this continuation:
+  - Continued the service-layer modularity scan after moving `apikey_models` tests out of the production file.
+  - Re-scanned `crates/service/src/aggregate_api.rs`, which had an inline `#[cfg(test)] mod tests` in the middle of the production module before balance/query/probe logic continued.
+  - Files touched:
+    - `crates/service/src/aggregate_api.rs`
+    - `crates/service/src/aggregate_api_tests.rs`
+  - Moved the inline aggregate API tests into `aggregate_api_tests.rs` and left the parent module with `#[path = "aggregate_api_tests.rs"] mod tests;`.
+  - No production logic was changed; the tests remain a child module and still access the same private helpers through `super`.
+- Validation passed so far:
+  - `cargo fmt` was run after the split.
+  - `cargo test -p codexmanager-service aggregate_api::tests -- --nocapture` passed: 39 matching service library tests. The filter also covers aggregate protocol and RPC dispatch test paths that include `aggregate_api::tests`.
+- Notes:
+  - No SQLite migration or new index was added in this service-layer test-module split.
+  - No feature removal was attempted; this was a maintainability cleanup.
+  - Goal remains active after this slice.
