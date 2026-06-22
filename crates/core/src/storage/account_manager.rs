@@ -260,6 +260,20 @@ fn user_wallet_available_credit_sql() -> &'static str {
      WHERE owner_kind = 'user'"
 }
 
+fn nonzero_wallet_count_sql() -> &'static str {
+    "SELECT COUNT(*)
+     FROM app_wallets
+     WHERE balance_credit_micros <> 0 OR frozen_credit_micros <> 0"
+}
+
+fn wallet_ledger_entry_count_sql() -> &'static str {
+    "SELECT COUNT(*) FROM app_wallet_ledger_entries"
+}
+
+fn request_charge_ledger_entry_count_sql() -> &'static str {
+    "SELECT COUNT(*) FROM app_wallet_ledger_entries WHERE entry_kind = 'request_charge'"
+}
+
 fn user_api_key_ids_for_user_sql() -> &'static str {
     "SELECT key_id
      FROM api_key_owners
@@ -921,29 +935,20 @@ impl Storage {
     }
 
     pub fn nonzero_wallet_count(&self) -> Result<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*)
-             FROM app_wallets
-             WHERE balance_credit_micros <> 0 OR frozen_credit_micros <> 0",
-            [],
-            |row| row.get(0),
-        )
+        self.conn
+            .query_row(nonzero_wallet_count_sql(), [], |row| row.get(0))
     }
 
     pub fn wallet_ledger_entry_count(&self) -> Result<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM app_wallet_ledger_entries",
-            [],
-            |row| row.get(0),
-        )
+        self.conn
+            .query_row(wallet_ledger_entry_count_sql(), [], |row| row.get(0))
     }
 
     pub fn request_charge_ledger_entry_count(&self) -> Result<i64> {
-        self.conn.query_row(
-            "SELECT COUNT(*) FROM app_wallet_ledger_entries WHERE entry_kind = 'request_charge'",
-            [],
-            |row| row.get(0),
-        )
+        self.conn
+            .query_row(request_charge_ledger_entry_count_sql(), [], |row| {
+                row.get(0)
+            })
     }
 
     pub fn adjust_wallet_balance(
@@ -1255,11 +1260,11 @@ mod tests {
         delete_app_wallet_ledger_entries_for_user_wallets_sql, delete_app_wallets_for_user_sql,
         delete_billing_rule_by_id_sql, delete_user_model_groups_for_user_sql,
         member_app_user_count_sql, public_app_user_with_wallet_sql,
-        revoke_app_user_session_by_token_hash_sql, touch_app_user_session_sql,
-        update_app_user_display_name_sql, update_app_user_last_login_sql,
-        update_app_user_password_hash_sql, update_app_user_role_sql, update_app_user_status_sql,
-        user_api_key_ids_for_user_sql, user_wallet_available_credit_sql,
-        user_wallets_for_users_chunk_sql,
+        request_charge_ledger_entry_count_sql, revoke_app_user_session_by_token_hash_sql,
+        touch_app_user_session_sql, update_app_user_display_name_sql,
+        update_app_user_last_login_sql, update_app_user_password_hash_sql,
+        update_app_user_role_sql, update_app_user_status_sql, user_api_key_ids_for_user_sql,
+        user_wallet_available_credit_sql, user_wallets_for_users_chunk_sql,
     };
     use rusqlite::{params_from_iter, types::Value};
 
@@ -2050,10 +2055,10 @@ mod tests {
         let plan = storage
             .conn
             .query_row(
-                "EXPLAIN QUERY PLAN
-                 SELECT COUNT(*)
-                 FROM app_wallet_ledger_entries
-                 WHERE entry_kind = 'request_charge'",
+                &format!(
+                    "EXPLAIN QUERY PLAN {}",
+                    request_charge_ledger_entry_count_sql()
+                ),
                 [],
                 |row| row.get::<_, String>(3),
             )

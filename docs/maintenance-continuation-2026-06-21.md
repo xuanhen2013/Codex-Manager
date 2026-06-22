@@ -5471,3 +5471,33 @@
   - Continue SQLite work only when production SQL/helper/EXPLAIN alignment or a real query-plan issue is visible.
   - Continue client reuse only if a production/request/frequent background path repeatedly constructs a stable-config client.
   - Continue feature removal only with current call-site evidence plus tests proving it is safe.
+
+## 2026-06-22 tail marker - wallet ledger count SQL helpers
+
+- Latest completed slice in this continuation:
+  - Continued `account_manager` storage scan after the aggregate API supplier model list helper slice.
+  - Confirmed app web-access reset safety checks in `crates/service/src/auth/app_manager.rs` call wallet and ledger count methods before allowing a password reset.
+  - File touched: `crates/core/src/storage/account_manager.rs`.
+  - Added storage-local SQL helpers:
+    - `nonzero_wallet_count_sql()`
+    - `wallet_ledger_entry_count_sql()`
+    - `request_charge_ledger_entry_count_sql()`
+  - Updated production count methods to use the helpers while preserving semantics.
+  - Updated `request_charge_count_uses_entry_kind_index` to EXPLAIN the same helper-backed production SQL and continue verifying `idx_app_wallet_ledger_entry_kind`.
+- Validation:
+  - `cargo test -p codexmanager-core request_charge_count_uses_entry_kind_index -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt --check` passed after `cargo fmt` normalized Rust formatting.
+  - `cargo test -p codexmanager-core account_manager -- --nocapture` passed:
+    - 32 matching core library tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added; this slice only centralizes existing production SQL and keeps the indexed request-charge count guarded.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.
