@@ -5531,3 +5531,32 @@
   - No feature removal was attempted; no current safe-removal proof was found.
   - Upstream aggregate API production paths inspected in this slice use `gateway::upstream_client()`; remaining direct blocking clients there are test-local.
   - Goal remains active after this slice.
+
+## 2026-06-22 tail marker - account quota overview stats SQL helper
+
+- Latest completed slice in this continuation:
+  - Continued `accounts` storage scan after the filtered account count helper slice.
+  - Confirmed `account_quota_overview_stats(...)` is used by quota overview reads and startup snapshots, and still kept its latest-usage overview SQL inline.
+  - File touched: `crates/core/src/storage/accounts.rs`.
+  - Added storage-local SQL helper:
+    - `account_quota_overview_stats_sql()`
+  - Updated production method `account_quota_overview_stats(...)` to use the helper while preserving account count, available count, low-quota count, remaining-percent averages, and latest refresh semantics.
+  - Expanded EXPLAIN coverage in `account_quota_overview_stats_aggregates_latest_usage_in_sql` to verify the helper-backed overview query still reads accounts directly and uses `idx_usage_snapshots_account_captured_id` for the latest usage CTE.
+- Validation:
+  - `cargo test -p codexmanager-core account_quota_overview_stats_aggregates_latest_usage_in_sql -- --nocapture` passed:
+    - 1 matching core library test.
+  - `cargo fmt --check` passed.
+  - `cargo test -p codexmanager-core accounts -- --nocapture` passed:
+    - 74 matching core library tests.
+    - 2 matching storage integration tests.
+  - `cargo test -p codexmanager-core` passed:
+    - 338 core library tests.
+    - 7 auth integration tests.
+    - 29 storage integration tests.
+    - 1 usage integration test.
+    - 1 version integration test.
+    - doc-tests with 0 tests.
+- Notes:
+  - No SQLite migration or new index was added; this slice centralizes existing overview SQL and guards the existing latest-usage index path.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.

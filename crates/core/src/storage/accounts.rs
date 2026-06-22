@@ -117,34 +117,7 @@ impl Storage {
     }
 
     pub fn account_quota_overview_stats(&self) -> Result<AccountQuotaOverviewStats> {
-        let sql = format!(
-            "{latest_usage_cte}
-             SELECT
-                COUNT(1) AS account_count,
-                IFNULL(SUM(CASE WHEN {available_status_clause} THEN 1 ELSE 0 END), 0) AS available_count,
-                IFNULL(SUM(
-                    CASE
-                        WHEN {available_status_clause}
-                         AND (
-                            ({primary_remain_expr} > 0.0 AND {primary_remain_expr} <= 20.0)
-                            OR ({secondary_remain_expr} > 0.0 AND {secondary_remain_expr} <= 20.0)
-                         )
-                        THEN 1
-                        ELSE 0
-                    END
-                ), 0) AS low_quota_count,
-                AVG(CASE WHEN {available_status_clause} THEN {primary_remain_expr} END) AS primary_remain_percent_avg,
-                AVG(CASE WHEN {available_status_clause} THEN {secondary_remain_expr} END) AS secondary_remain_percent_avg,
-                MAX(CASE WHEN {available_status_clause} THEN lu.captured_at END) AS last_refreshed_at
-             FROM accounts a
-             LEFT JOIN latest_usage lu
-               ON lu.account_id = a.id
-              AND lu.rn = 1",
-            latest_usage_cte = latest_usage_cte_sql(),
-            available_status_clause = available_account_status_clause("a"),
-            primary_remain_expr = remaining_percent_sql("lu.used_percent"),
-            secondary_remain_expr = remaining_percent_sql("lu.secondary_used_percent"),
-        );
+        let sql = account_quota_overview_stats_sql();
         self.conn.query_row(&sql, [], |row| {
             Ok(AccountQuotaOverviewStats {
                 account_count: row.get(0)?,
@@ -1450,6 +1423,37 @@ fn account_count_filtered_sql(where_clause: &str) -> String {
     format!("SELECT COUNT(1) FROM accounts{where_clause}")
 }
 
+fn account_quota_overview_stats_sql() -> String {
+    format!(
+        "{latest_usage_cte}
+         SELECT
+            COUNT(1) AS account_count,
+            IFNULL(SUM(CASE WHEN {available_status_clause} THEN 1 ELSE 0 END), 0) AS available_count,
+            IFNULL(SUM(
+                CASE
+                    WHEN {available_status_clause}
+                     AND (
+                        ({primary_remain_expr} > 0.0 AND {primary_remain_expr} <= 20.0)
+                        OR ({secondary_remain_expr} > 0.0 AND {secondary_remain_expr} <= 20.0)
+                     )
+                    THEN 1
+                    ELSE 0
+                END
+            ), 0) AS low_quota_count,
+            AVG(CASE WHEN {available_status_clause} THEN {primary_remain_expr} END) AS primary_remain_percent_avg,
+            AVG(CASE WHEN {available_status_clause} THEN {secondary_remain_expr} END) AS secondary_remain_percent_avg,
+            MAX(CASE WHEN {available_status_clause} THEN lu.captured_at END) AS last_refreshed_at
+         FROM accounts a
+         LEFT JOIN latest_usage lu
+           ON lu.account_id = a.id
+          AND lu.rn = 1",
+        latest_usage_cte = latest_usage_cte_sql(),
+        available_status_clause = available_account_status_clause("a"),
+        primary_remain_expr = remaining_percent_sql("lu.used_percent"),
+        secondary_remain_expr = remaining_percent_sql("lu.secondary_used_percent"),
+    )
+}
+
 fn max_account_sort_sql() -> &'static str {
     "SELECT MAX(sort) FROM accounts"
 }
@@ -2593,6 +2597,19 @@ mod tests {
         assert_eq!(stats.primary_remain_percent_avg, Some(45.0));
         assert_eq!(stats.secondary_remain_percent_avg, Some(75.0));
         assert_eq!(stats.last_refreshed_at, Some(now + 10));
+
+        let plan = collect_query_plan(
+            &storage,
+            &format!("EXPLAIN QUERY PLAN {}", account_quota_overview_stats_sql()),
+        );
+        assert!(
+            plan.contains("SCAN a") || plan.contains("SCAN accounts"),
+            "expected quota overview to read account cardinality directly, got {plan}"
+        );
+        assert!(
+            plan.contains("idx_usage_snapshots_account_captured_id"),
+            "expected quota overview latest usage CTE to use usage snapshot account/captured index, got {plan}"
+        );
     }
 
     #[test]
