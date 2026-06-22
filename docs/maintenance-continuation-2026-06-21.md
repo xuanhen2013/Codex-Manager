@@ -5995,3 +5995,24 @@
   - No SQLite migration or new index was added in this service-layer test-module split.
   - No feature removal was attempted; this was a maintainability cleanup.
   - Goal remains active after this slice.
+
+## 2026-06-22 continuation - core accounts tests module split
+
+- Latest completed slice in this continuation:
+  - Continued the core storage modularity scan after service-layer test module splits.
+  - Reconfirmed `crates/core/src/storage/accounts.rs` as the largest storage file and found its EOF `#[cfg(test)] mod tests` block was pure test code from the account row mapper helpers onward.
+  - Files touched:
+    - `crates/core/src/storage/accounts.rs`
+    - `crates/core/src/storage/accounts_tests.rs`
+  - Moved the inline accounts tests into `accounts_tests.rs` and left the parent module with `#[path = "accounts_tests.rs"] mod tests;`.
+  - No storage production logic or SQL text was changed; tests remain a child module and still access the same private helpers through `super`.
+- Validation passed so far:
+  - `cargo fmt` passed after the split.
+  - `cargo test -p codexmanager-core accounts -- --nocapture` passed: 74 matching core library tests and 2 matching storage integration tests.
+  - `cargo test -p codexmanager-core` passed: 349 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doctests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed with only LF-to-CRLF warnings and exit code 0.
+- Notes:
+  - No SQLite migration or new index was added; this is a maintainability-only test-module split.
+  - No feature removal was attempted in this slice.
+  - Goal remains active after this slice.
