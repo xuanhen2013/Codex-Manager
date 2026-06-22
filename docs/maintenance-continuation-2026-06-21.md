@@ -5718,3 +5718,22 @@
   - No feature removal was attempted; no current safe-removal proof was found.
   - Local `./skills/skill-router/SKILL.md` is absent in this checkout; this pass continued with repository evidence and root `AGENTS.md` instead of pretending to execute the missing local skill.
   - Goal remains active after this slice.
+## 2026-06-22 continuation - request token by-key-for-user SQL helper
+
+- Latest completed slice in this continuation:
+  - Continued the SQLite/core maintainability track in `crates/core/src/storage/request_token_stats.rs` after the total rollup helper commit.
+  - Found remaining inline by-key summary wrapper in `query_request_token_stats_by_key_for_user(...)`, used by `crates/service/src/apikey/apikey_usage_stats.rs` for member/user API-key usage reads.
+  - Added storage-local SQL helper:
+    - `request_token_stats_by_key_for_user_sql(combined_selects)`
+  - Updated the production user-owned by-key summary path to use the helper while preserving raw/hourly/legacy branch selection and the `api_key_owners` user ownership join.
+  - Added EXPLAIN coverage in `by_key_for_user_usage_summary_query_joins_owner_index` to verify the helper-backed query still includes raw token stats, hourly rollups, legacy rollups, and the `idx_api_key_owners_user_key_lookup` owner join index.
+- Validation passed for this slice:
+  - `cargo test -p codexmanager-core by_key_for_user_usage_summary_query_joins_owner_index -- --nocapture` passed: 1 matching core library test.
+  - `cargo test -p codexmanager-core request_token_stats -- --nocapture` passed: 25 matching core library tests and 2 matching storage integration tests.
+  - `cargo fmt --check` passed.
+  - `git diff --check` passed; Git only reported LF-to-CRLF working-copy conversion warnings.
+  - `cargo test -p codexmanager-core` passed with 346 core library tests, 7 auth integration tests, 29 storage integration tests, 1 usage integration test, 1 version integration test, and 0 doc-tests.
+- Notes:
+  - No SQLite migration or new index was added; existing usage and owner indexes are still used.
+  - No feature removal was attempted; no current safe-removal proof was found.
+  - Goal remains active after this slice.

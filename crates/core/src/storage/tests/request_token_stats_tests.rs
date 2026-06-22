@@ -922,6 +922,55 @@ fn by_key_usage_summary_query_includes_raw_hourly_and_legacy_sources() {
 }
 
 #[test]
+fn by_key_for_user_usage_summary_query_joins_owner_index() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let raw = super::raw_key_usage_select(
+        "",
+        "t.key_id IS NOT NULL AND TRIM(t.key_id) <> ''",
+        "GROUP BY t.key_id",
+    );
+    let hourly = super::hourly_key_usage_select(
+        "",
+        "NULLIF(TRIM(h.key_id), '') IS NOT NULL",
+        "GROUP BY key_id",
+    );
+    let legacy = super::legacy_key_usage_select(
+        "",
+        "NULLIF(TRIM(r.key_id), '') IS NOT NULL",
+        "GROUP BY key_id",
+    );
+    let combined_selects = super::union_all_selects([raw, hourly, legacy]);
+    let sql = super::request_token_stats_by_key_for_user_sql(&combined_selects);
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!("EXPLAIN QUERY PLAN {sql}"),
+        vec![Value::Text("user-owned".to_string())],
+    );
+
+    assert_uses_index(
+        &details,
+        "idx_request_token_stats_key_model_created_at",
+        "by-key-for-user raw usage summary",
+    );
+    assert_uses_index(
+        &details,
+        "idx_request_token_stat_hourly_rollups_key_bucket",
+        "by-key-for-user hourly usage summary",
+    );
+    assert_uses_index(
+        &details,
+        "idx_request_token_stat_rollups_key_id",
+        "by-key-for-user legacy usage summary",
+    );
+    assert_uses_index(
+        &details,
+        "idx_api_key_owners_user_key_lookup",
+        "by-key-for-user owner join",
+    );
+}
+#[test]
 fn by_model_usage_summary_query_includes_key_scoped_sources() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");

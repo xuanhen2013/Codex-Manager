@@ -327,6 +327,25 @@ fn request_token_stats_by_key_sql(
     )
 }
 
+fn request_token_stats_by_key_for_user_sql(combined_selects: &str) -> String {
+    format!(
+        "WITH combined AS (
+            {combined_selects}
+         )
+         SELECT
+            s.key_id,
+            IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
+            IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
+         FROM combined s
+         INNER JOIN api_key_owners owner
+            ON owner.key_id = s.key_id
+           AND owner.owner_kind = 'user'
+           AND owner.owner_user_id = ?1
+         WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''
+         GROUP BY s.key_id
+         ORDER BY total_tokens DESC, s.key_id ASC"
+    )
+}
 fn request_token_stats_total_rollup_sql(raw: &str, hourly: &str) -> String {
     format!(
         "WITH combined AS (
@@ -910,23 +929,8 @@ impl Storage {
             "GROUP BY key_id",
         );
         let combined_selects = union_all_selects([raw, hourly, legacy]);
-        let sql = format!(
-            "WITH combined AS (
-                {combined_selects}
-             )
-             SELECT
-                s.key_id,
-                IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
-                IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
-             FROM combined s
-             INNER JOIN api_key_owners owner
-                ON owner.key_id = s.key_id
-               AND owner.owner_kind = 'user'
-               AND owner.owner_user_id = ?1
-             WHERE s.key_id IS NOT NULL AND TRIM(s.key_id) <> ''
-             GROUP BY s.key_id
-             ORDER BY total_tokens DESC, s.key_id ASC"
-        );
+        let sql = request_token_stats_by_key_for_user_sql(&combined_selects);
+
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query([user_id])?;
         let mut items = Vec::new();
