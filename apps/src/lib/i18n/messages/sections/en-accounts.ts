@@ -149,4 +149,5 @@ export const EN_ACCOUNTS_MESSAGES = {
   "速度测试": "Speed Test",
   "仅用于额度池统计归属；留空表示该账号对全部 API 可用模型生效。": "Only used for quota pool statistics attribution; leave empty to make it effective for all available API models.",
   "未配置": "Not configured",
+  "刷新": "Refresh",
 };

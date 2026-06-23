@@ -245,15 +245,8 @@ export interface AccountsPageViewProps {
 		enabled: boolean,
 		currentStatus: string,
 	) => void;
-	activeJobs: Record<string, ProxyTestJobState>;
-	presetsData: any;
-	isLoadingPresets: boolean;
-	isPresetsError: boolean;
-	presetsError: any;
-	isCancellingJobId: string | null;
-	runAccountLatencyTest: (accountId: string) => Promise<void>;
-	runAccountSpeedTest: (accountId: string) => Promise<void>;
-	cancelAccountSpeedTest: (accountId: string, jobId: string) => Promise<void>;
+	isTestingAccountProxy: boolean;
+	handleTestProxySettings: () => Promise<void>;
 }
 
 function formatTransferredBytes(value: number): string {
@@ -425,15 +418,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 		clearPreferredAccount,
 		setPreferredAccount,
 		toggleAccountStatus,
-		activeJobs,
-		presetsData,
-		isLoadingPresets,
-		isPresetsError,
-		presetsError,
-		isCancellingJobId,
-		runAccountLatencyTest,
-		runAccountSpeedTest,
-		cancelAccountSpeedTest,
+		isTestingAccountProxy,
+		handleTestProxySettings,
 	} = props;
 
 
@@ -1443,63 +1429,17 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 							</div>
 							{}
 							<div className="flex gap-2 mt-2">
-								{proxyDialogAccount && (() => {
-									const activeJob = activeJobs[proxyDialogAccount.id];
-									const isLatencyRunning = activeJob && activeJob.kind === "latency" && !isTerminalJobStatus(activeJob.status);
-									return (
-										<Button
-											type="button"
-											className="flex-1"
-											disabled={isLatencyRunning}
-											onClick={() => void runAccountLatencyTest(proxyDialogAccount.id)}
-										>
-											{isLatencyRunning ? (
-												<>
-													<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-													{t("测试中...")}
-												</>
-											) : (
-												t("延迟测试")
-											)}
-										</Button>
-									);
-								})()}
-
-								{proxyDialogAccount && (() => {
-									const activeJob = activeJobs[proxyDialogAccount.id];
-									const isSpeedRunning = activeJob && activeJob.kind === "speed" && !isTerminalJobStatus(activeJob.status);
-									const isCancelling = activeJob && isCancellingJobId === activeJob.jobId;
-
-									return (
-										<div className="flex flex-1 gap-2">
-											<Button
-												type="button"
-												className="flex-1"
-												disabled={isSpeedRunning}
-												onClick={() => void runAccountSpeedTest(proxyDialogAccount.id)}
-											>
-												{isSpeedRunning ? (
-													<>
-														<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-														{t("测试中...")}
-													</>
-												) : (
-													t("速度测试")
-												)}
-											</Button>
-											{isSpeedRunning && activeJob && (
-												<Button
-													type="button"
-													variant="destructive"
-													disabled={isCancelling}
-													onClick={() => void cancelAccountSpeedTest(proxyDialogAccount.id, activeJob.jobId)}
-												>
-													{isCancelling ? <Loader2 className="h-4 w-4 animate-spin" /> : t("取消")}
-												</Button>
-											)}
-										</div>
-									);
-								})()}
+								{proxyDialogAccount && (
+									<Button
+										type="button"
+										className="flex-1"
+										disabled={accountProxyBusy || isTestingAccountProxy}
+										onClick={() => void handleTestProxySettings()}
+									>
+										<RefreshCw className={cn("mr-2 h-4 w-4", isTestingAccountProxy && "animate-spin")} />
+										{isTestingAccountProxy ? t("测试中...") : t("刷新")}
+									</Button>
+								)}
 							</div>
 
 						{proxySettings?.lastError ? (

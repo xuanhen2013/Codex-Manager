@@ -85,8 +85,10 @@ export default function AccountsPage() {
     getAccountProxySettings,
     setAccountProxySettings,
     clearAccountProxySettings,
+    testAccountProxySettings,
     isSavingAccountProxy,
     isClearingAccountProxy,
+    isTestingAccountProxy,
     reorderAccounts,
     isReorderingAccounts,
     updateAccountProfile,
@@ -126,15 +128,7 @@ export default function AccountsPage() {
     useState<AccountProxySource>("custom");
   const [proxyProfileIdDraft, setProxyProfileIdDraft] = useState("");
   const [proxyUrlDraft, setProxyUrlDraft] = useState("");
-  const [activeJobs, setActiveJobs] = useState<Record<string, ProxyTestJobState>>({});
 
-
-  const [presetsData, setPresetsData] = useState<any>(null);
-  const [isLoadingPresets, setIsLoadingPresets] = useState(false);
-  const [isPresetsError, setIsPresetsError] = useState(false);
-  const [presetsError, setPresetsError] = useState<any>(null);
-  const [isCancellingJobId, setIsCancellingJobId] = useState<string | null>(null);
-  const trackedJobIdsRef = useRef<Record<string, string>>({});
   const [accountEditorState, setAccountEditorState] =
     useState<AccountEditorState | null>(null);
   const [deleteDialogState, setDeleteDialogState] =
@@ -468,32 +462,19 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setProxyProfileIdDraft("");
     setProxyUrlDraft("");
     setIsProxySettingsLoading(true);
-    setIsLoadingPresets(true);
-    setIsPresetsError(false);
-    setPresetsError(null);
     try {
-      const [settings, profiles, presets] = await Promise.all([
+      const [settings, profiles] = await Promise.all([
         getAccountProxySettings(account.id),
         proxyProfilesClient.listProxyProfiles(),
-        proxyProfilesClient.listProxyTestPresets(),
       ]);
       setProxySettings(settings);
       setProxyProfiles(profiles.items);
-      setPresetsData(presets);
       setProxyEnabledDraft(settings.enabled);
       setProxySourceDraft(settings.source);
       setProxyProfileIdDraft(settings.proxyProfileId || "");
       setProxyUrlDraft(settings.proxyUrl || "");
-
-
-
-
-      setIsLoadingPresets(false);
     } catch (error) {
       toast.error(`${t("读取账号代理失败")}: ${error instanceof Error ? error.message : String(error)}`);
-      setIsPresetsError(true);
-      setPresetsError(error);
-      setIsLoadingPresets(false);
       setProxyDialogAccount(null);
     } finally {
       setIsProxySettingsLoading(false);
@@ -502,9 +483,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
 
   const handleProxyDialogOpenChange = (open: boolean) => {
     if (open) return;
-    const currentActiveJob = proxyDialogAccount ? activeJobs[proxyDialogAccount.id] : undefined;
-    const isJobRunning = currentActiveJob && !(currentActiveJob.status === "completed" || currentActiveJob.status === "failed" || currentActiveJob.status === "cancelled");
-    if (isSavingAccountProxy || isClearingAccountProxy || isJobRunning) {
+    if (isSavingAccountProxy || isClearingAccountProxy || isTestingAccountProxy) {
       return;
     }
     setProxyDialogAccount(null);
@@ -514,129 +493,27 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setProxySourceDraft("custom");
     setProxyProfileIdDraft("");
     setProxyUrlDraft("");
-
-    setPresetsData(null);
   };
 
-  const setActiveJob = (accountId: string, job: ProxyTestJobState) => {
-    setActiveJobs((current) => ({
-      ...current,
-      [accountId]: job,
-    }));
-  };
-
-  const clearActiveJob = (accountId: string, jobId?: string) => {
-    setActiveJobs((current) => {
-      if (!(accountId in current)) return current;
-      const next = { ...current };
-      delete next[accountId];
-      return next;
-    });
-    if (!jobId || trackedJobIdsRef.current[accountId] === jobId) {
-      delete trackedJobIdsRef.current[accountId];
-    }
-  };
-
-  const finishTrackedJob = async (accountId: string, job: ProxyTestJobState) => {
-    clearActiveJob(accountId, job.jobId);
-    void refreshAccountList();
-    if (proxyDialogAccount && proxyDialogAccount.id === accountId) {
-      try {
-        const settings = await getAccountProxySettings(accountId);
+  const handleTestProxySettings = async () => {
+    if (!proxyDialogAccount) return;
+    try {
+      const settings = await testAccountProxySettings({
+        accountId: proxyDialogAccount.id,
+        enabled: proxyEnabledDraft,
+        source: "profile",
+        proxyProfileId: proxyProfileIdDraft || null,
+        proxyUrl: "",
+      });
+      if (settings) {
         setProxySettings(settings);
-      } catch (e) {
-        console.error("Failed to refresh account proxy settings", e);
+        setProxyEnabledDraft(settings.enabled);
+        setProxySourceDraft(settings.source);
+        setProxyProfileIdDraft(settings.proxyProfileId || "");
+        setProxyUrlDraft(settings.proxyUrl || "");
       }
-    }
-    try {
-      const updatedProfiles = await proxyProfilesClient.listProxyProfiles();
-      setProxyProfiles(updatedProfiles.items);
-    } catch (e) {
-      console.error("Failed to list proxy profiles", e);
-    }
-    if (job.status === "completed") {
-      toast.success(job.kind === "speed" ? t("速度测试通过") : t("代理测试通过"));
-      return;
-    }
-    if (job.status === "cancelled") {
-      toast(t("测试已取消"));
-      return;
-    }
-    if (job.error) {
-      toast.warning(`${t("测试失败")}: ${job.error}`);
-      return;
-    }
-    toast.warning(job.kind === "speed" ? t("速度测试未通过") : t("代理测试未通过"));
-  };
-
-  const pollAccountProxyTestJob = async (accountId: string, initialJob: ProxyTestJobState) => {
-    trackedJobIdsRef.current[accountId] = initialJob.jobId;
-    setActiveJob(accountId, initialJob);
-
-    let currentJob = initialJob;
-    while (!(currentJob.status === "completed" || currentJob.status === "failed" || currentJob.status === "cancelled")) {
-      await new Promise((resolve) => window.setTimeout(resolve, 750));
-      if (trackedJobIdsRef.current[accountId] !== initialJob.jobId) return;
-      try {
-        currentJob = await accountClient.getProxyTestJob(accountId, initialJob.jobId);
-      } catch (pollError) {
-        clearActiveJob(accountId, initialJob.jobId);
-        void refreshAccountList();
-        toast.error(`${t("读取测试状态失败")}: ${pollError instanceof Error ? pollError.message : String(pollError)}`);
-        return;
-      }
-      if (trackedJobIdsRef.current[accountId] !== initialJob.jobId) return;
-      setActiveJob(accountId, currentJob);
-    }
-
-    if (trackedJobIdsRef.current[accountId] !== initialJob.jobId) return;
-    await finishTrackedJob(accountId, currentJob);
-  };
-
-  const runAccountLatencyTest = async (accountId: string) => {
-    if (!proxyProfileIdDraft) {
-      toast.error(t("请选择代理配置"));
-      return;
-    }
-    try {
-      const job = await accountClient.latencyTestProxy({
-        accountId,
-      });
-      void pollAccountProxyTestJob(accountId, job);
-    } catch (error) {
-      toast.error(`${t("测试失败")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const runAccountSpeedTest = async (accountId: string) => {
-    if (!proxyProfileIdDraft) {
-      toast.error(t("请选择代理配置"));
-      return;
-    }
-    try {
-      const job = await accountClient.cloudflareSpeedTestProxy({
-        accountId,
-        config: {
-          downloadPreset: "all",
-          uploadPreset: "all",
-          runUpload: true,
-        },
-      });
-      void pollAccountProxyTestJob(accountId, job);
-    } catch (error) {
-      toast.error(`${t("测试失败")}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-
-  const cancelAccountSpeedTest = async (accountId: string, jobId: string) => {
-    setIsCancellingJobId(jobId);
-    try {
-      await accountClient.cancelProxyTestJob(accountId, jobId);
-      toast(t("已请求取消测试"));
-    } catch (error) {
-      toast.error(`${t("取消测试失败")}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setIsCancellingJobId(null);
+    } catch {
+      // hook handles toast
     }
   };
 
@@ -937,18 +814,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isUpdatingPreferred={isUpdatingPreferred}
       isSavingAccountProxy={isSavingAccountProxy}
       isClearingAccountProxy={isClearingAccountProxy}
+      isTestingAccountProxy={isTestingAccountProxy}
       isReorderingAccounts={isReorderingAccounts}
-      activeJobs={activeJobs}
-
-      presetsData={presetsData}
-      isLoadingPresets={isLoadingPresets}
-      isPresetsError={isPresetsError}
-      presetsError={presetsError}
-      isCancellingJobId={isCancellingJobId}
-
-      runAccountLatencyTest={runAccountLatencyTest}
-      runAccountSpeedTest={runAccountSpeedTest}
-      cancelAccountSpeedTest={cancelAccountSpeedTest}
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
       statusFilterOptions={statusFilterOptions}
@@ -994,6 +861,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       handleProxyDialogOpenChange={handleProxyDialogOpenChange}
       handleSaveProxySettings={handleSaveProxySettings}
       handleClearProxySettings={handleClearProxySettings}
+      handleTestProxySettings={handleTestProxySettings}
       openAccountEditor={openAccountEditor}
       handleMoveAccount={handleMoveAccount}
       handleApplyAccountSizeSort={handleApplyAccountSizeSort}
