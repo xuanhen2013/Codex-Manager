@@ -6,7 +6,7 @@ use codexmanager_core::rpc::types::{
     AggregateApiTestResult, ManagedModelSourceModelEntry,
 };
 use codexmanager_core::storage::{
-    now_ts, AggregateApi, AggregateApiSupplierModel, ModelSourceModel,
+    now_ts, AggregateApi, AggregateApiSupplierIdentity, AggregateApiSupplierModel, ModelSourceModel,
 };
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -438,7 +438,7 @@ fn normalize_supplier_model_status(value: Option<String>) -> Result<String, Stri
     }
 }
 
-fn supplier_template_key_for_api(api: &AggregateApi) -> String {
+fn supplier_template_key_for_api(api: &AggregateApiSupplierIdentity) -> String {
     api.supplier_name
         .as_deref()
         .map(str::trim)
@@ -540,517 +540,8 @@ fn normalize_action_override(
 }
 
 #[cfg(test)]
-mod tests {
-    use codexmanager_core::storage::AggregateApi;
-    use serde_json::Value;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-    use tiny_http::{Response, Server, StatusCode};
-
-    use super::{
-        action_path_or_default, build_codex_models_probe_url, claude_probe_fallback_models_for_api,
-        extract_custom_balance, extract_generic_balance, extract_model_ids_from_models_response,
-        extract_new_api_balance, normalize_action_override, normalize_custom_balance_query_config,
-        normalize_provider_type, normalize_provider_type_value, probe_claude_endpoint,
-        probe_codex_endpoint, provider_default_url, CustomBalanceQueryConfig,
-        AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_GEMINI,
-        ALIBABA_CODING_PLAN_PROBE_MODEL, CLAUDE_DEFAULT_PROBE_MODEL,
-    };
-
-    fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
-        AggregateApi {
-            id: "agg-test".to_string(),
-            provider_type: "claude".to_string(),
-            supplier_name: Some("test".to_string()),
-            sort: 0,
-            url: "https://open.bigmodel.cn/api/anthropic".to_string(),
-            auth_type: "apikey".to_string(),
-            auth_params_json: None,
-            action: action.map(str::to_string),
-            model_override: None,
-            status: "active".to_string(),
-            created_at: 0,
-            updated_at: 0,
-            last_test_at: None,
-            last_test_status: None,
-            last_test_error: None,
-            balance_query_enabled: false,
-            balance_query_template: None,
-            balance_query_base_url: None,
-            balance_query_user_id: None,
-            balance_query_config_json: None,
-            last_balance_at: None,
-            last_balance_status: None,
-            last_balance_error: None,
-            last_balance_json: None,
-        }
-    }
-
-    #[test]
-    fn action_override_disabled_stays_none() {
-        let value =
-            normalize_action_override(Some(false), Some("/v1/messages".to_string())).unwrap();
-        assert_eq!(value, Some(None));
-    }
-
-    #[test]
-    fn action_override_enabled_and_empty_preserves_empty_string() {
-        let value = normalize_action_override(Some(true), Some("   ".to_string())).unwrap();
-        assert_eq!(value, Some(Some(String::new())));
-    }
-
-    #[test]
-    fn empty_action_uses_base_url_without_default_path() {
-        let api = aggregate_api_with_action(Some(""));
-        let path = action_path_or_default(&api, "/v1/messages?beta=true");
-        assert_eq!(path, "");
-    }
-
-    #[test]
-    fn codex_models_probe_url_appends_client_version() {
-        let _guard = crate::test_env_guard();
-        crate::gateway::set_codex_user_agent_version("0.101.0")
-            .expect("set default codex user agent version");
-        let mut api = aggregate_api_with_action(None);
-        api.url = "https://api.openai.com/v1".to_string();
-
-        let url = build_codex_models_probe_url(&api);
-
-        assert_eq!(
-            url,
-            "https://api.openai.com/v1/models?client_version=0.101.0"
-        );
-    }
-
-    #[test]
-    fn codex_models_probe_url_preserves_custom_action_with_client_version() {
-        let _guard = crate::test_env_guard();
-        crate::gateway::set_codex_user_agent_version("0.101.0")
-            .expect("set default codex user agent version");
-        let mut api = aggregate_api_with_action(Some("/models?limit=20"));
-        api.url = "https://api.openai.com/v1".to_string();
-
-        let url = build_codex_models_probe_url(&api);
-
-        assert_eq!(
-            url,
-            "https://api.openai.com/v1/models?limit=20&client_version=0.101.0"
-        );
-    }
-
-    #[test]
-    fn gemini_provider_type_is_normalized_independently() {
-        assert_eq!(
-            normalize_provider_type(Some("gemini_native".to_string())).unwrap(),
-            AGGREGATE_API_PROVIDER_GEMINI
-        );
-        assert_eq!(
-            normalize_provider_type_value("google_gemini"),
-            AGGREGATE_API_PROVIDER_GEMINI
-        );
-        assert_eq!(
-            provider_default_url(AGGREGATE_API_PROVIDER_GEMINI),
-            "https://generativelanguage.googleapis.com"
-        );
-        assert_eq!(
-            normalize_provider_type(Some("claude".to_string())).unwrap(),
-            AGGREGATE_API_PROVIDER_CLAUDE
-        );
-    }
-
-    #[test]
-    fn claude_probe_models_prefer_alibaba_coding_plan_model_for_dashscope() {
-        let mut api = aggregate_api_with_action(None);
-        api.url = "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic".to_string();
-
-        assert_eq!(
-            claude_probe_fallback_models_for_api(&api),
-            vec![ALIBABA_CODING_PLAN_PROBE_MODEL, CLAUDE_DEFAULT_PROBE_MODEL]
-        );
-    }
-
-    #[test]
-    fn claude_probe_models_keep_anthropic_default_first_for_generic_urls() {
-        let mut api = aggregate_api_with_action(None);
-        api.url = "https://api.anthropic.com/v1".to_string();
-
-        assert_eq!(
-            claude_probe_fallback_models_for_api(&api),
-            vec![CLAUDE_DEFAULT_PROBE_MODEL, ALIBABA_CODING_PLAN_PROBE_MODEL]
-        );
-    }
-
-    #[test]
-    fn extract_model_ids_from_models_response_accepts_common_shapes() {
-        let body = r#"{
-            "data": [
-                {"id":"provider-model-a"},
-                {"model":"provider-model-b"},
-                "provider-model-c"
-            ],
-            "models": [{"slug":"ignored-because-data-wins"}]
-        }"#;
-
-        assert_eq!(
-            extract_model_ids_from_models_response(body),
-            vec![
-                "provider-model-a".to_string(),
-                "provider-model-b".to_string(),
-                "provider-model-c".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn extract_model_ids_from_models_response_keeps_full_provider_catalog() {
-        let mut data = (0..13)
-            .map(|index| serde_json::json!({ "id": format!("provider-model-{index}") }))
-            .collect::<Vec<Value>>();
-        data.push(serde_json::json!({ "id": "gpt-5.5" }));
-        let body = serde_json::json!({ "data": data }).to_string();
-
-        let models = extract_model_ids_from_models_response(body.as_str());
-
-        assert!(models.contains(&"gpt-5.5".to_string()));
-        assert_eq!(models.len(), 14);
-    }
-
-    #[test]
-    fn generic_balance_extractor_accepts_common_balance_shape() {
-        let body: Value = serde_json::from_str(
-            r#"{"is_active":true,"balance":12.5,"currency":"USD","used":1.25}"#,
-        )
-        .expect("parse balance body");
-
-        let snapshot = extract_generic_balance(&body).expect("extract balance");
-
-        assert!(snapshot.is_valid);
-        assert_eq!(snapshot.remaining, Some(12.5));
-        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
-        assert_eq!(snapshot.used, Some(1.25));
-    }
-
-    #[test]
-    fn new_api_balance_extractor_converts_quota_to_usd() {
-        let body: Value = serde_json::from_str(
-            r#"{"success":true,"data":{"group":"default","quota":1000000,"used_quota":500000}}"#,
-        )
-        .expect("parse new api balance body");
-
-        let snapshot = extract_new_api_balance(&body).expect("extract balance");
-
-        assert!(snapshot.is_valid);
-        assert_eq!(snapshot.plan_name.as_deref(), Some("default"));
-        assert_eq!(snapshot.remaining, Some(2.0));
-        assert_eq!(snapshot.used, Some(1.0));
-        assert_eq!(snapshot.total, Some(3.0));
-    }
-
-    #[test]
-    fn generic_balance_extractor_accepts_usage_balance_shape() {
-        let body: Value = serde_json::from_str(
-            r#"{"mode":"quota_limited","status":"active","quota":{"limit":20,"used":7.5,"remaining":12.5}}"#,
-        )
-        .expect("parse usage body");
-
-        let snapshot = extract_generic_balance(&body).expect("extract usage balance");
-
-        assert!(snapshot.is_valid);
-        assert_eq!(snapshot.plan_name.as_deref(), Some("quota_limited"));
-        assert_eq!(snapshot.remaining, Some(12.5));
-        assert_eq!(snapshot.used, Some(7.5));
-        assert_eq!(snapshot.total, Some(20.0));
-        assert_eq!(snapshot.unit.as_deref(), Some("USD"));
-    }
-
-    #[test]
-    fn custom_balance_config_normalizes_and_extracts_paths() {
-        let normalized = normalize_custom_balance_query_config(Some(
-            r#"{
-                "method":"get",
-                "path":"v1/usage",
-                "auth":"balance-bearer",
-                "remainingPath":"data.available",
-                "totalPath":"data.limit",
-                "usedPath":"data.used",
-                "planPath":"data.plan",
-                "validPath":"data.valid",
-                "unit":"credits",
-                "multiplier":0.5
-            }"#
-            .to_string(),
-        ))
-        .expect("normalize custom balance config")
-        .expect("custom config present");
-        let config: CustomBalanceQueryConfig =
-            serde_json::from_str(normalized.as_str()).expect("parse normalized custom config");
-
-        assert_eq!(config.method.as_deref(), Some("GET"));
-        assert_eq!(config.path, "/v1/usage");
-        assert_eq!(config.auth.as_deref(), Some("balance_bearer"));
-
-        let body: Value = serde_json::from_str(
-            r#"{"data":{"available":4,"limit":10,"used":6,"plan":"pro","valid":true}}"#,
-        )
-        .expect("parse custom balance body");
-        let snapshot = extract_custom_balance(&body, &config).expect("extract custom balance");
-
-        assert!(snapshot.is_valid);
-        assert_eq!(snapshot.remaining, Some(2.0));
-        assert_eq!(snapshot.total, Some(5.0));
-        assert_eq!(snapshot.used, Some(3.0));
-        assert_eq!(snapshot.plan_name.as_deref(), Some("pro"));
-        assert_eq!(snapshot.unit.as_deref(), Some("credits"));
-    }
-
-    #[test]
-    fn custom_balance_config_rejects_absolute_request_path() {
-        let result = normalize_custom_balance_query_config(Some(
-            r#"{"path":"https://example.com/v1/usage","remainingPath":"balance"}"#.to_string(),
-        ));
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn claude_probe_uses_configured_model_without_model_discovery() {
-        let server = Server::http("127.0.0.1:0").expect("start mock server");
-        let base_url = format!("http://{}", server.server_addr());
-        let (tx, rx) = mpsc::channel();
-        let join = thread::spawn(move || {
-            let mut request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("receive messages request")
-                .expect("messages request present");
-            let mut body = String::new();
-            request
-                .as_reader()
-                .read_to_string(&mut body)
-                .expect("read request body");
-            tx.send((
-                request.method().as_str().to_string(),
-                request.url().to_string(),
-                body,
-            ))
-            .expect("send messages request");
-            request
-                .respond(Response::from_string(
-                    r#"{"id":"msg_probe","type":"message"}"#,
-                ))
-                .expect("respond messages");
-        });
-
-        let mut api = aggregate_api_with_action(None);
-        api.url = base_url;
-        api.model_override = Some("qwen3.5-plus".to_string());
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("build client");
-
-        let status = probe_claude_endpoint(&client, &api, "secret").expect("probe succeeds");
-
-        assert_eq!(status, 200);
-        let captured = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("captured request");
-        join.join().expect("join mock server");
-        assert_eq!(captured.0, "POST");
-        assert_eq!(captured.1, "/v1/messages?beta=true");
-        let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
-        assert_eq!(body["model"], "qwen3.5-plus");
-    }
-
-    #[test]
-    fn codex_probe_uses_configured_model_without_model_discovery() {
-        let server = Server::http("127.0.0.1:0").expect("start mock server");
-        let base_url = format!("http://{}", server.server_addr());
-        let (tx, rx) = mpsc::channel();
-        let join = thread::spawn(move || {
-            let mut request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("receive chat completions request")
-                .expect("chat completions request present");
-            let mut body = String::new();
-            request
-                .as_reader()
-                .read_to_string(&mut body)
-                .expect("read request body");
-            tx.send((
-                request.method().as_str().to_string(),
-                request.url().to_string(),
-                body,
-            ))
-            .expect("send chat completions request");
-            request
-                .respond(Response::from_string(r#"{"id":"chatcmpl_probe"}"#))
-                .expect("respond chat completions");
-        });
-
-        let mut api = aggregate_api_with_action(Some("/chat/completions"));
-        api.url = base_url;
-        api.model_override = Some("qwen3.5-plus".to_string());
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("build client");
-
-        let status = probe_codex_endpoint(&client, &api, "secret").expect("probe succeeds");
-
-        assert_eq!(status, 200);
-        let captured = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("captured request");
-        join.join().expect("join mock server");
-        assert_eq!(captured.0, "POST");
-        assert_eq!(captured.1, "/v1/chat/completions");
-        let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
-        assert_eq!(body["model"], "qwen3.5-plus");
-    }
-
-    #[test]
-    fn claude_probe_uses_discovered_model_before_fallbacks() {
-        let server = Server::http("127.0.0.1:0").expect("start mock server");
-        let base_url = format!("http://{}", server.server_addr());
-        let (tx, rx) = mpsc::channel();
-        let join = thread::spawn(move || {
-            let request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("receive model list request")
-                .expect("model list request present");
-            tx.send((
-                request.method().as_str().to_string(),
-                request.url().to_string(),
-                None,
-            ))
-            .expect("send model list request");
-            request
-                .respond(Response::from_string(
-                    r#"{"data":[{"id":"provider-model"}]}"#,
-                ))
-                .expect("respond model list");
-
-            let mut request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("receive messages request")
-                .expect("messages request present");
-            let mut body = String::new();
-            request
-                .as_reader()
-                .read_to_string(&mut body)
-                .expect("read request body");
-            tx.send((
-                request.method().as_str().to_string(),
-                request.url().to_string(),
-                Some(body),
-            ))
-            .expect("send messages request");
-            request
-                .respond(Response::from_string(
-                    r#"{"id":"msg_probe","type":"message"}"#,
-                ))
-                .expect("respond messages");
-        });
-
-        let mut api = aggregate_api_with_action(None);
-        api.url = base_url;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("build client");
-
-        let status = probe_claude_endpoint(&client, &api, "secret").expect("probe succeeds");
-
-        assert_eq!(status, 200);
-        let first = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("first captured request");
-        let second = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("second captured request");
-        join.join().expect("join mock server");
-        assert_eq!(first.0, "GET");
-        assert_eq!(first.1, "/v1/models");
-        assert_eq!(second.0, "POST");
-        assert_eq!(second.1, "/v1/messages?beta=true");
-        let second_body: Value =
-            serde_json::from_str(second.2.as_deref().expect("second body")).expect("parse body");
-        assert_eq!(second_body["model"], "provider-model");
-    }
-
-    #[test]
-    fn claude_probe_retries_with_alibaba_model_after_default_model_bad_request() {
-        let server = Server::http("127.0.0.1:0").expect("start mock server");
-        let base_url = format!("http://{}/apps/anthropic", server.server_addr());
-        let (tx, rx) = mpsc::channel();
-        let join = thread::spawn(move || {
-            let request = server
-                .recv_timeout(Duration::from_secs(2))
-                .expect("receive model list request")
-                .expect("model list request present");
-            tx.send((request.url().to_string(), String::new()))
-                .expect("send captured model list request");
-            request
-                .respond(Response::from_string("").with_status_code(StatusCode(404)))
-                .expect("respond model list request");
-
-            for (index, status) in [400u16, 200u16].into_iter().enumerate() {
-                let mut request = server
-                    .recv_timeout(Duration::from_secs(2))
-                    .expect("receive mock request")
-                    .expect("mock request present");
-                let mut body = String::new();
-                request
-                    .as_reader()
-                    .read_to_string(&mut body)
-                    .expect("read request body");
-                tx.send((request.url().to_string(), body))
-                    .expect("send captured request");
-                let response_body = if index == 0 {
-                    r#"{"error":{"message":"model not found"}}"#
-                } else {
-                    r#"{"id":"msg_probe","type":"message","content":[]}"#
-                };
-                request
-                    .respond(
-                        Response::from_string(response_body).with_status_code(StatusCode(status)),
-                    )
-                    .expect("respond mock request");
-            }
-        });
-
-        let mut api = aggregate_api_with_action(None);
-        api.url = base_url;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("build client");
-
-        let status = probe_claude_endpoint(&client, &api, "secret").expect("probe succeeds");
-
-        assert_eq!(status, 200);
-        let models_request = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("captured model list request");
-        let first = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("first captured request");
-        let second = rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("second captured request");
-        join.join().expect("join mock server");
-        assert_eq!(models_request.0, "/apps/anthropic/v1/models");
-        assert_eq!(first.0, "/apps/anthropic/v1/messages?beta=true");
-        assert_eq!(second.0, "/apps/anthropic/v1/messages?beta=true");
-        let first_body: Value = serde_json::from_str(first.1.as_str()).expect("parse first body");
-        let second_body: Value =
-            serde_json::from_str(second.1.as_str()).expect("parse second body");
-        assert_eq!(first_body["model"], CLAUDE_DEFAULT_PROBE_MODEL);
-        assert_eq!(second_body["model"], ALIBABA_CODING_PLAN_PROBE_MODEL);
-    }
-}
-
+#[path = "aggregate_api_tests.rs"]
+mod tests;
 fn serialize_userpass_secret(username: &str, password: &str) -> Result<String, String> {
     let secret = UserPassSecret {
         username: username.trim().to_string(),
@@ -2355,22 +1846,18 @@ fn probe_gemini_endpoint(
 /// 返回函数执行结果
 pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
-    let items = storage
-        .list_aggregate_apis()
-        .map_err(|err| format!("list aggregate apis failed: {err}"))?;
-    let assignments = storage
-        .list_quota_source_model_assignments()
-        .map_err(|err| format!("list aggregate api model assignments failed: {err}"))?;
+    let snapshot = storage
+        .load_aggregate_api_list_snapshot()
+        .map_err(|err| format!("load aggregate api list failed: {err}"))?;
     let mut models_by_api = std::collections::HashMap::<String, Vec<String>>::new();
-    for assignment in assignments {
-        if assignment.source_kind == "aggregate_api" {
-            models_by_api
-                .entry(assignment.source_id)
-                .or_default()
-                .push(assignment.model_slug);
-        }
+    for assignment in snapshot.model_assignments {
+        models_by_api
+            .entry(assignment.source_id)
+            .or_default()
+            .push(assignment.model_slug);
     }
-    Ok(items
+    Ok(snapshot
+        .items
         .into_iter()
         .map(|item| AggregateApiSummary {
             model_slugs: models_by_api.remove(item.id.as_str()).unwrap_or_default(),
@@ -2470,7 +1957,7 @@ pub(crate) fn import_aggregate_api_supplier_models(
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
     let api_id = normalize_required_text("apiId", params.api_id)?;
     let api = storage
-        .find_aggregate_api_by_id(api_id.as_str())
+        .find_aggregate_api_supplier_identity_by_id(api_id.as_str())
         .map_err(|err| format!("read aggregate api failed: {err}"))?
         .ok_or_else(|| "aggregate api not found".to_string())?;
     let supplier_key = params
@@ -2737,7 +2224,7 @@ pub(crate) fn update_aggregate_api(
     }
     let mut storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let existing = storage
-        .find_aggregate_api_by_id(api_id)
+        .find_aggregate_api_update_config_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
     let existing_auth_type = normalize_auth_type(Some(existing.auth_type.clone()))
@@ -2971,15 +2458,14 @@ pub(crate) fn read_aggregate_api_secret(api_id: &str) -> Result<AggregateApiSecr
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let config = storage
+        .find_aggregate_api_secret_config_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let key = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let key = config
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let auth_type = normalize_auth_type(Some(api.auth_type))?;
+    let auth_type = normalize_auth_type(Some(config.auth_type))?;
     if auth_type == AGGREGATE_API_AUTH_USERPASS {
         let parsed: UserPassSecret = serde_json::from_str(key.as_str())
             .map_err(|_| "invalid aggregate api secret".to_string())?;
@@ -3018,17 +2504,15 @@ pub(crate) fn test_aggregate_api_connection(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?;
-    let Some(secret) = secret else {
-        return Err("aggregate api secret not found".to_string());
-    };
-    let client = gateway::fresh_upstream_client();
+    let api = api_with_secrets.api;
+    let secret = api_with_secrets
+        .secret_value
+        .ok_or_else(|| "aggregate api secret not found".to_string())?;
+    let client = gateway::upstream_client();
     let started_at = Instant::now();
     let provider_type = normalize_provider_type_value(api.provider_type.as_str());
     let result = match provider_type.as_str() {
@@ -3061,13 +2545,13 @@ pub(crate) fn discover_aggregate_api_models(api_id: &str) -> Result<Vec<String>,
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
-    let secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let api = api_with_secrets.api;
+    let secret = api_with_secrets
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
     if let Some(model_override) = api
         .model_override
@@ -3078,7 +2562,7 @@ pub(crate) fn discover_aggregate_api_models(api_id: &str) -> Result<Vec<String>,
         return Ok(vec![model_override.to_string()]);
     }
 
-    let client = gateway::fresh_upstream_client();
+    let client = gateway::upstream_client();
     let provider_type = normalize_provider_type_value(api.provider_type.as_str());
     match provider_type.as_str() {
         AGGREGATE_API_PROVIDER_CLAUDE => {
@@ -3106,24 +2590,22 @@ pub(crate) fn refresh_aggregate_api_balance(
         return Err("aggregate api id required".to_string());
     }
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
-    let api = storage
-        .find_aggregate_api_by_id(api_id)
+    let api_with_secrets = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "aggregate api not found".to_string())?;
+    let api = api_with_secrets.api;
     if !api.balance_query_enabled {
         return Err("aggregate api balance query is disabled".to_string());
     }
-    let provider_secret = storage
-        .find_aggregate_api_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?
+    let provider_secret = api_with_secrets
+        .secret_value
         .ok_or_else(|| "aggregate api secret not found".to_string())?;
-    let balance_secret = storage
-        .find_aggregate_api_balance_secret_by_id(api_id)
-        .map_err(|err| err.to_string())?;
+    let balance_secret = api_with_secrets.balance_access_token;
     let template = default_balance_query_template(normalize_balance_query_template(
         api.balance_query_template.clone(),
     )?);
-    let client = gateway::fresh_upstream_client();
+    let client = gateway::upstream_client();
     let started_at = Instant::now();
     let result = match template.as_str() {
         AGGREGATE_API_BALANCE_TEMPLATE_NEW_API => {

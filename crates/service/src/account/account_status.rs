@@ -25,6 +25,12 @@ pub(crate) struct GatewayErrorFollowUp {
     pub should_mark_default_cooldown: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct AccountStatusContext {
+    pub status: String,
+    pub reason: Option<String>,
+}
+
 /// 函数 `latest_status_reason`
 ///
 /// 作者: gaohongshun
@@ -44,6 +50,20 @@ fn latest_status_reason(storage: &Storage, account_id: &str) -> Option<String> {
         .and_then(|mut reasons| reasons.remove(account_id))
 }
 
+pub(crate) fn load_account_status_context(
+    storage: &Storage,
+    account_id: &str,
+) -> AccountStatusContext {
+    AccountStatusContext {
+        status: storage
+            .find_account_status_by_id(account_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        reason: latest_status_reason(storage, account_id),
+    }
+}
+
 /// 函数 `set_account_status`
 ///
 /// 作者: gaohongshun
@@ -56,21 +76,33 @@ fn latest_status_reason(storage: &Storage, account_id: &str) -> Option<String> {
 /// # 返回
 /// 无
 pub(crate) fn set_account_status(storage: &Storage, account_id: &str, status: &str, reason: &str) {
-    let changed = matches!(
-        storage.update_account_status_if_changed(account_id, status),
-        Ok(true)
-    );
+    set_account_status_with_context(storage, account_id, status, reason, None);
+}
+
+pub(crate) fn set_account_status_with_context(
+    storage: &Storage,
+    account_id: &str,
+    status: &str,
+    reason: &str,
+    context: Option<&AccountStatusContext>,
+) {
+    let (account_exists, changed) = storage
+        .update_account_status_if_changed_with_existence(account_id, status)
+        .unwrap_or((false, false));
     if changed {
         crate::gateway::invalidate_candidate_cache();
     }
-    let account_exists = storage
-        .find_account_by_id(account_id)
-        .ok()
-        .flatten()
-        .is_some();
-    if account_exists
-        && (changed || latest_status_reason(storage, account_id).as_deref() != Some(reason))
-    {
+    let should_insert_event = if !account_exists || changed {
+        account_exists
+    } else {
+        let latest_reason = context
+            .filter(|context| context.status.trim().eq_ignore_ascii_case(status))
+            .and_then(|context| context.reason.as_deref())
+            .map(str::to_string)
+            .or_else(|| latest_status_reason(storage, account_id));
+        latest_reason.as_deref() != Some(reason)
+    };
+    if should_insert_event {
         let _ = storage.insert_event(&Event {
             account_id: Some(account_id.to_string()),
             event_type: "account_status_update".to_string(),
@@ -94,12 +126,12 @@ pub(crate) fn set_account_status(storage: &Storage, account_id: &str, status: &s
 /// 返回函数执行结果
 fn should_preserve_manual_account_status(storage: &Storage, account_id: &str) -> bool {
     storage
-        .find_account_by_id(account_id)
+        .find_account_status_by_id(account_id)
         .ok()
         .flatten()
-        .map(|account| {
-            account.status.trim().eq_ignore_ascii_case("disabled")
-                || account.status.trim().eq_ignore_ascii_case("inactive")
+        .map(|status| {
+            status.trim().eq_ignore_ascii_case("disabled")
+                || status.trim().eq_ignore_ascii_case("inactive")
         })
         .unwrap_or(false)
 }
@@ -237,21 +269,10 @@ pub(crate) fn analyze_gateway_error(err: &str, has_more_candidates: bool) -> Gat
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(crate) fn is_banned_status_reason(reason: &str) -> bool {
-    matches!(
-        reason.trim().to_ascii_lowercase().as_str(),
-        "account_deactivated" | "workspace_deactivated" | "deactivated_workspace"
-    )
-}
-
 pub(crate) fn is_refresh_blocked_status_reason(reason: &str) -> bool {
     reason
         .trim()
         .eq_ignore_ascii_case(REFRESH_TOKEN_REGION_BLOCKED_REASON)
-}
-
-pub(crate) fn is_account_refresh_blocked_status_reason(reason: &str) -> bool {
-    is_banned_status_reason(reason) || is_refresh_blocked_status_reason(reason)
 }
 
 /// 函数 `should_failover_for_deactivation_error`
@@ -461,211 +482,5 @@ pub(crate) fn mark_account_unavailable_for_refresh_token_error(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        analyze_gateway_error, classify_account_availability_signal,
-        mark_account_unavailable_for_gateway_error, AccountAvailabilitySignal, GatewayErrorKind,
-    };
-    use codexmanager_core::storage::{now_ts, Account, Storage, UsageSnapshotRecord};
-
-    /// 函数 `classify_account_availability_signal_separates_usage_refresh_and_deactivation`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// 无
-    ///
-    /// # 返回
-    /// 无
-    #[test]
-    fn classify_account_availability_signal_separates_usage_refresh_and_deactivation() {
-        assert!(matches!(
-            classify_account_availability_signal("usage endpoint status 401 Unauthorized"),
-            Some(AccountAvailabilitySignal::UsageHttp(401))
-        ));
-        assert!(matches!(
-            classify_account_availability_signal("usage endpoint status 403 Forbidden"),
-            Some(AccountAvailabilitySignal::UsageHttp(403))
-        ));
-        assert!(matches!(
-            classify_account_availability_signal("usage endpoint status 429 Too Many Requests"),
-            Some(AccountAvailabilitySignal::UsageHttp(429))
-        ));
-        assert!(matches!(
-            classify_account_availability_signal("subscription endpoint status 403 Forbidden"),
-            Some(AccountAvailabilitySignal::UsageHttp(403))
-        ));
-        assert!(matches!(
-            classify_account_availability_signal(
-                "subscription endpoint failed: status=401 Unauthorized body=token expired"
-            ),
-            Some(AccountAvailabilitySignal::UsageHttp(401))
-        ));
-
-        assert!(matches!(
-            classify_account_availability_signal(
-                "refresh token failed with status 401 Unauthorized: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
-            ),
-            Some(AccountAvailabilitySignal::RefreshToken(
-                crate::usage_http::RefreshTokenAuthErrorReason::Invalidated
-            ))
-        ));
-
-        assert!(matches!(
-            classify_account_availability_signal("account_deactivated"),
-            Some(AccountAvailabilitySignal::Deactivation(
-                "account_deactivated"
-            ))
-        ));
-
-        let deactivation = analyze_gateway_error("Your OpenAI account has been deactivated", true);
-        assert_eq!(deactivation.kind, GatewayErrorKind::Deactivation);
-        assert!(deactivation.should_failover);
-        assert!(deactivation.should_mark_account_unavailable);
-        assert!(!deactivation.should_mark_default_cooldown);
-
-        let usage_limit = analyze_gateway_error(
-            "You've hit your usage limit. To get more access now, try again at 8:02 PM.",
-            true,
-        );
-        assert_eq!(usage_limit.kind, GatewayErrorKind::UsageLimit);
-        assert!(usage_limit.should_failover);
-        assert!(usage_limit.should_mark_account_unavailable);
-        assert!(usage_limit.should_mark_default_cooldown);
-
-        let usage_limit_last = analyze_gateway_error(
-            "You've hit your usage limit. To get more access now, try again at 8:02 PM.",
-            false,
-        );
-        assert_eq!(usage_limit_last.kind, GatewayErrorKind::UsageLimit);
-        assert!(!usage_limit_last.should_failover);
-        assert!(usage_limit_last.should_mark_account_unavailable);
-        assert!(!usage_limit_last.should_mark_default_cooldown);
-
-        // Regression: backend-native WS upstream phrasing.
-        let ws_usage_limit = analyze_gateway_error("The usage limit has been reached", true);
-        assert_eq!(ws_usage_limit.kind, GatewayErrorKind::UsageLimit);
-        assert!(ws_usage_limit.should_failover);
-        assert!(ws_usage_limit.should_mark_account_unavailable);
-        assert!(ws_usage_limit.should_mark_default_cooldown);
-    }
-
-    /// 函数 `gateway_usage_limit_error_marks_account_limited_immediately`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-03
-    ///
-    /// # 参数
-    /// 无
-    ///
-    /// # 返回
-    /// 无
-    #[test]
-    fn gateway_usage_limit_error_marks_account_limited_immediately() {
-        let _guard = crate::test_env_guard();
-        let storage = Storage::open_in_memory().expect("open storage");
-        storage.init().expect("init storage");
-        let now = now_ts();
-        storage
-            .insert_account(&Account {
-                id: "acc-usage-limit".to_string(),
-                label: "usage-limit".to_string(),
-                issuer: "issuer".to_string(),
-                chatgpt_account_id: None,
-                workspace_id: None,
-                group_name: None,
-                sort: 0,
-                status: "active".to_string(),
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("insert account");
-
-        assert!(mark_account_unavailable_for_gateway_error(
-            &storage,
-            "acc-usage-limit",
-            "You've hit your usage limit. To get more access now, try again at 8:02 PM."
-        ));
-
-        let account = storage
-            .find_account_by_id("acc-usage-limit")
-            .expect("find account")
-            .expect("account exists");
-        assert_eq!(account.status, "limited");
-        let reasons = storage
-            .latest_account_status_reasons(&["acc-usage-limit".to_string()])
-            .expect("load reasons");
-        assert_eq!(
-            reasons.get("acc-usage-limit").map(String::as_str),
-            Some("usage_limit_exhausted")
-        );
-    }
-
-    /// 函数 `gateway_usage_limit_error_marks_account_limited_when_snapshot_exhausted`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-03
-    ///
-    /// # 参数
-    /// 无
-    ///
-    /// # 返回
-    /// 无
-    #[test]
-    fn gateway_usage_limit_error_marks_account_limited_when_snapshot_exhausted() {
-        let _guard = crate::test_env_guard();
-        let storage = Storage::open_in_memory().expect("open storage");
-        storage.init().expect("init storage");
-        let now = now_ts();
-        storage
-            .insert_account(&Account {
-                id: "acc-usage-exhausted".to_string(),
-                label: "usage-exhausted".to_string(),
-                issuer: "issuer".to_string(),
-                chatgpt_account_id: None,
-                workspace_id: None,
-                group_name: None,
-                sort: 0,
-                status: "active".to_string(),
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("insert account");
-        storage
-            .insert_usage_snapshot(&UsageSnapshotRecord {
-                account_id: "acc-usage-exhausted".to_string(),
-                used_percent: Some(100.0),
-                window_minutes: Some(300),
-                resets_at: None,
-                secondary_used_percent: Some(100.0),
-                secondary_window_minutes: Some(10080),
-                secondary_resets_at: None,
-                credits_json: None,
-                captured_at: now,
-            })
-            .expect("insert usage snapshot");
-
-        assert!(mark_account_unavailable_for_gateway_error(
-            &storage,
-            "acc-usage-exhausted",
-            "You've hit your usage limit. To get more access now, try again at 8:02 PM."
-        ));
-
-        let account = storage
-            .find_account_by_id("acc-usage-exhausted")
-            .expect("find account")
-            .expect("account exists");
-        assert_eq!(account.status, "limited");
-        let reasons = storage
-            .latest_account_status_reasons(&["acc-usage-exhausted".to_string()])
-            .expect("load reasons");
-        assert_eq!(
-            reasons.get("acc-usage-exhausted").map(String::as_str),
-            Some("usage_limit_exhausted")
-        );
-    }
-}
+#[path = "account_status_tests.rs"]
+mod tests;

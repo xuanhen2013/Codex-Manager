@@ -31,6 +31,9 @@ import type {
   RequestLogFilterSummary,
 } from "@/types";
 
+const logTooltipContentClassName = "logs-tooltip-content";
+const logTooltipLabelClassName = "text-[10px] font-medium text-muted-foreground";
+
 export function AccountKeyInfoCell({
   log,
   accountLabel,
@@ -135,31 +138,31 @@ export function AccountKeyInfoCell({
             ) : null}
           </div>
         </TooltipTrigger>
-        <TooltipContent className="max-w-sm">
+        <TooltipContent className={`${logTooltipContentClassName} max-w-sm`}>
           <div className="flex min-w-[240px] flex-col gap-2">
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("供应商名称")}</div>
+              <div className={logTooltipLabelClassName}>{t("供应商名称")}</div>
               <div className="break-all font-mono text-[11px]">
                 {aggregateApiDisplayName}
               </div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">URL</div>
+              <div className={logTooltipLabelClassName}>URL</div>
               <div className="break-all font-mono text-[11px]">
                 {aggregateApiDisplayUrl}
               </div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("密钥")}</div>
+              <div className={logTooltipLabelClassName}>{t("密钥")}</div>
               <div className="break-all text-[11px]">{apiKeyDisplayName || "-"}</div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("密钥 ID")}</div>
+              <div className={logTooltipLabelClassName}>{t("密钥 ID")}</div>
               <div className="break-all font-mono text-[11px]">{log.keyId || "-"}</div>
             </div>
             {attemptedAggregateApiLabels.length > 1 ? (
               <div className="space-y-0.5">
-                <div className="text-[10px] text-background/70">{t("尝试链路")}</div>
+                <div className={logTooltipLabelClassName}>{t("尝试链路")}</div>
                 <div className="break-all font-mono text-[11px]">
                   {attemptedAggregateApiLabels.join(" -> ")}
                 </div>
@@ -167,7 +170,7 @@ export function AccountKeyInfoCell({
             ) : null}
             {initialAggregateApiLabel ? (
               <div className="space-y-0.5">
-                <div className="text-[10px] text-background/70">{t("首尝试渠道")}</div>
+                <div className={logTooltipLabelClassName}>{t("首尝试渠道")}</div>
                 <div className="break-all font-mono text-[11px]">
                   {initialAggregateApiLabel}
                 </div>
@@ -200,17 +203,17 @@ export function AccountKeyInfoCell({
           ) : null}
         </div>
       </TooltipTrigger>
-      <TooltipContent className="max-w-sm">
+      <TooltipContent className={`${logTooltipContentClassName} max-w-sm`}>
         <div className="flex min-w-[240px] flex-col gap-2">
           {initialAccountLabel ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("首尝试账号")}</div>
+              <div className={logTooltipLabelClassName}>{t("首尝试账号")}</div>
               <div className="break-all font-mono text-[11px]">{initialAccountLabel}</div>
             </div>
           ) : null}
           {attemptedAccountLabels.length > 1 ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("尝试链路")}</div>
+              <div className={logTooltipLabelClassName}>{t("尝试链路")}</div>
               <div className="break-all font-mono text-[11px]">
                 {attemptedAccountLabels.join(" -> ")}
               </div>
@@ -218,20 +221,20 @@ export function AccountKeyInfoCell({
           ) : null}
           {hasNamedAccount ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("邮箱 / 名称")}</div>
+              <div className={logTooltipLabelClassName}>{t("邮箱 / 名称")}</div>
               <div className="break-all font-mono text-[11px]">{accountLabel}</div>
             </div>
           ) : null}
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("账号 ID")}</div>
+            <div className={logTooltipLabelClassName}>{t("账号 ID")}</div>
             <div className="break-all font-mono text-[11px]">{log.accountId || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("密钥")}</div>
+            <div className={logTooltipLabelClassName}>{t("密钥")}</div>
             <div className="break-all text-[11px]">{apiKeyDisplayName || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("密钥 ID")}</div>
+            <div className={logTooltipLabelClassName}>{t("密钥 ID")}</div>
             <div className="break-all font-mono text-[11px]">{log.keyId || "-"}</div>
           </div>
         </div>
@@ -297,87 +300,87 @@ export function RequestRouteInfoCell({ log }: { log: RequestLog }) {
           ) : null}
         </div>
       </TooltipTrigger>
-      <TooltipContent className="max-w-md">
+      <TooltipContent className={`${logTooltipContentClassName} max-w-md`}>
         <div className="flex min-w-[280px] flex-col gap-2">
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("请求类型")}</div>
+            <div className={logTooltipLabelClassName}>{t("请求类型")}</div>
             <div className="font-mono text-[11px] uppercase">{requestType}</div>
           </div>
           {gatewayMode ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("网关模式")}</div>
+              <div className={logTooltipLabelClassName}>{t("网关模式")}</div>
               <div className="font-mono text-[11px]">{gatewayMode}</div>
             </div>
           ) : null}
           {routeStrategy ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("路由策略")}</div>
+              <div className={logTooltipLabelClassName}>{t("路由策略")}</div>
               <div className="font-mono text-[11px]">{routeStrategy}</div>
             </div>
           ) : null}
           {routeSource ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("路由来源")}</div>
+              <div className={logTooltipLabelClassName}>{t("路由来源")}</div>
               <div className="font-mono text-[11px]">{routeSource}</div>
             </div>
           ) : null}
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("规范来源")}</div>
+            <div className={logTooltipLabelClassName}>{t("规范来源")}</div>
             <div className="font-mono text-[11px]">{canonicalSource}</div>
           </div>
           {sizeRejectStage && sizeRejectStage !== "-" ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("大小拒绝阶段")}</div>
+              <div className={logTooltipLabelClassName}>{t("大小拒绝阶段")}</div>
               <div className="font-mono text-[11px]">{sizeRejectStage}</div>
             </div>
           ) : null}
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("方法")}</div>
+            <div className={logTooltipLabelClassName}>{t("方法")}</div>
             <div className="font-mono text-[11px]">{log.method || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("显示名称")}</div>
+            <div className={logTooltipLabelClassName}>{t("显示名称")}</div>
             <div className="break-all text-[11px]">{displayPathLabel}</div>
           </div>
           {displayPath && displayPathLabel !== displayPath ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("原始路径")}</div>
+              <div className={logTooltipLabelClassName}>{t("原始路径")}</div>
               <div className="break-all font-mono text-[11px]">{displayPath}</div>
             </div>
           ) : null}
           {recordedPath && recordedPath !== displayPath ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("记录地址")}</div>
+              <div className={logTooltipLabelClassName}>{t("记录地址")}</div>
               <div className="break-all font-mono text-[11px]">{recordedPath}</div>
             </div>
           ) : null}
           {originalPath && originalPath !== displayPath ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("原始地址")}</div>
+              <div className={logTooltipLabelClassName}>{t("原始地址")}</div>
               <div className="break-all font-mono text-[11px]">{originalPath}</div>
             </div>
           ) : null}
           {forwardedPath ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("转发路径")}</div>
+              <div className={logTooltipLabelClassName}>{t("转发路径")}</div>
               <div className="break-all font-mono text-[11px]">{forwardedPath}</div>
             </div>
           ) : null}
           {log.responseAdapter ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("适配器")}</div>
+              <div className={logTooltipLabelClassName}>{t("适配器")}</div>
               <div className="break-all font-mono text-[11px]">{log.responseAdapter}</div>
             </div>
           ) : null}
           {upstreamDisplay ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("上游")}</div>
+              <div className={logTooltipLabelClassName}>{t("上游")}</div>
               <div className="break-all font-mono text-[11px]">{upstreamDisplay}</div>
             </div>
           ) : null}
           {upstreamUrl ? (
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("上游地址")}</div>
+              <div className={logTooltipLabelClassName}>{t("上游地址")}</div>
               <div className="break-all font-mono text-[11px]">{upstreamUrl}</div>
             </div>
           ) : null}
@@ -400,7 +403,7 @@ export function ErrorInfoCell({ error }: { error: string }) {
           {text}
         </span>
       </TooltipTrigger>
-      <TooltipContent className="max-w-md">
+      <TooltipContent className={`${logTooltipContentClassName} max-w-md`}>
         <div className="max-w-[360px] break-all font-mono text-[11px]">{text}</div>
       </TooltipContent>
     </Tooltip>
@@ -443,26 +446,26 @@ export function ModelEffortCell({ log }: { log: RequestLog }) {
           <ServiceTierBadge serviceTier={badgeServiceTier} />
         </div>
       </TooltipTrigger>
-      <TooltipContent className="max-w-sm">
+      <TooltipContent className={`${logTooltipContentClassName} max-w-sm`}>
         <div className="flex min-w-[220px] flex-col gap-2">
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("客户端模型")}</div>
+            <div className={logTooltipLabelClassName}>{t("客户端模型")}</div>
             <div className="break-all font-mono text-[11px]">{clientModel}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("最终平台模型")}</div>
+            <div className={logTooltipLabelClassName}>{t("最终平台模型")}</div>
             <div className="break-all font-mono text-[11px]">{model || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("模型来源")}</div>
+            <div className={logTooltipLabelClassName}>{t("模型来源")}</div>
             <div className="break-all font-mono text-[11px]">{modelSource}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("上游模型")}</div>
+            <div className={logTooltipLabelClassName}>{t("上游模型")}</div>
             <div className="break-all font-mono text-[11px]">{upstreamModel || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("实际来源")}</div>
+            <div className={logTooltipLabelClassName}>{t("实际来源")}</div>
             <div className="break-all font-mono text-[11px]">
               {actualSourceKind && actualSourceId
                 ? `${actualSourceKind}:${actualSourceId}`
@@ -470,27 +473,27 @@ export function ModelEffortCell({ log }: { log: RequestLog }) {
             </div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("客户端推理")}</div>
+            <div className={logTooltipLabelClassName}>{t("客户端推理")}</div>
             <div className="break-all font-mono text-[11px]">{clientReasoningEffort}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("最终推理")}</div>
+            <div className={logTooltipLabelClassName}>{t("最终推理")}</div>
             <div className="break-all font-mono text-[11px]">{effort || "-"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("推理来源")}</div>
+            <div className={logTooltipLabelClassName}>{t("推理来源")}</div>
             <div className="break-all font-mono text-[11px]">{reasoningSource}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("客户端显式服务等级")}</div>
+            <div className={logTooltipLabelClassName}>{t("客户端显式服务等级")}</div>
             <div className="break-all font-mono text-[11px]">{clientServiceTier}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("最终生效服务等级")}</div>
+            <div className={logTooltipLabelClassName}>{t("最终生效服务等级")}</div>
             <div className="break-all font-mono text-[11px]">{effectiveServiceTier}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[10px] text-background/70">{t("服务等级来源")}</div>
+            <div className={logTooltipLabelClassName}>{t("服务等级来源")}</div>
             <div className="break-all font-mono text-[11px]">{serviceTierSource}</div>
           </div>
         </div>

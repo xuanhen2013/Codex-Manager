@@ -25,6 +25,7 @@ pub(super) use super::gateway::{
     set_gateway_upstream_stream_timeout_ms, set_gateway_upstream_total_timeout_ms,
     set_gateway_user_agent_version, BackgroundTasksInput, QuotaGuardInput,
 };
+pub(super) use super::parse_bool_with_default;
 pub(super) use super::runtime_sync::sync_runtime_settings_from_storage;
 pub(super) use super::service::{
     current_saved_service_addr, current_service_bind_mode, set_saved_service_addr,
@@ -33,13 +34,10 @@ pub(super) use super::service::{
 };
 pub(super) use super::store::{save_persisted_app_setting, save_persisted_bool_setting};
 pub(super) use super::ui::{
-    current_close_to_tray_on_close_setting, current_codex_cli_guide_dismissed,
-    current_lightweight_mode_on_close_to_tray_setting, current_ui_appearance_preset,
-    current_ui_locale, current_ui_low_transparency_enabled, current_ui_theme,
-    current_update_auto_check_enabled, set_close_to_tray_on_close_setting,
-    set_codex_cli_guide_dismissed, set_lightweight_mode_on_close_to_tray_setting,
-    set_ui_appearance_preset, set_ui_locale, set_ui_low_transparency_enabled, set_ui_theme,
-    set_update_auto_check_enabled,
+    normalize_ui_appearance_preset, normalize_ui_locale, normalize_ui_theme,
+    set_close_to_tray_on_close_setting, set_codex_cli_guide_dismissed,
+    set_lightweight_mode_on_close_to_tray_setting, set_ui_appearance_preset, set_ui_locale,
+    set_ui_low_transparency_enabled, set_ui_theme, set_update_auto_check_enabled,
 };
 pub(super) use super::{
     APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,

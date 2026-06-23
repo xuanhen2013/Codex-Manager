@@ -1605,6 +1605,8 @@ pub struct RequestLogTodaySummaryResult {
 #[serde(rename_all = "camelCase")]
 pub struct StartupSnapshotResult {
     pub accounts: Vec<AccountSummary>,
+    #[serde(default)]
+    pub account_summary: QuotaOpenAiAccountOverviewResult,
     pub usage_snapshots: Vec<UsageSnapshotResult>,
     #[serde(default)]
     pub usage_aggregate_summary: UsageAggregateSummaryResult,

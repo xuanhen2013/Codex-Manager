@@ -279,6 +279,46 @@ fn apply_status_available_snapshot_recovers_limited_account_to_active() {
     );
 }
 
+#[test]
+fn apply_status_available_snapshot_reuses_existing_usage_ok_reason() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc-usage-ok".to_string(),
+            label: "usage-ok".to_string(),
+            issuer: "issuer".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: None,
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    set_account_status(&storage, "acc-usage-ok", "active", "usage_ok");
+    assert_eq!(storage.event_count().expect("count initial event"), 1);
+
+    let record = UsageSnapshotRecord {
+        account_id: "acc-usage-ok".to_string(),
+        used_percent: Some(12.0),
+        window_minutes: Some(300),
+        resets_at: None,
+        secondary_used_percent: Some(18.0),
+        secondary_window_minutes: Some(10080),
+        secondary_resets_at: None,
+        credits_json: None,
+        captured_at: now_ts(),
+    };
+
+    let availability = apply_status_from_snapshot(&storage, &record);
+
+    assert!(matches!(availability, Availability::Available));
+    assert_eq!(storage.event_count().expect("count events"), 1);
+}
+
 /// 函数 `mark_usage_unreachable_marks_401_403_as_unavailable_but_ignores_429`
 ///
 /// 作者: gaohongshun

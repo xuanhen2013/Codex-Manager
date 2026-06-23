@@ -7,25 +7,17 @@ import {
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
   ArrowRight,
   BarChart3,
-  BrainCircuit,
-  CheckCircle2,
-  Clock3,
-  Database,
-  DollarSign,
   KeyRound,
   LineChart,
   PieChart,
   Plus,
-  ShieldCheck,
   Wallet,
   Users,
-  XCircle,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -79,7 +71,6 @@ import {
   formatCompactTokenAmount,
   formatPercent,
 } from "@/lib/dashboard/format";
-import { quotaClient } from "@/lib/api/quota-client";
 import type { AppLocale } from "@/lib/i18n/config";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
@@ -95,24 +86,11 @@ import {
 import type {
   DashboardAdminUsageSummary,
   DashboardDailyUsagePoint,
-  DashboardSourceUsageSummary,
   DashboardTokenUsage,
-  DashboardUserUsageSummary,
   MemberDashboardAlert,
   MemberDashboardKeyUsage,
   MemberDashboardSummary,
-  ModelInfo,
-  RequestLog,
 } from "@/types";
-
-interface StatProgressCardProps {
-  title: string;
-  value: number;
-  total: number;
-  icon: LucideIcon;
-  color: string;
-  sub: string;
-}
 
 interface MetricCardProps {
   title: string;
@@ -121,21 +99,6 @@ interface MetricCardProps {
   color: string;
   sub: string;
   badge?: string;
-}
-
-interface PercentBarProps {
-  label: string;
-  value: number | null | undefined;
-  tone?: "default" | "green" | "blue";
-}
-
-interface AccountHighlightCardProps {
-  title: string;
-  name: string;
-  subtitle: string;
-  tone?: "green" | "blue";
-  progressLabel?: string;
-  progressValue?: number | null | undefined;
 }
 
 type AdminUsageRangePreset = "7d" | "14d" | "30d" | "custom";
@@ -264,13 +227,6 @@ function formatShortDateRange(
   return `${formatShortDate(startTs, locale)} - ${formatShortDate(endTsExclusive - 1, locale)}`;
 }
 
-function formatDuration(value: number | null | undefined): string {
-  if (value == null) return "-";
-  if (value >= 10_000) return `${Math.round(value / 1000)}s`;
-  if (value >= 1000) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}s`;
-  return `${Math.round(value)}ms`;
-}
-
 function statusBadgeVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   const normalized = status.trim().toLowerCase();
   if (normalized === "enabled" || normalized === "active") return "default";
@@ -288,122 +244,12 @@ function alertTone(alert: MemberDashboardAlert): string {
   return "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300";
 }
 
-function modelPriceSummary(model: ModelInfo): string {
-  const raw = model.priceSummary;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return "按平台价格规则";
-  }
-  const source = raw as Record<string, unknown>;
-  const input = typeof source.inputUsdPer1M === "number" ? source.inputUsdPer1M : null;
-  const output = typeof source.outputUsdPer1M === "number" ? source.outputUsdPer1M : null;
-  if (input == null || output == null) return "按平台价格规则";
-  return `In ${formatUsd(input)}/1M · Out ${formatUsd(output)}/1M`;
-}
-
-function PercentBar({ label, value, tone = "default" }: PercentBarProps) {
-  const normalized = value == null ? 0 : Math.max(0, Math.min(100, Math.round(value)));
-  const colorClass =
-    tone === "green"
-      ? "bg-green-500"
-      : tone === "blue"
-        ? "bg-blue-500"
-        : "bg-primary";
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-[10px]">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-semibold">{formatPercent(value)}</span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted/60">
-        <div
-          className={cn("h-full rounded-full transition-all", colorClass)}
-          style={{ width: `${normalized}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function quotaTrackClass(tone: "green" | "blue") {
   return tone === "blue" ? "bg-blue-500/20" : "bg-green-500/20";
 }
 
 function quotaIndicatorClass(tone: "green" | "blue") {
   return tone === "blue" ? "bg-blue-500" : "bg-green-500";
-}
-
-function AccountHighlightCard({
-  title,
-  name,
-  subtitle,
-  tone = "green",
-  progressLabel,
-  progressValue,
-}: AccountHighlightCardProps) {
-  const iconToneClass =
-    tone === "blue"
-      ? "bg-blue-500/20 text-blue-500"
-      : "bg-green-500/20 text-green-500";
-
-  return (
-    <div className="rounded-xl border border-border/40 bg-accent/20 p-4 shadow-sm">
-      <div className="flex items-center gap-4">
-        <div
-          className={cn(
-            "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl",
-            iconToneClass,
-          )}
-        >
-          <CheckCircle2 className="h-5 w-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium text-muted-foreground">{title}</p>
-          <p className="truncate text-sm font-semibold leading-5">{name}</p>
-          <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
-        </div>
-      </div>
-      {progressLabel ? (
-        <div className="mt-3 border-t border-border/40 pt-3">
-          <PercentBar label={progressLabel} value={progressValue} tone={tone} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function StatProgressCard({
-  title,
-  value,
-  total,
-  icon: Icon,
-  color,
-  sub,
-}: StatProgressCardProps) {
-  const { t } = useI18n();
-  const percentage = total > 0 ? Math.min(Math.round((value / total) * 100), 100) : 0;
-
-  return (
-    <Card className="glass-card overflow-hidden shadow-sm transition-colors">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium">{title}</CardTitle>
-        <Icon className={cn("h-4 w-4", color)} />
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div>
-          <div className="text-2xl font-bold">{value}</div>
-          <p className="mt-1 text-[10px] text-muted-foreground">{sub}</p>
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-muted-foreground">{t("占比")}</span>
-            <span className="font-mono font-medium">{percentage}%</span>
-          </div>
-          <Progress value={percentage} className="h-1.5" />
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
 function MetricCard({ title, value, icon: Icon, color, sub, badge }: MetricCardProps) {
@@ -481,14 +327,6 @@ function DirectModeUnavailable({
       </div>
     </div>
   );
-}
-
-function userUsageName(item: DashboardUserUsageSummary): string {
-  return item.displayName || item.username || item.userId;
-}
-
-function sourceUsageName(item: DashboardSourceUsageSummary): string {
-  return item.name || item.sourceId;
 }
 
 function sumDashboardTokenUsages(usages: DashboardTokenUsage[]): DashboardTokenUsage {
@@ -701,55 +539,6 @@ function DailyTokenLineChart({
   );
 }
 
-function UsageRankList<T extends { todayUsage: DashboardTokenUsage; rangeUsage: DashboardTokenUsage }>({
-  title,
-  items,
-  labelForItem,
-  emptyText,
-  usageForItem = (item) => item.todayUsage,
-}: {
-  title: string;
-  items: T[];
-  labelForItem: (item: T) => string;
-  emptyText: string;
-  usageForItem?: (item: T) => DashboardTokenUsage;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="mb-2 text-xs font-semibold text-muted-foreground">{title}</div>
-      {items.length === 0 ? (
-        <Empty className="min-h-20 border bg-muted/20 p-3">
-          <EmptyHeader>
-            <EmptyTitle>{emptyText}</EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className="space-y-2">
-          {items.slice(0, 5).map((item, index) => {
-            const usage = usageForItem(item);
-            return (
-              <div
-                key={`${labelForItem(item)}-${index}`}
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg bg-background/30 px-3 py-2 text-xs"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-medium">{labelForItem(item)}</div>
-                  <div className="truncate text-muted-foreground">
-                    {usage.requestCount} req · {formatUsd(usage.estimatedCostUsd)}
-                  </div>
-                </div>
-                <div className="shrink-0 text-right font-semibold">
-                  {formatCompactTokenAmount(usage.totalTokens)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function AdminUsageAnalyticsCard({
   summary,
   isLoading,
@@ -837,30 +626,12 @@ function AdminUsageAnalyticsCard({
     );
   }
 
-  const memberItems = summary.users.filter(
-    (item) =>
-      item.role !== "admin" ||
-      item.todayUsage.totalTokens > 0 ||
-      item.rangeUsage.totalTokens > 0,
-  );
-  const activeOpenAiAccounts = summary.openaiAccounts.filter(
-    (item) => item.todayUsage.totalTokens > 0 || item.rangeUsage.totalTokens > 0,
-  );
-  const activeAggregateApis = summary.aggregateApis.filter(
-    (item) => item.todayUsage.totalTokens > 0 || item.rangeUsage.totalTokens > 0,
-  );
   const isTodayOnlyRange =
     summary.rangeStartTs === summary.todayStartTs &&
     summary.rangeEndTs === summary.todayEndTs;
   const rangeUsage = isTodayOnlyRange
     ? summary.todayUsage
     : sumDashboardTokenUsages(summary.dailyUsage.map((item) => item.usage));
-  const listUsageForItem = <T extends {
-    todayUsage: DashboardTokenUsage;
-    rangeUsage: DashboardTokenUsage;
-  }>(
-    item: T,
-  ) => (isTodayOnlyRange ? item.todayUsage : item.rangeUsage);
   const hasZoomWindow =
     summary.dailyUsage.length > 1 &&
     zoomWindow != null &&
@@ -878,7 +649,7 @@ function AdminUsageAnalyticsCard({
               {t("管理员用量分析")}
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              {t("按天、成员、OpenAI 账号和聚合 API 汇总 token 消耗")}
+              {t("按天汇总 token、费用和请求量")}
             </p>
             <div className="mt-2 text-[11px] text-muted-foreground">
               {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs, locale)}
@@ -953,64 +724,39 @@ function AdminUsageAnalyticsCard({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.9fr)]">
-        <div className="space-y-3">
-          <DailyTokenLineChart
-            points={summary.dailyUsage}
-            zoomWindow={zoomWindow}
-            onZoomWindowChange={setZoomWindow}
-          />
-          <div className="grid gap-3 text-xs sm:grid-cols-3">
-            <div className="rounded-lg bg-background/30 px-3 py-2">
-              <div className="text-muted-foreground">
-                {isTodayOnlyRange ? t("今日请求") : t("区间请求")}
-              </div>
-              <div className="mt-1 font-semibold">
-                {rangeUsage.requestCount} · {t("成功")} {rangeUsage.successCount}
-              </div>
+      <CardContent className="space-y-3">
+        <DailyTokenLineChart
+          points={summary.dailyUsage}
+          zoomWindow={zoomWindow}
+          onZoomWindowChange={setZoomWindow}
+        />
+        <div className="grid gap-3 text-xs sm:grid-cols-3">
+          <div className="rounded-lg bg-background/30 px-3 py-2">
+            <div className="text-muted-foreground">
+              {isTodayOnlyRange ? t("今日请求") : t("区间请求")}
             </div>
-            <div className="rounded-lg bg-background/30 px-3 py-2">
-              <div className="text-muted-foreground">
-                {isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}
-              </div>
-              <div className="mt-1 font-semibold">
-                {formatCompactTokenAmount(rangeUsage.inputTokens - rangeUsage.cachedInputTokens)} /{" "}
-                {formatCompactTokenAmount(rangeUsage.outputTokens)}
-              </div>
-            </div>
-            <div className="rounded-lg bg-background/30 px-3 py-2">
-              <div className="text-muted-foreground">
-                {isTodayOnlyRange ? t("缓存 / 推理") : t("区间缓存 / 推理")}
-              </div>
-              <div className="mt-1 font-semibold">
-                {formatCompactTokenAmount(rangeUsage.cachedInputTokens)} /{" "}
-                {formatCompactTokenAmount(rangeUsage.reasoningOutputTokens)}
-              </div>
+            <div className="mt-1 font-semibold">
+              {rangeUsage.requestCount} · {t("成功")} {rangeUsage.successCount}
             </div>
           </div>
-        </div>
-        <div className="grid gap-4">
-          <UsageRankList
-            title={isTodayOnlyRange ? t("成员今日消耗") : t("成员区间消耗")}
-            items={memberItems}
-            labelForItem={userUsageName}
-            emptyText={t("暂无成员消耗")}
-            usageForItem={listUsageForItem}
-          />
-          <UsageRankList
-            title={isTodayOnlyRange ? t("OpenAI 账号今日消耗") : t("OpenAI 账号区间消耗")}
-            items={activeOpenAiAccounts}
-            labelForItem={sourceUsageName}
-            emptyText={t("暂无 OpenAI 账号消耗")}
-            usageForItem={listUsageForItem}
-          />
-          <UsageRankList
-            title={isTodayOnlyRange ? t("聚合 API 今日消耗") : t("聚合 API 区间消耗")}
-            items={activeAggregateApis}
-            labelForItem={sourceUsageName}
-            emptyText={t("暂无聚合 API 消耗")}
-            usageForItem={listUsageForItem}
-          />
+          <div className="rounded-lg bg-background/30 px-3 py-2">
+            <div className="text-muted-foreground">
+              {isTodayOnlyRange ? t("输入 / 输出") : t("区间输入 / 输出")}
+            </div>
+            <div className="mt-1 font-semibold">
+              {formatCompactTokenAmount(rangeUsage.inputTokens - rangeUsage.cachedInputTokens)} /{" "}
+              {formatCompactTokenAmount(rangeUsage.outputTokens)}
+            </div>
+          </div>
+          <div className="rounded-lg bg-background/30 px-3 py-2">
+            <div className="text-muted-foreground">
+              {isTodayOnlyRange ? t("缓存 / 推理") : t("区间缓存 / 推理")}
+            </div>
+            <div className="mt-1 font-semibold">
+              {formatCompactTokenAmount(rangeUsage.cachedInputTokens)} /{" "}
+              {formatCompactTokenAmount(rangeUsage.reasoningOutputTokens)}
+            </div>
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -1019,8 +765,16 @@ function AdminUsageAnalyticsCard({
 
 function AdminDashboard() {
   const { t } = useI18n();
-  const { stats, currentAccount, recommendations, requestLogs, isLoading, isServiceReady } =
-    useDashboardStats();
+  const { stats, isLoading, isServiceReady } = useDashboardStats({
+    requestLogLimit: 0,
+    includeAccountHints: false,
+    includeApiModels: false,
+    includeApiKeys: false,
+    includeAccounts: false,
+    includeUsageSnapshots: false,
+    includeAccountRuntime: false,
+    includeAccountDetails: false,
+  });
   const { isDirectAccountMode } = useCodexProfileModeStatus({
     enabled: true,
     refetchIntervalMs: 10_000,
@@ -1071,21 +825,14 @@ function AdminDashboard() {
     {
       startTs: adminUsageRangeParams.startTs,
       endTs: adminUsageRangeParams.endTs,
+      includeBreakdowns: false,
     },
     true,
   );
-  const { data: quotaModelPools, isLoading: isQuotaModelPoolsLoading } = useQuery({
-    queryKey: ["quota", "model-pools"],
-    queryFn: () => quotaClient.modelPools(),
-    enabled: isServiceReady,
-    retry: 1,
-  });
   usePageTransitionReady("/", !isServiceReady || !isLoading);
 
   const poolPrimary = stats.poolRemain?.primary ?? 0;
   const poolSecondary = stats.poolRemain?.secondary ?? 0;
-  const allModelPoolItems = quotaModelPools?.items ?? [];
-  const modelPoolItems = allModelPoolItems.slice(0, 8);
   const isCustomAdminUsageRangeInvalid =
     adminUsageRangePreset === "custom" &&
     (() => {
@@ -1114,9 +861,9 @@ function AdminDashboard() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 lg:grid-cols-2">
         {isLoading ? (
-          Array.from({ length: 4 }).map((_, index) => (
+          Array.from({ length: 2 }).map((_, index) => (
             <Skeleton key={index} className="h-36 w-full rounded-xl" />
           ))
         ) : (
@@ -1130,26 +877,8 @@ function AdminDashboard() {
               badge={
                 isDirectAccountMode
                   ? t("账号直连模式下不可用")
-                  : `${t("最近日志")} ${requestLogs.length} ${t("条")}`
+                  : `${stats.available}/${stats.total} ${t("可用")}`
               }
-            />
-
-            <StatProgressCard
-              title={t("可用账号")}
-              value={stats.available}
-              total={stats.total}
-              icon={CheckCircle2}
-              color="text-green-500"
-              sub={t("当前健康可调用的账号")}
-            />
-
-            <StatProgressCard
-              title={t("不可用账号")}
-              value={stats.unavailable}
-              total={stats.total}
-              icon={XCircle}
-              color="text-red-500"
-              sub={t("额度耗尽或授权失效")}
             />
 
             <Card className="overflow-hidden bg-primary/10 shadow-sm transition-colors">
@@ -1227,236 +956,6 @@ function AdminDashboard() {
         />
       </DirectModeUnavailable>
 
-      <Card className="glass-card overflow-hidden shadow-sm">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <div>
-            <CardTitle className="text-sm font-medium">{t("模型额度池概览")}</CardTitle>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {t("按模型管理中的排序权重展示")}
-            </p>
-          </div>
-          <a
-            href={buildStaticRouteUrl("/models")}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {t("查看全部")}
-            <ArrowRight className="h-3.5 w-3.5" />
-          </a>
-        </CardHeader>
-        <CardContent>
-          {isLoading || isQuotaModelPoolsLoading ? (
-            <Skeleton className="h-24 w-full rounded-xl" />
-          ) : modelPoolItems.length === 0 ? (
-            <Empty className="min-h-28 border bg-background/35">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Database />
-                </EmptyMedia>
-                <EmptyTitle>{t("暂无可估算的模型额度池")}</EmptyTitle>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {modelPoolItems.map((item) => (
-                  <div
-                    key={item.model}
-                    className="rounded-xl border border-border/50 bg-background/35 p-3"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate font-mono text-sm font-semibold">
-                          {item.model}
-                        </div>
-                        <div className="mt-1 text-[10px] text-muted-foreground">
-                          {item.sourceCount} {t("个来源")}
-                        </div>
-                      </div>
-                      <div className="shrink-0 text-right text-sm font-bold">
-                        {item.totalRemainingTokens == null
-                          ? "--"
-                          : formatCompactTokenAmount(item.totalRemainingTokens)}
-                      </div>
-                    </div>
-                    <div className="mt-3 grid gap-1 text-[10px] text-muted-foreground">
-                      <div className="flex justify-between gap-2">
-                        <span>{t("聚合 API")}</span>
-                        <span className="font-medium text-foreground/70">
-                          {item.aggregateRemainingTokens == null
-                            ? "--"
-                            : formatCompactTokenAmount(item.aggregateRemainingTokens)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between gap-2">
-                        <span>{t("账号池")}</span>
-                        <span className="font-medium text-foreground/70">
-                          {item.accountEstimatedRemainingTokens == null
-                            ? "--"
-                            : formatCompactTokenAmount(item.accountEstimatedRemainingTokens)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {allModelPoolItems.length > modelPoolItems.length ? (
-                <div className="text-[11px] text-muted-foreground">
-                  {t("已按排序权重展示前 {visible} 个，共 {total} 个模型；完整列表在模型管理页。", {
-                    visible: modelPoolItems.length,
-                    total: allModelPoolItems.length,
-                  })}
-                </div>
-              ) : null}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <DirectModeUnavailable active={isDirectAccountMode}>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {[
-            {
-              title: t("今日Token"),
-              value: formatCompactTokenAmount(stats.todayTokens),
-              icon: Zap,
-              color: "text-yellow-500",
-              sub: t("输入 + 输出合计"),
-            },
-            {
-              title: t("缓存Token"),
-              value: formatCompactTokenAmount(stats.cachedTokens),
-              icon: Database,
-              color: "text-indigo-500",
-              sub: t("上下文缓存命中"),
-            },
-            {
-              title: t("推理Token"),
-              value: formatCompactTokenAmount(stats.reasoningTokens),
-              icon: BrainCircuit,
-              color: "text-purple-500",
-              sub: t("大模型思考过程"),
-            },
-            {
-              title: t("预计费用"),
-              value: formatUsd(stats.todayCost),
-              icon: DollarSign,
-              color: "text-emerald-500",
-              sub: t("按官价估算"),
-            },
-          ].map((card) =>
-            isLoading ? (
-              <Skeleton key={card.title} className="h-32 w-full rounded-xl" />
-            ) : (
-              <MetricCard key={card.title} {...card} />
-            ),
-          )}
-        </div>
-      </DirectModeUnavailable>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        <DirectModeUnavailable active={isDirectAccountMode}>
-          <Card className="glass-card min-h-[300px] shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base font-semibold">{t("当前活跃账号")}</CardTitle>
-            </CardHeader>
-            <CardContent className="flex min-h-[200px] flex-col justify-start">
-              {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-28 w-full rounded-xl" />
-                  <div className="grid grid-cols-2 gap-4">
-                    <Skeleton className="h-32 w-full rounded-xl" />
-                    <Skeleton className="h-32 w-full rounded-xl" />
-                  </div>
-                </div>
-              ) : currentAccount ? (
-                <div className="space-y-4">
-                  <AccountHighlightCard
-                    title={t("当前活跃账号")}
-                    name={currentAccount.name}
-                    subtitle={currentAccount.id}
-                    tone="green"
-                  />
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div className="space-y-3 rounded-xl bg-muted/30 p-4">
-                      <p className="text-xs text-muted-foreground">{t("5小时剩余")}</p>
-                      <p className="text-lg font-bold">
-                        {formatPercent(currentAccount.primaryRemainPercent)}
-                      </p>
-                      <PercentBar
-                        label={t("剩余额度")}
-                        value={currentAccount.primaryRemainPercent}
-                        tone="green"
-                      />
-                    </div>
-                    <div className="space-y-3 rounded-xl bg-muted/30 p-4">
-                      <p className="text-xs text-muted-foreground">{t("7天剩余")}</p>
-                      <p className="text-lg font-bold">
-                        {formatPercent(currentAccount.secondaryRemainPercent)}
-                      </p>
-                      <PercentBar
-                        label={t("剩余额度")}
-                        value={currentAccount.secondaryRemainPercent}
-                        tone="blue"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <div className="rounded-full bg-accent/30 p-4 animate-pulse">
-                    <Activity className="h-8 w-8 opacity-20" />
-                  </div>
-                  <p>{isServiceReady ? t("暂无可识别的活跃账号") : t("正在等待服务连接")}</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </DirectModeUnavailable>
-
-        <Card className="glass-card min-h-[300px] shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">{t("智能推荐")}</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <p className="text-xs text-muted-foreground">
-              {t("基于当前配额，系统会优先推荐剩余额度更高且仍可参与路由的账号。")}
-            </p>
-            {isLoading ? (
-              <div className="space-y-4">
-                <Skeleton className="h-28 w-full rounded-xl" />
-                <Skeleton className="h-28 w-full rounded-xl" />
-              </div>
-            ) : recommendations.primaryPick || recommendations.secondaryPick ? (
-              <>
-                {recommendations.primaryPick ? (
-                  <AccountHighlightCard
-                    title={t("5小时优先账号")}
-                    name={recommendations.primaryPick.name}
-                    subtitle={recommendations.primaryPick.id}
-                    tone="green"
-                    progressLabel={t("剩余额度")}
-                    progressValue={recommendations.primaryPick.primaryRemainPercent}
-                  />
-                ) : null}
-                {recommendations.secondaryPick ? (
-                  <AccountHighlightCard
-                    title={t("7天优先账号")}
-                    name={recommendations.secondaryPick.name}
-                    subtitle={recommendations.secondaryPick.id}
-                    tone="blue"
-                    progressLabel={t("剩余额度")}
-                    progressValue={recommendations.secondaryPick.secondaryRemainPercent}
-                  />
-                ) : null}
-              </>
-            ) : (
-              <div className="rounded-xl bg-accent/20 p-4 text-sm text-muted-foreground">
-                {isServiceReady ? t("当前没有可推荐的可用账号。") : t("正在等待服务连接。")}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }
@@ -1490,7 +989,6 @@ function MemberDashboard() {
     );
   }
 
-  const topModel = summary.availableModels[0];
   const successRate =
     summary.usageToday.successRate == null
       ? "--"
@@ -1498,7 +996,7 @@ function MemberDashboard() {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <MetricCard
           title={t("钱包余额")}
           value={
@@ -1535,13 +1033,6 @@ function MemberDashboard() {
           color="text-blue-500"
           sub={`${t("启用 / 全部")} · ${t("最近")} ${t(formatDateTime(summary.apiKeySummary.lastUsedAt))}`}
         />
-        <MetricCard
-          title={t("可用模型")}
-          value={String(summary.availableModels.length)}
-          icon={ShieldCheck}
-          color="text-purple-500"
-          sub={topModel ? topModel.displayName || topModel.slug : t("暂无可用模型")}
-        />
       </div>
 
       <MemberAlerts alerts={summary.alerts} onCreateKey={() => setApiKeyModalOpen(true)} />
@@ -1553,11 +1044,6 @@ function MemberDashboard() {
           className="xl:col-span-7"
         />
         <MemberUsageTrendCard summary={summary} className="xl:col-span-5" />
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <MemberAvailableModelsCard summary={summary} className="xl:col-span-6" />
-        <MemberRecentLogsCard logs={summary.recentLogs} className="xl:col-span-6" />
       </div>
 
       <ApiKeyModal
@@ -1770,7 +1256,7 @@ function MemberUsageTrendCard({
           })}
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="max-w-md">
           <TopUsageList
             title={t("Top 模型")}
             icon={BarChart3}
@@ -1781,20 +1267,6 @@ function MemberUsageTrendCard({
               value: formatCompactTokenAmount(item.totalTokens),
               sub: formatUsd(item.estimatedCostUsd),
             }))}
-          />
-          <TopUsageList
-            title={t("Top Key")}
-            icon={KeyRound}
-            emptyText={t("暂无 Key 用量")}
-            items={summary.topKeys
-              .filter((item) => item.todayTokens > 0 || item.totalTokens > 0)
-              .slice(0, 4)
-              .map((item) => ({
-                key: item.keyId,
-                label: item.name || item.keyId,
-                value: formatCompactTokenAmount(item.todayTokens || item.totalTokens),
-                sub: item.modelSlug || "auto",
-              }))}
           />
         </div>
       </CardContent>
@@ -1837,134 +1309,6 @@ function TopUsageList({
         </div>
       )}
     </div>
-  );
-}
-
-function MemberAvailableModelsCard({
-  summary,
-  className,
-}: {
-  summary: MemberDashboardSummary;
-  className?: string;
-}) {
-  const { t } = useI18n();
-  return (
-    <Card className={cn("glass-card shadow-sm", className)}>
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-        <div>
-          <CardTitle className="text-base font-semibold">{t("可用模型")}</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t("按模型管理排序展示前 8 个")}
-          </p>
-        </div>
-        <a
-          href={buildStaticRouteUrl("/models/")}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2.5 text-[0.8rem] font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {t("查看全部")}
-          <ArrowRight className="h-3.5 w-3.5" />
-        </a>
-      </CardHeader>
-      <CardContent>
-        {summary.availableModels.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border/60 bg-background/35 px-4 py-5 text-sm text-muted-foreground">
-            {t("暂无可用模型")}
-          </div>
-        ) : (
-          <div className="divide-y divide-border/40">
-            {summary.availableModels.slice(0, 8).map((model) => (
-              <div key={model.slug} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto]">
-                <div className="min-w-0">
-                  <div className="truncate font-mono text-sm font-semibold">
-                    {model.displayName || model.slug}
-                  </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {model.slug}
-                  </div>
-                </div>
-                <div className="text-left text-xs text-muted-foreground sm:text-right">
-                  <div>{t(modelPriceSummary(model))}</div>
-                  <div className="mt-1">
-                    {model.contextWindow
-                      ? `${formatCompactTokenAmount(model.contextWindow)} context`
-                      : "context --"}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function MemberRecentLogsCard({
-  logs,
-  className,
-}: {
-  logs: RequestLog[];
-  className?: string;
-}) {
-  const { t } = useI18n();
-  return (
-    <Card className={cn("glass-card shadow-sm", className)}>
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-        <div>
-          <CardTitle className="text-base font-semibold">{t("近期请求")}</CardTitle>
-          <p className="mt-1 text-xs text-muted-foreground">{t("最近 8 条个人 Key 请求")}</p>
-        </div>
-        <a
-          href={buildStaticRouteUrl("/logs/")}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2.5 text-[0.8rem] font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {t("查看全部")}
-          <ArrowRight className="h-3.5 w-3.5" />
-        </a>
-      </CardHeader>
-      <CardContent>
-        {logs.length === 0 ? (
-          <div className="flex min-h-[180px] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/60 bg-background/35 text-sm text-muted-foreground">
-            <Clock3 className="h-8 w-8 opacity-30" />
-            <span>{t("暂无请求日志")}</span>
-          </div>
-        ) : (
-          <div className="divide-y divide-border/40">
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant={
-                        log.statusCode && log.statusCode >= 400
-                          ? "destructive"
-                          : "secondary"
-                      }
-                    >
-                      {log.statusCode || "-"}
-                    </Badge>
-                    <span className="truncate font-mono text-sm font-semibold">
-                      {log.model || "unknown"}
-                    </span>
-                  </div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">
-                    {t(formatDateTime(log.createdAt))}
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground sm:text-right">
-                  <span>{formatCompactTokenAmount(log.totalTokens)}</span>
-                  <span>{formatDuration(log.durationMs)}</span>
-                  <span>{formatUsd(log.estimatedCostUsd)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

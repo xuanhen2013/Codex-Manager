@@ -569,7 +569,11 @@ export default function AccountManagerPage() {
   });
   const usageDetailQuery = useQuery<MemberDashboardSummary>({
     queryKey: ["account-manager", "user-usage", usageUserId],
-    queryFn: () => dashboardClient.getMemberSummary({ userId: usageUserId }),
+    queryFn: () =>
+      dashboardClient.getMemberSummary({
+        userId: usageUserId,
+        includeDetails: true,
+      }),
     enabled: shouldQuery && Boolean(usageUserId),
     retry: 1,
   });

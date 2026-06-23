@@ -229,6 +229,7 @@ export function useAccounts() {
 		serviceStatus.addr,
 		STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT,
 		localDayRange.dayStartTs,
+		localDayRange.dayEndTs,
 	);
 	const startupSnapshotQuery = useQuery({
 		queryKey: startupSnapshotQueryKey,

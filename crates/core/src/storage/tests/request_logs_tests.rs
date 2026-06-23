@@ -1,4 +1,6 @@
 use super::{RequestLog, RequestTokenStat, Storage};
+use crate::storage::request_log_filters;
+use rusqlite::{params_from_iter, types::Value};
 
 /// 函数 `collect_query_plan_details`
 ///
@@ -12,15 +14,82 @@ use super::{RequestLog, RequestTokenStat, Storage};
 ///
 /// # 返回
 /// 返回函数执行结果
-fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
+fn collect_query_plan_details_with_params(
+    storage: &Storage,
+    sql: &str,
+    params: Vec<Value>,
+) -> Vec<String> {
     let mut stmt = storage.conn.prepare(sql).expect("prepare explain");
-    let mut rows = stmt.query([]).expect("query explain");
+    let mut rows = stmt.query(params_from_iter(params)).expect("query explain");
     let mut details = Vec::new();
     while let Some(row) = rows.next().expect("next explain row") {
         let detail: String = row.get(3).expect("detail");
         details.push(detail.to_ascii_lowercase());
     }
     details
+}
+
+fn query_plan_uses_index(details: &[String], index_name: &str) -> bool {
+    let needle = format!(" {index_name} ");
+    details.iter().any(|detail| {
+        let padded = format!(" {detail} ");
+        padded.contains(&needle)
+    })
+}
+
+fn request_log_list_plan_for_query(
+    storage: &Storage,
+    query: Option<&str>,
+    status_filter: Option<&str>,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+) -> Vec<String> {
+    let filters = request_log_filters::build_request_log_filters(
+        query,
+        status_filter,
+        start_ts,
+        end_ts,
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        true,
+    );
+    let mut params = filters.params.clone();
+    params.push(Value::Integer(100));
+    params.push(Value::Integer(0));
+    collect_query_plan_details_with_params(
+        storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::request_log_list_sql(&filters)
+        ),
+        params,
+    )
+}
+
+fn request_log_count_plan_for_query(
+    storage: &Storage,
+    query: Option<&str>,
+    status_filter: Option<&str>,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+) -> Vec<String> {
+    let filters = request_log_filters::build_request_log_filters(
+        query,
+        status_filter,
+        start_ts,
+        end_ts,
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        true,
+    );
+    collect_query_plan_details_with_params(
+        storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::request_log_count_sql(&filters)
+        ),
+        filters.params.clone(),
+    )
 }
 
 /// 函数 `method_exact_query_matches_composite_index`
@@ -38,18 +107,11 @@ fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
 fn method_exact_query_matches_composite_index() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
-    let details = collect_query_plan_details(
-        &storage,
-        "EXPLAIN QUERY PLAN
-         SELECT key_id, account_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
-         FROM request_logs
-         WHERE method = 'POST'
-         ORDER BY created_at DESC, id DESC
-         LIMIT 100",
-    );
-    assert!(details
-        .iter()
-        .any(|detail| detail.contains("idx_request_logs_method_created_at")));
+    let details = request_log_list_plan_for_query(&storage, Some("method:=POST"), None, None, None);
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_method_created_at_id"
+    ));
 }
 
 /// 函数 `key_exact_query_matches_composite_index`
@@ -67,18 +129,187 @@ fn method_exact_query_matches_composite_index() {
 fn key_exact_query_matches_composite_index() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
-    let details = collect_query_plan_details(
+    let details = request_log_list_plan_for_query(&storage, Some("key:=gk_1"), None, None, None);
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_key_id_created_at_id"
+    ));
+}
+
+#[test]
+fn model_exact_query_matches_composite_index() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let details = request_log_list_plan_for_query(&storage, Some("model:=gpt-5"), None, None, None);
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_model_created_at_id"
+    ));
+}
+
+#[test]
+fn route_strategy_exact_query_matches_composite_index() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let details = request_log_list_plan_for_query(
         &storage,
-        "EXPLAIN QUERY PLAN
-         SELECT key_id, account_id, request_path, method, model, reasoning_effort, upstream_url, status_code, error, created_at
-         FROM request_logs
-         WHERE key_id = 'gk_1'
-         ORDER BY created_at DESC, id DESC
-         LIMIT 100",
+        Some("route_strategy:=balanced"),
+        None,
+        None,
+        None,
     );
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_route_strategy_created_at_id"
+    ));
+}
+
+#[test]
+fn actual_source_id_exact_query_matches_composite_index() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let details = request_log_list_plan_for_query(
+        &storage,
+        Some("actual_source_id:=acc_1"),
+        None,
+        None,
+        None,
+    );
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_actual_source_id_created_at_id"
+    ));
+}
+
+#[test]
+fn count_query_without_token_search_avoids_token_stats_join() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let details =
+        request_log_count_plan_for_query(&storage, None, Some("2xx"), Some(1000), Some(2000));
+
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_status_code_created_at_id"
+    ));
+    assert!(!details
+        .iter()
+        .any(|detail| detail.contains("request_token_stats")));
+}
+
+#[test]
+fn request_log_summary_uses_status_index_and_skips_unused_account_join() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let filters = request_log_filters::build_request_log_filters(
+        None,
+        Some("2xx"),
+        Some(1000),
+        Some(2000),
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        true,
+    );
+    assert!(!filters.uses_account_lookup);
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::request_log_summary_sql(&filters)
+        ),
+        filters.params.clone(),
+    );
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_status_code_created_at_id"
+    ));
     assert!(details
         .iter()
-        .any(|detail| detail.contains("idx_request_logs_key_id_created_at")));
+        .any(|detail| detail.contains("request_token_stats")));
+    assert!(
+        !details.iter().any(|detail| detail.contains("accounts")),
+        "status-only request log summary should not join accounts, got {details:?}"
+    );
+}
+
+#[test]
+fn request_log_status_count_does_not_join_accounts_when_account_fields_are_unused() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let count = storage
+        .count_request_logs(None, Some("2xx"), Some(1000), Some(2000))
+        .expect("count request logs");
+    assert_eq!(count, 0);
+
+    let filters = request_log_filters::build_request_log_filters(
+        None,
+        Some("2xx"),
+        Some(1000),
+        Some(2000),
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        true,
+    );
+    assert!(!filters.uses_account_lookup);
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::request_log_count_sql(&filters)
+        ),
+        filters.params.clone(),
+    );
+    assert!(
+        !details.iter().any(|detail| detail.contains("accounts")),
+        "status-only request log count should not join accounts, got {details:?}"
+    );
+}
+
+#[test]
+fn paginated_list_filters_logs_before_joining_token_stats() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let filters = request_log_filters::build_request_log_filters(
+        Some("method:=POST"),
+        None,
+        None,
+        None,
+        storage.has_table("accounts").expect("check accounts table"),
+        None,
+        false,
+    );
+    let mut params = filters.params.clone();
+    params.push(Value::Integer(20));
+    params.push(Value::Integer(0));
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::request_log_list_sql(&filters)
+        ),
+        params,
+    );
+
+    assert!(query_plan_uses_index(
+        &details,
+        "idx_request_logs_method_created_at_id"
+    ));
+    assert!(details
+        .iter()
+        .any(|detail| detail.contains("request_token_stats")));
+}
+
+#[test]
+fn global_search_count_keeps_token_stats_join() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let details = request_log_count_plan_for_query(&storage, Some("42"), None, None, None);
+
+    assert!(details
+        .iter()
+        .any(|detail| detail.contains("request_token_stats")));
 }
 
 /// 函数 `insert_request_log_with_token_stat_is_visible_via_join`
@@ -153,6 +384,7 @@ fn insert_request_log_with_token_stat_is_visible_via_join() {
         reasoning_output_tokens: Some(3),
         estimated_cost_usd: Some(0.123),
         created_at,
+        ..RequestTokenStat::default()
     };
 
     let (_request_log_id, token_err) = storage
@@ -264,6 +496,7 @@ fn token_stat_failure_still_commits_request_log() {
         reasoning_output_tokens: None,
         estimated_cost_usd: None,
         created_at,
+        ..RequestTokenStat::default()
     };
 
     let (_request_log_id, token_err) = storage
@@ -350,6 +583,7 @@ fn request_logs_support_backend_pagination_and_status_filters() {
                 reasoning_output_tokens: Some(0),
                 estimated_cost_usd: Some(0.01),
                 created_at,
+                ..RequestTokenStat::default()
             })
             .expect("insert token stat");
     }
@@ -359,6 +593,8 @@ fn request_logs_support_backend_pagination_and_status_filters() {
         .expect("list paginated logs");
     assert_eq!(page.len(), 1);
     assert_eq!(page[0].trace_id.as_deref(), Some("trc-4"));
+    assert_eq!(page[0].input_tokens, Some(14));
+    assert_eq!(page[0].total_tokens, Some(24));
 
     let total_5xx = storage
         .count_request_logs(None, Some("5xx"), None, None)
@@ -432,6 +668,7 @@ fn request_logs_filtered_summary_aggregates_counts_and_tokens() {
                 reasoning_output_tokens: Some(0),
                 estimated_cost_usd: Some(0.01),
                 created_at,
+                ..RequestTokenStat::default()
             })
             .expect("insert token stat");
     }
@@ -444,6 +681,130 @@ fn request_logs_filtered_summary_aggregates_counts_and_tokens() {
     assert_eq!(summary.error_count, 1);
     assert_eq!(summary.total_tokens, 150);
     assert_eq!(summary.estimated_cost_usd, 0.03);
+}
+
+#[test]
+fn request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    for (index, status_code, total_tokens, estimated_cost_usd) in [
+        (0_i64, Some(200_i64), Some(30_i64), Some(0.01)),
+        (1_i64, Some(502_i64), Some(70_i64), Some(0.02)),
+    ] {
+        let created_at = 3_000 + index;
+        let request_log_id = storage
+            .insert_request_log(&RequestLog {
+                trace_id: Some(format!("trc-cleared-summary-{index}")),
+                key_id: Some("gk-cleared-summary".to_string()),
+                account_id: Some("acc-cleared-summary".to_string()),
+                request_path: "/v1/responses".to_string(),
+                method: "POST".to_string(),
+                status_code,
+                created_at,
+                ..Default::default()
+            })
+            .expect("insert request log");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id,
+                key_id: Some("gk-cleared-summary".to_string()),
+                account_id: Some("acc-cleared-summary".to_string()),
+                model: Some("gpt-5".to_string()),
+                total_tokens,
+                estimated_cost_usd,
+                created_at,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert token stat");
+    }
+
+    storage.clear_request_logs().expect("clear request logs");
+
+    let summary = storage
+        .summarize_request_logs_filtered(None, None, None, None)
+        .expect("summarize unfiltered cleared usage");
+    assert_eq!(summary.count, 2);
+    assert_eq!(summary.success_count, 1);
+    assert_eq!(summary.error_count, 1);
+    assert_eq!(summary.total_tokens, 100);
+    assert_eq!(summary.estimated_cost_usd, 0.03);
+
+    let hourly_summary = storage
+        .summarize_request_logs_filtered(None, None, Some(0), Some(3_600))
+        .expect("summarize hourly cleared usage");
+    assert_eq!(hourly_summary.count, 2);
+    assert_eq!(hourly_summary.success_count, 1);
+    assert_eq!(hourly_summary.error_count, 1);
+    assert_eq!(hourly_summary.total_tokens, 100);
+    assert_eq!(hourly_summary.estimated_cost_usd, 0.03);
+
+    let filtered = storage
+        .summarize_request_logs_filtered(None, Some("5xx"), None, None)
+        .expect("summarize filtered cleared logs");
+    assert_eq!(filtered.count, 0);
+    assert_eq!(filtered.total_tokens, 0);
+}
+
+#[test]
+fn keyed_request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    for (index, key_id, total_tokens) in [
+        (0_i64, "gk-cleared-owned", Some(30_i64)),
+        (1_i64, "gk-cleared-other", Some(70_i64)),
+    ] {
+        let created_at = 3_000 + index;
+        let request_log_id = storage
+            .insert_request_log(&RequestLog {
+                trace_id: Some(format!("trc-keyed-cleared-summary-{index}")),
+                key_id: Some(key_id.to_string()),
+                request_path: "/v1/responses".to_string(),
+                method: "POST".to_string(),
+                status_code: Some(200),
+                created_at,
+                ..Default::default()
+            })
+            .expect("insert request log");
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id,
+                key_id: Some(key_id.to_string()),
+                model: Some("gpt-5".to_string()),
+                total_tokens,
+                estimated_cost_usd: Some(0.01),
+                created_at,
+                ..RequestTokenStat::default()
+            })
+            .expect("insert token stat");
+    }
+
+    storage.clear_request_logs().expect("clear request logs");
+
+    let summary = storage
+        .summarize_request_logs_filtered_for_keys(
+            None,
+            None,
+            None,
+            None,
+            &["gk-cleared-owned".to_string()],
+        )
+        .expect("summarize keyed cleared usage");
+    assert_eq!(summary.count, 1);
+    assert_eq!(summary.total_tokens, 30);
+
+    let filtered = storage
+        .summarize_request_logs_filtered_for_keys(
+            None,
+            Some("2xx"),
+            None,
+            None,
+            &["gk-cleared-owned".to_string()],
+        )
+        .expect("summarize keyed filtered cleared logs");
+    assert_eq!(filtered.count, 0);
+    assert_eq!(filtered.total_tokens, 0);
 }
 
 #[test]
@@ -497,6 +858,136 @@ fn request_logs_support_time_range_filters() {
 }
 
 #[test]
+fn request_log_queries_short_circuit_empty_time_ranges() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let request_log_id = storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-empty-range".to_string()),
+            key_id: Some("gk-empty-range".to_string()),
+            account_id: Some("acc-empty-range".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 1_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id,
+            key_id: Some("gk-empty-range".to_string()),
+            account_id: Some("acc-empty-range".to_string()),
+            model: Some("gpt-5".to_string()),
+            total_tokens: Some(10),
+            estimated_cost_usd: Some(0.01),
+            created_at: 1_000,
+            ..RequestTokenStat::default()
+        })
+        .expect("insert token stat");
+
+    let key_ids = ["gk-empty-range".to_string()];
+    assert!(storage
+        .list_request_logs_paginated(None, None, Some(2_000), Some(2_000), 0, 20)
+        .expect("list empty range")
+        .is_empty());
+    assert!(
+        storage
+            .list_request_logs_paginated_for_keys(
+                None,
+                None,
+                Some(2_000),
+                Some(2_000),
+                0,
+                20,
+                &key_ids,
+            )
+            .expect("list keyed empty range")
+            .is_empty()
+    );
+    assert_eq!(
+        storage
+            .count_request_logs(None, None, Some(2_000), Some(2_000))
+            .expect("count empty range"),
+        0
+    );
+    assert_eq!(
+        storage
+            .count_request_logs_for_keys(None, None, Some(2_000), Some(2_000), &key_ids)
+            .expect("count keyed empty range"),
+        0
+    );
+    assert_eq!(
+        storage
+            .summarize_request_logs_filtered(None, None, Some(2_000), Some(2_000))
+            .expect("summarize empty range")
+            .count,
+        0
+    );
+    assert_eq!(
+        storage
+            .summarize_request_logs_filtered_for_keys(
+                None,
+                None,
+                Some(2_000),
+                Some(2_000),
+                &key_ids,
+            )
+            .expect("summarize keyed empty range")
+            .count,
+        0
+    );
+}
+
+#[test]
+fn request_log_prune_helper_uses_created_at_index() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let details = collect_query_plan_details_with_params(
+        &storage,
+        &format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::prune_request_logs_before_sql()
+        ),
+        vec![Value::Integer(1_000)],
+    );
+
+    assert!(
+        query_plan_uses_index(&details, "idx_request_logs_created_at_id")
+            || query_plan_uses_index(&details, "idx_request_logs_created_at"),
+        "request log prune should use a created_at index, got {details:?}"
+    );
+}
+
+#[test]
+fn prune_request_logs_before_short_circuits_non_positive_cutoff() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-prune-cutoff".to_string()),
+            key_id: Some("key-prune-cutoff".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 1_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+
+    let deleted = storage
+        .prune_request_logs_before(0)
+        .expect("prune non-positive cutoff");
+    assert_eq!(deleted, 0);
+
+    let total = storage
+        .count_request_logs(None, None, None, None)
+        .expect("count logs after prune");
+    assert_eq!(total, 1);
+}
+
+#[test]
 fn request_logs_for_empty_key_sets_return_empty_results() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -523,6 +1014,114 @@ fn request_logs_for_empty_key_sets_return_empty_results() {
         .expect("summarize today for empty keys");
     assert_eq!(today.input_tokens, 0);
     assert_eq!(today.estimated_cost_usd, 0.0);
+}
+
+#[test]
+fn request_log_today_summary_for_keys_short_circuits_empty_range() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let today = storage
+        .summarize_request_logs_between_for_keys(10_000, 10_000, &["key-a".to_string()])
+        .expect("summarize today for empty range");
+
+    assert_eq!(today.input_tokens, 0);
+    assert_eq!(today.cached_input_tokens, 0);
+    assert_eq!(today.output_tokens, 0);
+    assert_eq!(today.reasoning_output_tokens, 0);
+    assert_eq!(today.estimated_cost_usd, 0.0);
+}
+
+#[test]
+fn request_log_today_summary_for_small_key_sets_filters_raw_and_hourly_usage() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let request_log_id = storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-small-key-filter".to_string()),
+            key_id: Some("key-a".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 5_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id,
+            key_id: Some("key-a".to_string()),
+            model: Some("gpt-5".to_string()),
+            input_tokens: Some(10),
+            cached_input_tokens: Some(2),
+            output_tokens: Some(5),
+            total_tokens: Some(13),
+            estimated_cost_usd: Some(0.01),
+            created_at: 5_000,
+            ..RequestTokenStat::default()
+        })
+        .expect("insert selected token stat");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id: request_log_id + 1,
+            key_id: Some("key-b".to_string()),
+            model: Some("gpt-5".to_string()),
+            input_tokens: Some(100),
+            cached_input_tokens: Some(0),
+            output_tokens: Some(50),
+            total_tokens: Some(150),
+            estimated_cost_usd: Some(1.00),
+            created_at: 5_000,
+            ..RequestTokenStat::default()
+        })
+        .expect("insert unselected token stat");
+    storage
+        .rollup_all_request_token_stats()
+        .expect("roll up token stats");
+
+    let summary = storage
+        .summarize_request_logs_between_for_keys(0, 7_200, &["key-a".to_string()])
+        .expect("summarize selected key usage");
+
+    assert_eq!(summary.input_tokens, 10);
+    assert_eq!(summary.cached_input_tokens, 2);
+    assert_eq!(summary.output_tokens, 5);
+    assert_eq!(summary.estimated_cost_usd, 0.01);
+}
+
+#[test]
+fn request_logs_zero_limit_returns_empty_results() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-zero-limit".to_string()),
+            key_id: Some("key-zero-limit".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 5_000,
+            ..Default::default()
+        })
+        .expect("insert request log");
+
+    let logs = storage
+        .list_request_logs_paginated(None, None, None, None, 0, 0)
+        .expect("list logs with zero limit");
+    assert!(logs.is_empty());
+
+    let keyed_logs = storage
+        .list_request_logs_paginated_for_keys(
+            None,
+            None,
+            None,
+            None,
+            0,
+            0,
+            &["key-zero-limit".to_string()],
+        )
+        .expect("list keyed logs with zero limit");
+    assert!(keyed_logs.is_empty());
 }
 
 #[test]
@@ -555,6 +1154,7 @@ fn request_logs_for_large_key_sets_use_temp_filter() {
             reasoning_output_tokens: Some(2),
             estimated_cost_usd: Some(0.04),
             created_at: 5_000,
+            ..RequestTokenStat::default()
         })
         .expect("insert token stat");
 

@@ -1,12 +1,13 @@
 use bytes::Bytes;
-use codexmanager_core::storage::{Account, Storage, Token};
+use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
+use std::collections::HashMap;
 use std::time::Instant;
 use tiny_http::Request;
 
 use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::super::executor::CandidateUpstreamDecision;
 use super::super::support::candidates::{
-    account_model_override, allow_openai_fallback_for_account, free_account_model_override,
+    allow_openai_fallback_for_account_with_snapshot, free_account_model_override_with_snapshot,
 };
 use super::super::support::deadline;
 use super::candidate_attempt::{
@@ -46,6 +47,62 @@ fn extract_prompt_cache_key_for_trace(body: &[u8]) -> Option<String> {
 
 fn should_forward_thread_anchor_as_prompt_cache_key(protocol_type: &str) -> bool {
     protocol_type != crate::apikey_profile::PROTOCOL_GEMINI_NATIVE
+}
+
+fn account_model_overrides_for_candidates(
+    storage: &Storage,
+    platform_model: Option<&str>,
+    candidates: &[(Account, Token)],
+) -> HashMap<String, String> {
+    let Some(model) = platform_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return HashMap::new();
+    };
+    let account_ids = candidates
+        .iter()
+        .map(|(account, _)| account.id.clone())
+        .collect::<Vec<_>>();
+    match storage.list_enabled_model_source_mappings_for_sources(
+        model,
+        "openai_account",
+        &account_ids,
+    ) {
+        Ok(mappings) => mappings
+            .into_iter()
+            .map(|(account_id, mapping)| (account_id, mapping.upstream_model))
+            .collect(),
+        Err(err) => {
+            log::warn!("gateway account model override prefetch failed: {err}");
+            HashMap::new()
+        }
+    }
+}
+
+fn usage_snapshots_for_candidate_plans(
+    storage: &Storage,
+    candidates: &[(Account, Token)],
+) -> HashMap<String, UsageSnapshotRecord> {
+    let account_ids = candidates
+        .iter()
+        .filter(|(_, token)| crate::account_plan::resolve_token_account_plan(token).is_none())
+        .map(|(account, _)| account.id.clone())
+        .collect::<Vec<_>>();
+    if account_ids.is_empty() {
+        return HashMap::new();
+    }
+
+    match storage.latest_usage_snapshots_for_accounts(&account_ids) {
+        Ok(snapshots) => snapshots
+            .into_iter()
+            .map(|snapshot| (snapshot.account_id.clone(), snapshot))
+            .collect(),
+        Err(err) => {
+            log::warn!("gateway candidate usage snapshot prefetch failed: {err}");
+            HashMap::new()
+        }
+    }
 }
 
 pub(in super::super) enum CandidateExecutionResult {
@@ -208,6 +265,9 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut last_attempt_url = None;
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
+    let account_model_overrides =
+        account_model_overrides_for_candidates(storage, model_for_log, &candidates);
+    let usage_snapshots = usage_snapshots_for_candidate_plans(storage, &candidates);
     for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
         if deadline::is_expired(request_deadline) {
             let request = request
@@ -239,10 +299,20 @@ pub(in super::super) fn execute_candidate_sequence(
                 )
             })
             .unwrap_or_else(|| incoming_headers.clone());
-        let attempt_model_override = account_model_override(storage, model_for_log, &account)
-            .or_else(|| free_account_model_override(storage, &account, &token));
-        let attempt_allow_openai_fallback =
-            allow_openai_fallback && allow_openai_fallback_for_account(storage, &account, &token);
+        let attempt_model_override = account_model_overrides
+            .get(account.id.as_str())
+            .cloned()
+            .or_else(|| {
+                free_account_model_override_with_snapshot(
+                    &token,
+                    usage_snapshots.get(account.id.as_str()),
+                )
+            });
+        let attempt_allow_openai_fallback = allow_openai_fallback
+            && allow_openai_fallback_for_account_with_snapshot(
+                &token,
+                usage_snapshots.get(account.id.as_str()),
+            );
         let attempt_model_for_log = attempt_model_override.as_deref().or(model_for_log);
         let attempt_prompt_cache_key =
             if should_forward_thread_anchor_as_prompt_cache_key(context.protocol_type()) {
@@ -520,35 +590,5 @@ pub(in super::super) fn execute_candidate_sequence(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{is_challenge_failover_error, should_forward_thread_anchor_as_prompt_cache_key};
-
-    #[test]
-    fn gemini_native_does_not_forward_thread_anchor_as_prompt_cache_key() {
-        assert!(!should_forward_thread_anchor_as_prompt_cache_key(
-            crate::apikey_profile::PROTOCOL_GEMINI_NATIVE
-        ));
-    }
-
-    #[test]
-    fn non_gemini_protocols_keep_thread_anchor_forwarding() {
-        assert!(should_forward_thread_anchor_as_prompt_cache_key(
-            crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE
-        ));
-        assert!(should_forward_thread_anchor_as_prompt_cache_key(
-            crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
-        ));
-    }
-
-    #[test]
-    fn challenge_failover_error_detection_matches_cloudflare_markers() {
-        assert!(is_challenge_failover_error(Some(
-            "upstream challenge blocked"
-        )));
-        assert!(is_challenge_failover_error(Some(
-            "Cloudflare 安全验证页 [cf_ray=abc]"
-        )));
-        assert!(!is_challenge_failover_error(Some("upstream rate-limited")));
-        assert!(!is_challenge_failover_error(None));
-    }
-}
+#[path = "candidate_executor_tests.rs"]
+mod tests;

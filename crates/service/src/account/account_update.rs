@@ -56,9 +56,8 @@ pub(crate) fn update_account(
     if let Some(preferred) = preferred {
         if preferred {
             let found = storage
-                .find_account_by_id(normalized_account_id)
-                .map_err(|err| err.to_string())?
-                .is_some();
+                .account_exists(normalized_account_id)
+                .map_err(|err| err.to_string())?;
             if !found {
                 return Err("account not found".to_string());
             }
@@ -264,3 +263,7 @@ fn normalize_optional_tags(value: Option<&str>) -> Option<String> {
         Some(parts.join(","))
     }
 }
+
+#[cfg(test)]
+#[path = "account_update_tests.rs"]
+mod tests;
