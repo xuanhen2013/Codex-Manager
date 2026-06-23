@@ -1,4 +1,6 @@
 use rusqlite::{Connection, Result};
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1256,6 +1258,7 @@ pub struct ModelCatalogStorageSnapshot {
 #[derive(Debug)]
 pub struct Storage {
     conn: Connection,
+    applied_migrations: RefCell<Option<HashSet<String>>>,
 }
 
 impl Storage {
@@ -1292,7 +1295,10 @@ impl Storage {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let conn = Connection::open(path)?;
         Self::configure_file_connection(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            applied_migrations: RefCell::new(None),
+        })
     }
 
     /// 函数 `open_in_memory`
@@ -1309,7 +1315,10 @@ impl Storage {
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Self::configure_connection(&conn)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            applied_migrations: RefCell::new(None),
+        })
     }
 
     /// 函数 `init`
@@ -1325,6 +1334,7 @@ impl Storage {
     /// 返回函数执行结果
     pub fn init(&self) -> Result<()> {
         self.ensure_migrations_table()?;
+        *self.applied_migrations.borrow_mut() = None;
 
         self.apply_sql_migration("001_init", include_str!("../../migrations/001_init.sql"))?;
         self.apply_sql_migration(
@@ -2073,7 +2083,11 @@ impl Storage {
             return Ok(());
         }
         let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}");
-        self.conn.execute(&sql, [])?;
+        match self.conn.execute(&sql, []) {
+            Ok(_) => {}
+            Err(err) if Self::is_schema_conflict_error(&err) => {}
+            Err(err) => return Err(err),
+        }
         Ok(())
     }
 
@@ -2148,11 +2162,25 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     fn has_migration(&self, version: &str) -> Result<bool> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT 1 FROM schema_migrations WHERE version = ?1 LIMIT 1")?;
-        let mut rows = stmt.query([version])?;
-        Ok(rows.next()?.is_some())
+        if self.applied_migrations.borrow().is_none() {
+            let migrations = self.load_applied_migrations()?;
+            *self.applied_migrations.borrow_mut() = Some(migrations);
+        }
+        Ok(self
+            .applied_migrations
+            .borrow()
+            .as_ref()
+            .is_some_and(|migrations| migrations.contains(version)))
+    }
+
+    fn load_applied_migrations(&self) -> Result<HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT version FROM schema_migrations")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut migrations = HashSet::new();
+        for row in rows {
+            migrations.insert(row?);
+        }
+        Ok(migrations)
     }
 
     /// 函数 `mark_migration`
@@ -2172,6 +2200,9 @@ impl Storage {
             "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
             (version, now_ts()),
         )?;
+        if let Some(migrations) = self.applied_migrations.borrow_mut().as_mut() {
+            migrations.insert(version.to_string());
+        }
         Ok(())
     }
 
@@ -2266,6 +2297,10 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     fn is_schema_conflict_error(err: &rusqlite::Error) -> bool {
+        let message = err.to_string();
+        if message.contains("duplicate column name") || message.contains("already exists") {
+            return true;
+        }
         match err {
             rusqlite::Error::SqliteFailure(_, maybe_message) => maybe_message
                 .as_deref()
