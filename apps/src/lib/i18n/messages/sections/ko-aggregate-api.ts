@@ -3,6 +3,7 @@
 import type { MessageCatalog } from "../types";
 
 export const KO_AGGREGATE_API_MESSAGES: MessageCatalog = {
+  "Upstream routing": "업스트림 라우팅",
   "New API 用户 ID": "New API 사용자 ID",
   "URL": "URL",
   "action path": "action path",

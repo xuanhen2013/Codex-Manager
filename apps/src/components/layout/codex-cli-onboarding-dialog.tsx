@@ -206,9 +206,9 @@ export function CodexCliOnboardingDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         initialFocus={introFocusRef}
-        className="glass-card max-h-[92vh] overflow-hidden p-0 sm:!max-w-[94vw] xl:!max-w-[86rem] 2xl:!max-w-[92rem]"
+        className="glass-card mission-panel top-[48%] max-h-[84vh] overflow-hidden p-0 sm:!max-w-[90vw] xl:!max-w-[78rem] 2xl:!max-w-[84rem]"
       >
-        <div className="flex min-h-0 max-h-[92vh] flex-col">
+        <div className="flex min-h-0 max-h-[84vh] flex-col">
           <DialogHeader className="shrink-0 border-b border-border/60 px-6 pb-4 pt-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div
@@ -235,7 +235,7 @@ export function CodexCliOnboardingDialog({
 
           <div
             ref={scrollContainerRef}
-            className="grid min-h-0 gap-5 overflow-y-auto px-6 py-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(460px,0.85fr)]"
+            className="grid min-h-0 gap-5 overflow-y-auto px-6 py-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]"
           >
             <div className="space-y-5">
               <section className="rounded-xl border border-border/60 bg-background/45 p-5 shadow-sm">
@@ -262,7 +262,7 @@ export function CodexCliOnboardingDialog({
                         variant="outline"
                         onClick={() => setCurrentStep(index)}
                         className={cn(
-                          "h-auto justify-start rounded-xl px-3 py-3 text-left transition-colors",
+                          "h-auto justify-start rounded-lg px-3 py-3 text-left transition-colors",
                           index === currentStep
                             ? "border-primary/40 bg-primary/10 text-foreground shadow-sm"
                             : "border-border/60 bg-background/70 text-muted-foreground hover:bg-accent/50",
@@ -280,9 +280,9 @@ export function CodexCliOnboardingDialog({
                 </div>
 
                 <div className="mt-4">
-                  <section className="rounded-xl border border-border/60 bg-background/70 p-4">
+                  <section className="rounded-lg border border-border/60 bg-background/70 p-4">
                     <div className="flex items-start gap-4">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                         <activeStep.icon className="h-5 w-5" />
                       </div>
                       <div className="min-w-0 space-y-2">

@@ -151,7 +151,7 @@ export function RequestLogsTabContent({
         </div>
       ) : null}
 
-      <Card className="glass-card overflow-hidden gap-0 py-0 shadow-sm">
+      <Card className="glass-card mission-panel overflow-hidden gap-0 py-0 shadow-sm">
         <CardContent className="p-0">
           <div className={cn("grid", filtersExpanded ? "xl:grid-cols-[minmax(0,1fr)_390px]" : "")}>
             <div
@@ -387,7 +387,7 @@ export function RequestLogsTabContent({
         </CardContent>
       </Card>
 
-      <Card className="glass-card overflow-hidden gap-0 py-0 shadow-sm">
+      <Card className="glass-card mission-panel overflow-hidden gap-0 py-0 shadow-sm">
         <CardHeader className="flex min-h-1 items-center border-b border-border/40 bg-[var(--table-section-bg)] py-3">
           <div className="flex w-full flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">

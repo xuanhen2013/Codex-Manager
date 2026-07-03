@@ -67,6 +67,7 @@ import { useI18n } from "@/lib/i18n/provider";
 import { AppearanceTabContent } from "@/app/settings/components/appearance-tab-content";
 import { EnvTabContent } from "@/app/settings/components/env-tab-content";
 import { GatewayTabContent } from "@/app/settings/components/gateway-tab-content";
+import { ThemePreviewSwatch } from "@/app/settings/components/theme-preview-swatch";
 import {
   AccessControlCard,
   ServiceListenCard,
@@ -160,7 +161,7 @@ import {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="glass-card shadow-sm">
+        <Card className="glass-card mission-panel shadow-sm">
           <CardHeader>
             <div className="flex items-center gap-2">
               <UserRound className="h-4 w-4 text-primary" />
@@ -190,7 +191,7 @@ import {
           </CardContent>
         </Card>
 
-        <Card className="glass-card shadow-sm">
+        <Card className="glass-card mission-panel shadow-sm">
           <CardHeader>
             <div className="flex items-center gap-2">
               <LockKeyhole className="h-4 w-4 text-primary" />
@@ -231,7 +232,7 @@ import {
         </Card>
       </div>
 
-      <Card className="glass-card shadow-sm">
+      <Card className="glass-card mission-panel shadow-sm">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Palette className="h-4 w-4 text-primary" />
@@ -240,25 +241,31 @@ import {
           <CardDescription>{t("这些偏好只影响当前浏览器会话")}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {THEMES.map((item) => (
-              <Button
-                key={item.id}
-                type="button"
-                variant="outline"
-                onClick={() => setTheme(item.id)}
-                className={cn(
-                  "flex h-auto items-center justify-start gap-3 rounded-xl border border-border/60 bg-background/45 p-3 text-left transition-colors hover:bg-accent/50",
-                  theme === item.id ? "ring-2 ring-primary/40" : "",
-                )}
-              >
-                <span
-                  className="h-5 w-5 rounded-full border border-border/50"
-                  style={{ backgroundColor: item.color }}
-                />
-                <span className="text-sm font-medium">{t(item.name)}</span>
-              </Button>
-            ))}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {THEMES.map((item) => {
+              const isActive = theme === item.id;
+              return (
+                <Button
+                  key={item.id}
+                  type="button"
+                  variant="outline"
+                  onClick={() => setTheme(item.id)}
+                  className={cn(
+                    "flex h-auto items-center justify-start gap-3 rounded-lg border border-border/60 bg-background/55 p-3 text-left transition-colors hover:border-primary/25 hover:bg-accent/30",
+                    isActive ? "border-primary/45 bg-primary/10 ring-1 ring-primary/20" : "",
+                  )}
+                >
+                  <ThemePreviewSwatch
+                    id={item.id}
+                    color={item.color}
+                    className="h-9 w-12"
+                  />
+                  <span className={cn("min-w-0 truncate text-sm font-medium", isActive ? "text-primary" : "text-foreground")}>
+                    {t(item.name)}
+                  </span>
+                </Button>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
@@ -1363,7 +1370,7 @@ function AdminSettingsPage() {
         }}
         className="w-full"
       >
-        <TabsList className="glass-card mb-6 flex h-11 w-full justify-start overflow-x-auto rounded-xl p-1 no-scrollbar lg:w-fit">
+        <TabsList className="glass-card mission-panel mb-6 flex h-11 w-full justify-start overflow-x-auto rounded-lg p-1 no-scrollbar lg:w-fit">
           <TabsTrigger value="general" className="gap-2 px-5 shrink-0">
             <SettingsIcon className="h-4 w-4" /> {t("通用")}
           </TabsTrigger>
@@ -1520,7 +1527,7 @@ function AdminSettingsPage() {
       >
         <DialogContent
           showCloseButton={false}
-          className="glass-card p-6 sm:max-w-[480px]"
+          className="glass-card mission-panel p-6 sm:max-w-[480px]"
         >
           <DialogHeader>
             <DialogTitle>

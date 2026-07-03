@@ -59,7 +59,7 @@ export function GeneralBasicsCard({
   updateSettings: { mutate: (patch: Partial<AppSettings>) => void };
 }) {
   return (
-    <Card className="glass-card shadow-sm">
+    <Card className="glass-card mission-panel shadow-sm">
       <CardHeader>
         <div className="flex items-center gap-2">
           <AppWindow className="h-4 w-4 text-primary" />

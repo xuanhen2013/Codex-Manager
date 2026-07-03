@@ -327,7 +327,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   return (
     <div className="space-y-6">
       {!isServiceReady ? (
-        <Card className="glass-card shadow-sm">
+        <Card className="glass-card mission-panel shadow-sm">
           <CardContent className="pt-6 text-sm text-muted-foreground">
             {t(
               "服务未连接，账号列表与相关操作暂不可用；连接恢复后会自动继续加载。",
@@ -336,12 +336,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         </Card>
       ) : null}
 
-      <Card className="glass-card shadow-sm">
+      <Card className="glass-card mission-panel shadow-sm">
         <CardContent className="grid gap-3 pt-0 lg:grid-cols-[200px_auto_minmax(0,1fr)_auto] lg:items-center">
           <div className="min-w-0">
             <Input
               placeholder={t("搜索账号名 / 编号...")}
-              className="glass-card h-10 rounded-xl px-3"
+              className="glass-card mission-panel h-10 rounded-xl px-3"
               value={search}
               onChange={(event) => handleSearchChange(event.target.value)}
             />
@@ -398,7 +398,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <TooltipTrigger render={<span />} className="inline-flex">
                 <Button
                   variant="outline"
-                  className="glass-card h-10 min-w-[88px] gap-2 rounded-xl px-3"
+                  className="glass-card mission-panel h-10 min-w-[88px] gap-2 rounded-xl px-3"
                   disabled={
                     !isServiceReady || isWarmingUpAccounts || accounts.length === 0
                   }
@@ -424,7 +424,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <DropdownMenuTrigger>
                 <Button
                   variant="outline"
-                  className="glass-card h-10 min-w-[50px] justify-between gap-2 rounded-xl px-3"
+                  className="glass-card mission-panel h-10 min-w-[50px] justify-between gap-2 rounded-xl px-3"
                   render={<span />}
                   nativeButton={false}
                 >
@@ -600,7 +600,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
       </Card>
 
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
-        <DialogContent className="glass-card border-border/70 sm:max-w-md">
+        <DialogContent className="glass-card mission-panel border-border/70 sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("导出账号")}</DialogTitle>
             <DialogDescription>
@@ -679,7 +679,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
           }
         }}
       >
-        <DialogContent className="glass-card border-border/70 sm:max-w-[520px]">
+        <DialogContent className="glass-card mission-panel border-border/70 sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle>{t("按状态清理账号")}</DialogTitle>
             <DialogDescription>
@@ -762,7 +762,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
         </DialogContent>
       </Dialog>
 
-      <Card className="glass-card overflow-hidden py-0 shadow-sm">
+      <Card className="glass-card mission-panel overflow-hidden py-0 shadow-sm">
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -1187,7 +1187,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
           }
         }}
       >
-        <DialogContent className="glass-card max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[560px]">
+        <DialogContent className="glass-card mission-panel max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[560px]">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>{t("编辑账号信息")}</DialogTitle>
             <DialogDescription>

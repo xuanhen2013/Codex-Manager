@@ -56,6 +56,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  PageHeader,
+  PageWorkspace,
+} from "@/components/layout/page-workspace";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { ModelCatalogModal } from "@/components/modals/model-catalog-modal";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
@@ -580,50 +584,91 @@ export default function ModelsPage() {
 
   return (
     <>
-      <div className="space-y-3 animate-in fade-in duration-500">
-        <div className="space-y-2">
-          <div className="space-y-2">
-            <Badge className="w-fit rounded-full bg-primary/10 px-3 py-1 text-primary">
-              {isAdminMode ? t("模型目录") : t("可用模型")}
-            </Badge>
-            <div className="space-y-1">
-              <h1 className="text-3xl font-semibold tracking-tight">
-                {isAdminMode ? t("模型管理") : t("可用模型")}
-              </h1>
-              <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {isAdminMode
-                  ? t("这里维护本地结构化模型目录。默认绑定模型会优先展示 supportedInApi=true 的模型，而 Codex CLI 仍会拿到完整目录。")
-                  : t("查看当前账号可调用的平台模型。成员界面只展示平台模型名，不展示真实上游模型或来源配置。")}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              {isAdminMode ? (
-                <>
-                  <Badge variant="secondary" className="rounded-full px-3 py-1">
-                    {t("完整目录会同步到 Codex CLI")}
-                  </Badge>
-                  <Badge variant="secondary" className="rounded-full px-3 py-1">
-                    {t("默认绑定优先展示 API 可用模型")}
-                  </Badge>
-                  <Badge variant="secondary" className="rounded-full px-3 py-1">
-                    {t("远端刷新可与本地覆写共存")}
-                  </Badge>
-                </>
-              ) : (
-                <>
-                  <Badge variant="secondary" className="rounded-full px-3 py-1">
-                    {t("仅展示平台模型")}
-                  </Badge>
-                  <Badge variant="secondary" className="rounded-full px-3 py-1">
-                    {t("隐藏真实上游")}
-                  </Badge>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+      <PageWorkspace>
+        <PageHeader
+          eyebrow={isAdminMode ? t("模型目录") : t("可用模型")}
+          title={isAdminMode ? t("模型管理") : t("可用模型")}
+          description={
+            isAdminMode
+              ? t("这里维护本地结构化模型目录。默认绑定模型会优先展示 supportedInApi=true 的模型，而 Codex CLI 仍会拿到完整目录。")
+              : t("查看当前账号可调用的平台模型。成员界面只展示平台模型名，不展示真实上游模型或来源配置。")
+          }
+          meta={
+            isAdminMode ? (
+              <>
+                <Badge variant="secondary" className="rounded-md px-2.5">
+                  {t("完整目录会同步到 Codex CLI")}
+                </Badge>
+                <Badge variant="secondary" className="rounded-md px-2.5">
+                  {t("远端刷新可与本地覆写共存")}
+                </Badge>
+              </>
+            ) : (
+              <>
+                <Badge variant="secondary" className="rounded-md px-2.5">
+                  {t("仅展示平台模型")}
+                </Badge>
+                <Badge variant="secondary" className="rounded-md px-2.5">
+                  {t("隐藏真实上游")}
+                </Badge>
+              </>
+            )
+          }
+          actions={
+            isAdminMode ? (
+              <>
+                <Button
+                  variant="outline"
+                  className="h-9 gap-2"
+                  onClick={() => void refreshRemote()}
+                  disabled={isRefreshing || isPruningStaleRemote}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
+                  />
+                  {t("远端并入")}
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-9 gap-2 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => void pruneStaleRemoteModels()}
+                  disabled={isRefreshing || isPruningStaleRemote}
+                  title={t("仅删除未本地覆写且不再出现在远端目录中的远端模型，不会删除自定义模型。")}
+                >
+                  <Trash2
+                    className={`h-4 w-4 ${isPruningStaleRemote ? "animate-pulse" : ""}`}
+                  />
+                  {t("清理远端旧模型")}
+                </Button>
+                {canExportCodexCache ? (
+                  <Button
+                    variant="outline"
+                    className="h-9 gap-2"
+                    onClick={() => void exportCodexCache()}
+                    disabled={isExporting}
+                  >
+                    <Download
+                      className={`h-4 w-4 ${isExporting ? "animate-spin" : ""}`}
+                    />
+                    {t("导出到本地 Codex 缓存")}
+                  </Button>
+                ) : null}
+                <Button
+                  className="h-9 gap-2 shadow-sm shadow-primary/20"
+                  onClick={() => {
+                    setEditingSlug(null);
+                    setModalOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                  {t("新增自定义模型")}
+                </Button>
+              </>
+            ) : null
+          }
+        />
 
-        <Card className="glass-card shadow-md ">
+        <Card className="glass-card mission-panel console-panel shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -639,54 +684,12 @@ export default function ModelsPage() {
                   <div className="flex flex-wrap gap-2 lg:justify-end">
                     <Button
                       variant="outline"
-                      onClick={() => void refreshRemote()}
-                      disabled={isRefreshing || isPruningStaleRemote}
-                    >
-                      <RefreshCw
-                        className={`mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
-                      />
-                      {t("远端并入")}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => void pruneStaleRemoteModels()}
-                      disabled={isRefreshing || isPruningStaleRemote}
-                      title={t("仅删除未本地覆写且不再出现在远端目录中的远端模型，不会删除自定义模型。")}
-                    >
-                      <Trash2
-                        className={`mr-2 h-4 w-4 ${isPruningStaleRemote ? "animate-pulse" : ""}`}
-                      />
-                      {t("清理远端旧模型")}
-                    </Button>
-                    {canExportCodexCache ? (
-                      <Button
-                        variant="outline"
-                        onClick={() => void exportCodexCache()}
-                        disabled={isExporting}
-                      >
-                        <Download
-                          className={`mr-2 h-4 w-4 ${isExporting ? "animate-spin" : ""}`}
-                        />
-                        {t("导出到本地 Codex 缓存")}
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="outline"
+                      className="h-9 gap-2"
                       onClick={openBatchDeleteDialog}
                       disabled={selectedSlugs.length === 0 || isDeleting}
                     >
-                      <Trash2 className="mr-2 h-4 w-4" />
+                      <Trash2 className="h-4 w-4" />
                       {t("批量删除模型")}
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        setEditingSlug(null);
-                        setModalOpen(true);
-                      }}
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      {t("新增自定义模型")}
                     </Button>
                   </div>
                 ) : null}
@@ -717,7 +720,7 @@ export default function ModelsPage() {
                 ) : null}
               </div>
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="flex h-10 items-center gap-2 rounded-xl border border-border/60 bg-background/35 px-3">
+                <div className="flex h-10 items-center gap-2 rounded-md border border-border/60 bg-background/35 px-3">
                   <Search className="h-4 w-4 text-muted-foreground" />
                   <Input
                     value={search}
@@ -727,7 +730,7 @@ export default function ModelsPage() {
                   />
                 </div>
                 <Select value={filter} onValueChange={(value) => setFilter(value as ModelFilter)}>
-                  <SelectTrigger className="h-10 w-full rounded-xl px-3">
+                  <SelectTrigger className="h-10 w-full rounded-md px-3">
                     <SelectValue>{currentFilterLabel}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
@@ -962,7 +965,7 @@ export default function ModelsPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </PageWorkspace>
 
       {isAdminMode ? (
         <Dialog
@@ -974,7 +977,7 @@ export default function ModelsPage() {
             }
           }}
         >
-          <DialogContent className="glass-card max-h-[calc(100vh-2rem)] overflow-y-auto p-0 shadow-sm  md:max-w-[980px] xl:max-w-[1180px]">
+          <DialogContent className="glass-card mission-panel max-h-[calc(100vh-2rem)] overflow-y-auto p-0 shadow-sm  md:max-w-[980px] xl:max-w-[1180px]">
             <div className="p-5 sm:p-6">
           <DialogHeader className="pb-3 pr-8">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

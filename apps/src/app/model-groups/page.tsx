@@ -339,7 +339,7 @@ export default function ModelGroupsPage() {
   if (!isAdminMode) {
     return (
       <div className="container mx-auto p-6">
-        <Card className="glass-card">
+        <Card className="glass-card mission-panel">
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
             {t("只有管理员可以管理模型组")}
           </CardContent>
@@ -364,7 +364,7 @@ export default function ModelGroupsPage() {
         <div className="flex flex-wrap gap-2">
           <Button
             variant="outline"
-            className="glass-card h-10 gap-2 rounded-xl px-3 shadow-sm"
+            className="glass-card mission-panel h-10 gap-2 rounded-xl px-3 shadow-sm"
             disabled={isRefreshing}
             onClick={() => void refreshAll()}
           >
@@ -378,7 +378,7 @@ export default function ModelGroupsPage() {
         </div>
       </div>
 
-      <Card className="glass-card">
+      <Card className="glass-card mission-panel">
         <CardHeader>
           <CardTitle>{t("模型组列表")}</CardTitle>
           <CardDescription>

@@ -3,6 +3,7 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
+  "Upstream routing": "Upstream routing",
   "New API 用户 ID": "New API user ID",
   "URL": "URL",
   "action path": "action path",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LogOut } from "lucide-react";
+import { Activity, Cpu, Gauge, LogOut, RadioTower } from "lucide-react";
 import { toast } from "sonner";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { Switch } from "@/components/ui/switch";
@@ -169,29 +169,62 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 grid h-16 grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-center gap-3 glass-header px-4 xl:px-6">
+      <header className="sticky top-0 z-30 grid min-h-[76px] grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-center gap-3 glass-header px-4 xl:px-6">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
         <div className="flex min-w-0 items-center gap-3 overflow-hidden">
-          <h1 className="truncate text-lg font-semibold">{getPageTitle()}</h1>
-          <Badge variant={serviceStatus.connected ? "default" : "secondary"} className="h-5">
+          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-primary/20 bg-white text-primary shadow-sm">
+            <span className="absolute inset-x-2 top-1 h-px bg-primary/25" />
+            <span className="absolute inset-x-2 bottom-1 h-px bg-primary/10" />
+            <span className="font-mono text-xs font-semibold">CM</span>
+          </div>
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase text-primary/70">
+              <Cpu className="h-3 w-3" />
+              CodexManager Admin Console
+            </p>
+            <h1 className="truncate text-lg font-semibold text-foreground">{getPageTitle()}</h1>
+          </div>
+          <Badge
+            variant={serviceStatus.connected ? "default" : "secondary"}
+            className="h-6 rounded-md border-primary/20 bg-primary/10 px-2.5 font-mono text-[11px] text-primary shadow-sm"
+          >
+            <span
+              className={`mr-1.5 h-1.5 w-1.5 rounded-full ${
+                serviceStatus.connected ? "bg-emerald-500" : "bg-rose-500"
+              }`}
+            />
             {serviceStatus.connected ? t("服务已连接") : t("服务未连接")}
           </Badge>
           {serviceStatus.version ? (
-            <span className="text-xs text-muted-foreground">v{serviceStatus.version}</span>
+            <span className="font-mono text-xs text-muted-foreground">v{serviceStatus.version}</span>
           ) : null}
         </div>
 
         <div className="hidden min-w-0 items-center justify-center px-2 lg:flex">
-          <DisclaimerTicker />
+          <div className="grid w-full max-w-[620px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/70 bg-background/65 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.18)]">
+            <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground">
+              <RadioTower className="h-3.5 w-3.5 text-primary" />
+              System notice
+            </div>
+            <DisclaimerTicker />
+            <div className="hidden items-center gap-1.5 font-mono text-[10px] uppercase text-muted-foreground xl:flex">
+              <Activity className="h-3.5 w-3.5 text-emerald-400" />
+              Live
+            </div>
+          </div>
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 xl:gap-3">
           <LanguageSwitcher compact triggerClassName="w-[124px] xl:w-[132px]" />
 
           {canManageService ? (
-            <div className="flex items-center gap-2 rounded-lg border bg-card/30 px-2.5 py-1.5 shadow-sm">
-              <span className="text-xs font-medium text-muted-foreground">{t("监听端口")}</span>
+            <div className="flex items-center gap-2 rounded-md border border-border/70 bg-background/65 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgb(255_255_255/0.18)]">
+              <span className="flex items-center gap-1.5 font-mono text-[10px] font-medium uppercase text-muted-foreground">
+                <Gauge className="h-3.5 w-3.5 text-primary" />
+                {t("监听端口")}
+              </span>
               <Input
-                className="h-7 w-16 bg-transparent p-0 text-xs font-mono focus-visible:ring-0"
+                className="h-7 w-16 border-0 bg-transparent p-0 font-mono text-xs text-primary focus-visible:ring-0"
                 placeholder="48760"
                 value={portInput}
                 onChange={(event) => {
@@ -203,7 +236,7 @@ export function Header() {
                 }}
                 onBlur={() => void handlePortBlur()}
               />
-              <div className="mx-1 h-4 w-px bg-border" />
+              <div className="mx-1 h-4 w-px bg-primary/25" />
               <Switch
                 checked={serviceStatus.connected}
                 disabled={isToggling}
@@ -217,7 +250,7 @@ export function Header() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-9 gap-2 rounded-xl px-2.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive xl:px-3"
+              className="h-9 gap-2 rounded-md px-2.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive xl:px-3"
               onClick={handleLogout}
               title={t("退出登录")}
               aria-label={t("退出登录")}

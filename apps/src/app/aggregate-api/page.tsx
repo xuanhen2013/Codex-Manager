@@ -20,6 +20,11 @@ import {
 import { toast } from "sonner";
 import { AggregateApiModal } from "@/components/modals/aggregate-api-modal";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
+import {
+  PageHeader,
+  PageWorkspace,
+  WorkPanel,
+} from "@/components/layout/page-workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -959,111 +964,110 @@ export default function AggregateApiPage() {
   const supplierModelDraftUpstream = supplierModelDraft.upstreamModel.trim();
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <PageWorkspace>
       {!isServiceReady ? (
-        <Card className="glass-card shadow-sm">
+        <Card className="glass-card mission-panel shadow-sm">
           <CardContent className="pt-6 text-sm text-muted-foreground">
             {t("服务未连接")}
           </CardContent>
         </Card>
       ) : null}
 
-      <div>
-        <div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t("管理上游聚合地址与密钥，并测试连通性")}
-          </p>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <Card className="glass-card shadow-sm">
-          <CardContent className="px-4 ">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">{t("查询")}</span>
-                <Select
-                  value={providerFilter}
-                  onValueChange={(value) => setProviderFilter(value || "all")}
-                >
-                  <SelectTrigger className="w-[160px]">
-                    <SelectValue>
-                      {(value) =>
-                        t(
-                          AGGREGATE_API_PROVIDER_FILTER_LABELS[
-                            String(value || "")
-                          ] || "全部类型",
-                        )
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                    <SelectItem value="all">{t("全部类型")}</SelectItem>
-                    <SelectItem value="codex">Codex</SelectItem>
-                    <SelectItem value="claude">Claude</SelectItem>
-                    <SelectItem value="gemini">Gemini</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-xs text-muted-foreground">
-                  {t("共")} {filteredAggregateApis.length} {t("条")}
-                </div>
-                <Button
-                  variant="outline"
-                  className="h-10 gap-2"
-                  onClick={() => {
-                    const apiIds = filteredAggregateApis.map((api) => api.id);
-                    if (apiIds.length === 0) {
-                      toast.info(t("暂无可测试的聚合 API"));
-                      return;
-                    }
-                    testAllMutation.mutate(apiIds);
-                  }}
-                  disabled={!isServiceReady || testingAll || filteredAggregateApis.length === 0}
-                >
-                  <RefreshCw className={testingAll ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                  {t("测试全部")}
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-10 gap-2"
-                  onClick={() => {
-                    const apiIds = filteredAggregateApis
-                      .filter((api) => api.balanceQueryEnabled)
-                      .map((api) => api.id);
-                    if (apiIds.length === 0) {
-                      toast.info(t("暂无已启用余额检测的聚合 API"));
-                      return;
-                    }
-                    refreshAllBalancesMutation.mutate(apiIds);
-                  }}
-                  disabled={
-                    !isServiceReady ||
-                    refreshingBalances ||
-                    filteredAggregateApis.every((api) => !api.balanceQueryEnabled)
+      <PageHeader
+        eyebrow={t("Upstream routing")}
+        title={t("聚合 API")}
+        description={t("管理上游聚合地址与密钥，并测试连通性")}
+        meta={
+          <>
+            <Badge variant="secondary" className="rounded-md px-2.5">
+              {t("共")} {filteredAggregateApis.length} {t("条")}
+            </Badge>
+            <Badge variant="secondary" className="rounded-md px-2.5">
+              {t(
+                AGGREGATE_API_PROVIDER_FILTER_LABELS[providerFilter] ||
+                  "全部类型",
+              )}
+            </Badge>
+          </>
+        }
+        actions={
+          <>
+            <Select
+              value={providerFilter}
+              onValueChange={(value) => setProviderFilter(value || "all")}
+            >
+              <SelectTrigger className="h-9 w-[160px] rounded-md">
+                <SelectValue>
+                  {(value) =>
+                    t(
+                      AGGREGATE_API_PROVIDER_FILTER_LABELS[
+                        String(value || "")
+                      ] || "全部类型",
+                    )
                   }
-                >
-                  <RefreshCw className={refreshingBalances ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-                  {t("刷新余额")}
-                </Button>
-                <Button
-                  className="h-10 gap-2 shadow-sm shadow-primary/20"
-                  onClick={openCreateModal}
-                  disabled={!isServiceReady}
-                >
-                  <Plus className="h-4 w-4" /> {t("新建聚合 API")}
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">{t("全部类型")}</SelectItem>
+                  <SelectItem value="codex">Codex</SelectItem>
+                  <SelectItem value="claude">Claude</SelectItem>
+                  <SelectItem value="gemini">Gemini</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              className="h-9 gap-2"
+              onClick={() => {
+                const apiIds = filteredAggregateApis.map((api) => api.id);
+                if (apiIds.length === 0) {
+                  toast.info(t("暂无可测试的聚合 API"));
+                  return;
+                }
+                testAllMutation.mutate(apiIds);
+              }}
+              disabled={!isServiceReady || testingAll || filteredAggregateApis.length === 0}
+            >
+              <RefreshCw className={testingAll ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+              {t("测试全部")}
+            </Button>
+            <Button
+              variant="outline"
+              className="h-9 gap-2"
+              onClick={() => {
+                const apiIds = filteredAggregateApis
+                  .filter((api) => api.balanceQueryEnabled)
+                  .map((api) => api.id);
+                if (apiIds.length === 0) {
+                  toast.info(t("暂无已启用余额检测的聚合 API"));
+                  return;
+                }
+                refreshAllBalancesMutation.mutate(apiIds);
+              }}
+              disabled={
+                !isServiceReady ||
+                refreshingBalances ||
+                filteredAggregateApis.every((api) => !api.balanceQueryEnabled)
+              }
+            >
+              <RefreshCw className={refreshingBalances ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+              {t("刷新余额")}
+            </Button>
+            <Button
+              className="h-9 gap-2 shadow-sm shadow-primary/20"
+              onClick={openCreateModal}
+              disabled={!isServiceReady}
+            >
+              <Plus className="h-4 w-4" /> {t("新建聚合 API")}
+            </Button>
+          </>
+        }
+      />
 
-        <Card className="glass-card overflow-hidden py-0 shadow-sm">
-          <CardContent className="p-0">
-            <Table className="w-full table-fixed">
+      <WorkPanel>
+        <CardContent className="p-0">
+          <Table className="w-full table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="max-w-[220px]">{t("供应商 / URL")}</TableHead>
@@ -1488,10 +1492,9 @@ export default function AggregateApiPage() {
                   })
                 )}
               </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </div>
+          </Table>
+        </CardContent>
+      </WorkPanel>
 
       <AggregateApiModal
         open={modalOpen}
@@ -1872,6 +1875,6 @@ export default function AggregateApiPage() {
           setDeleteId(null);
         }}
       />
-    </div>
+    </PageWorkspace>
   );
 }

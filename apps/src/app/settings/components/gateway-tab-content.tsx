@@ -89,7 +89,7 @@ export function GatewayTabContent({
   setUpstreamProxyDraft: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
   return (
-    <Card className="glass-card shadow-sm">
+    <Card className="glass-card mission-panel shadow-sm">
       <CardHeader>
         <CardTitle className="text-base">{t("网关策略")}</CardTitle>
         <CardDescription>{t("配置账号选路和请求头处理方式")}</CardDescription>

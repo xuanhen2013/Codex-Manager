@@ -47,11 +47,62 @@ const configureDevWebpack: NonNullable<NextConfig["webpack"]> = (config) => {
   return config;
 };
 
+function normalizeDevWebOrigin(value: string | undefined): string {
+  const normalized = (value || "").trim().replace(/\/+$/, "");
+  return normalized || "http://localhost:48761";
+}
+
+const devWebOrigin = normalizeDevWebOrigin(
+  process.env.CODEXMANAGER_DEV_WEB_ORIGIN,
+);
+
+const configureDevWebRuntimeRewrites: NonNullable<NextConfig["rewrites"]> =
+  async () => [
+    {
+      source: "/api/runtime",
+      destination: `${devWebOrigin}/api/runtime`,
+    },
+    {
+      source: "/api/runtime/",
+      destination: `${devWebOrigin}/api/runtime`,
+    },
+    {
+      source: "/api/rpc",
+      destination: `${devWebOrigin}/api/rpc`,
+    },
+    {
+      source: "/api/rpc/",
+      destination: `${devWebOrigin}/api/rpc`,
+    },
+    {
+      source: "/api/events/:path*",
+      destination: `${devWebOrigin}/api/events/:path*`,
+    },
+    {
+      source: "/api/author-content",
+      destination: `${devWebOrigin}/api/author-content`,
+    },
+    {
+      source: "/__auth_status",
+      destination: `${devWebOrigin}/__auth_status`,
+    },
+    {
+      source: "/__login",
+      destination: `${devWebOrigin}/__login`,
+    },
+    {
+      source: "/__logout",
+      destination: `${devWebOrigin}/__logout`,
+    },
+  ];
+
 const nextConfig = (phase: string): NextConfig =>
   phase === PHASE_DEVELOPMENT_SERVER
     ? {
         ...baseNextConfig,
+        output: undefined,
         webpack: configureDevWebpack,
+        rewrites: configureDevWebRuntimeRewrites,
       }
     : baseNextConfig;
 
