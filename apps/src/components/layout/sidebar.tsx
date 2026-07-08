@@ -57,6 +57,12 @@ type SidebarNavItem = {
   icon: LucideIcon;
 };
 
+type RenderedSidebarSection = {
+  id: string;
+  label: string;
+  items: SidebarNavItem[];
+};
+
 const NavItem = memo(({
   item,
   isActive,
@@ -164,8 +170,23 @@ export function Sidebar() {
   );
 
   const renderedItems = useMemo(() => {
-    const sections = getAllowedTopLevelRouteSections(routeAccess);
-    let navIndex = 0;
+    const sections: RenderedSidebarSection[] = getAllowedTopLevelRouteSections(
+      routeAccess,
+    ).map((section) => ({
+      id: section.id,
+      label: section.label,
+      items: section.routes.flatMap((route) => {
+        const item = NAV_ITEM_BY_PATH.get(route.path);
+        if (!item) return [];
+        return [{ href: route.path, icon: item.icon }];
+      }),
+    }));
+    const itemIndexes = new Map(
+      sections
+        .flatMap((section) => section.items)
+        .map((item, index) => [item.href, index] as const),
+    );
+
     return sections.map((section, sectionIndex) => (
       <div
         key={section.id}
@@ -180,22 +201,17 @@ export function Sidebar() {
           </div>
         ) : null}
         <div className="grid gap-1">
-          {section.routes.map((route) => {
-            const item = NAV_ITEM_BY_PATH.get(route.path);
-            if (!item) return null;
-            const itemIndex = navIndex;
-            navIndex += 1;
-            const navItem = { href: route.path, icon: item.icon };
-            const itemName = t(getTopLevelRouteLabel(route.path, routeAccess));
+          {section.items.map((item) => {
+            const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
             return (
               <NavItem
-                key={route.path}
-                item={navItem}
+                key={item.href}
+                item={item}
                 itemName={itemName}
-                isActive={route.path === currentShellPath}
+                isActive={item.href === currentShellPath}
                 isSidebarOpen={isSidebarOpen}
                 onNavigate={handleNavigate}
-                index={itemIndex}
+                index={itemIndexes.get(item.href) ?? 0}
               />
             );
           })}

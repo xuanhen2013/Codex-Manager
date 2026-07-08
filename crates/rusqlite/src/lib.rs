@@ -273,6 +273,7 @@ pub struct Rows<'stmt> {
 }
 
 impl Rows<'_> {
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<&Row<'_>>> {
         if self.index >= self.rows.len() {
             return Ok(None);

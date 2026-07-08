@@ -1077,8 +1077,8 @@ fn extract_new_api_balance(
         return Err("new api balance response missing data.quota".to_string());
     }
     let remaining = quota.map(|value| value / 500_000.0);
-    let used = Some(used_quota / 500_000.0);
-    let total = remaining.map(|value| value + used.unwrap_or(0.0));
+    let used = used_quota / 500_000.0;
+    let total = remaining.map(|value| value + used);
     Ok(AggregateApiBalanceSnapshot {
         is_valid: success,
         invalid_message: if success {
@@ -1090,7 +1090,7 @@ fn extract_new_api_balance(
         unit: Some("USD".to_string()),
         plan_name: json_string(data.get("group")).or_else(|| json_string(data.get("plan"))),
         total,
-        used,
+        used: Some(used),
         extra: None,
     })
 }
@@ -1625,8 +1625,6 @@ fn probe_codex_responses_endpoint(
         .to_ascii_lowercase();
     let default_path = if action_hint.contains("chat/completions") {
         "/chat/completions"
-    } else if action_hint.contains("responses") {
-        "/responses"
     } else {
         "/responses"
     };

@@ -1009,7 +1009,7 @@ pub(in super::super) fn proxy_validated_request(
             last_attempt_url,
             last_attempt_error,
         } => (
-            request,
+            *request,
             attempted_account_ids,
             skipped_cooldown,
             skipped_inflight,

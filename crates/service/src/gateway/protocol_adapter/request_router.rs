@@ -439,8 +439,8 @@ fn responses_input_to_anthropic_messages(
                 responses_input_item_to_anthropic(item, system_parts, messages)?;
             }
         }
-        Some(Value::Object(_)) => {
-            responses_input_item_to_anthropic(input.unwrap(), system_parts, messages)?;
+        Some(item @ Value::Object(_)) => {
+            responses_input_item_to_anthropic(item, system_parts, messages)?;
         }
         Some(_) | None => {}
     }
@@ -539,7 +539,7 @@ fn responses_message_content_to_anthropic(content: Option<&Value>) -> Result<Vec
             }
             Ok(out)
         }
-        Some(Value::Object(_)) => Ok(responses_content_part_to_anthropic(content.unwrap())?
+        Some(part @ Value::Object(_)) => Ok(responses_content_part_to_anthropic(part)?
             .map(|part| vec![part])
             .unwrap_or_default()),
         Some(other) => Ok(vec![anthropic_text_block(other.to_string().as_str())]),

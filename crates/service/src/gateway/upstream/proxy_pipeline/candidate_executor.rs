@@ -75,7 +75,7 @@ fn usage_snapshots_for_candidate_plans(
 pub(in super::super) enum CandidateExecutionResult {
     Handled,
     Exhausted {
-        request: Request,
+        request: Box<Request>,
         attempted_account_ids: Vec<String>,
         skipped_cooldown: usize,
         skipped_inflight: usize,
@@ -261,7 +261,7 @@ pub(in super::super) fn execute_candidate_sequence(
         if deadline::is_expired(request_deadline) {
             let request = request
                 .take()
-                .expect("request should be available before timeout response");
+                .ok_or_else(|| "request already consumed before timeout response".to_string())?;
             respond_total_timeout(
                 request,
                 context,
@@ -421,9 +421,9 @@ pub(in super::super) fn execute_candidate_sequence(
                     }
                     continue;
                 }
-                let request = request
-                    .take()
-                    .expect("request should be available before terminal response");
+                let request = request.take().ok_or_else(|| {
+                    "request already consumed before terminal response".to_string()
+                })?;
                 return respond_terminal_attempt(
                     request,
                     context,
@@ -486,9 +486,10 @@ pub(in super::super) fn execute_candidate_sequence(
                             status_code,
                             message,
                         } => {
-                            let request = request
-                                .take()
-                                .expect("request should be available before terminal response");
+                            let request = request.take().ok_or_else(|| {
+                                "request already consumed before retry terminal response"
+                                    .to_string()
+                            })?;
                             return respond_terminal_attempt(
                                 request,
                                 context,
@@ -504,12 +505,12 @@ pub(in super::super) fn execute_candidate_sequence(
                         }
                     }
                 }
-                let request = request
-                    .take()
-                    .expect("request should be available before terminal response");
-                let guard = inflight_guard
-                    .take()
-                    .expect("inflight guard should be available before terminal response");
+                let request = request.take().ok_or_else(|| {
+                    "request already consumed before upstream response".to_string()
+                })?;
+                let guard = inflight_guard.take().ok_or_else(|| {
+                    "inflight guard already consumed before upstream response".to_string()
+                })?;
                 let response_status = resp.status().as_u16();
                 match finalize_upstream_response(
                     request,
@@ -561,8 +562,10 @@ pub(in super::super) fn execute_candidate_sequence(
     }
 
     Ok(CandidateExecutionResult::Exhausted {
-        request: request
-            .expect("request should still exist when no candidate handled the response"),
+        request: Box::new(
+            request
+                .ok_or_else(|| "request already consumed after candidate exhaustion".to_string())?,
+        ),
         attempted_account_ids,
         skipped_cooldown,
         skipped_inflight,

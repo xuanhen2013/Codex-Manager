@@ -453,7 +453,7 @@ pub(crate) fn apply_gateway_route_strategy_to_aggregate_candidates(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let preserves_head = preferred_id
-        .and_then(|preferred_id| candidates.first().map(|first| (preferred_id, first)))
+        .zip(candidates.first())
         .is_some_and(|(preferred_id, first)| first.id == preferred_id);
 
     if preserves_head {
@@ -486,7 +486,7 @@ pub(crate) fn preview_gateway_route_strategy_to_aggregate_candidates(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let preserves_head = preferred_id
-        .and_then(|preferred_id| candidates.first().map(|first| (preferred_id, first)))
+        .zip(candidates.first())
         .is_some_and(|(preferred_id, first)| first.id == preferred_id);
 
     if preserves_head {
@@ -1005,9 +1005,9 @@ pub(in super::super) fn proxy_aggregate_request(
         for attempt_idx in 0..=AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
             if super::super::support::deadline::is_expired(request_deadline) {
                 let message = "aggregate api request timeout".to_string();
-                let request = request
-                    .take()
-                    .expect("request should still be available for timeout response");
+                let request = request.take().ok_or_else(|| {
+                    "aggregate api request already consumed before timeout response".to_string()
+                })?;
                 super::super::super::record_gateway_request_outcome(
                     path,
                     504,
@@ -1103,10 +1103,13 @@ pub(in super::super) fn proxy_aggregate_request(
                 rewritten_body
             };
 
+            let request_ref = request.as_ref().ok_or_else(|| {
+                "aggregate api request already consumed before upstream attempt".to_string()
+            })?;
             let builder = if bridge_responses_to_anthropic {
                 build_anthropic_bridge_aggregate_api_request(
                     &client,
-                    request.as_ref().expect("request should still be available"),
+                    request_ref,
                     method,
                     url.clone(),
                     &upstream_body,
@@ -1119,7 +1122,7 @@ pub(in super::super) fn proxy_aggregate_request(
             } else {
                 build_aggregate_api_request(
                     &client,
-                    request.as_ref().expect("request should still be available"),
+                    request_ref,
                     method,
                     url.clone(),
                     &upstream_body,
@@ -1196,10 +1199,11 @@ pub(in super::super) fn proxy_aggregate_request(
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
             let passthrough_sse_protocol =
                 resolve_passthrough_sse_protocol(path, response_adapter_for_candidate);
+            let request = request.take().ok_or_else(|| {
+                "aggregate api request already consumed before bridge".to_string()
+            })?;
             let bridge = super::super::super::respond_with_upstream(
-                request
-                    .take()
-                    .expect("request should be available before bridge"),
+                request,
                 GatewayUpstreamResponse::Blocking(upstream),
                 inflight_guard,
                 response_adapter_for_candidate,
@@ -1253,7 +1257,7 @@ pub(in super::super) fn proxy_aggregate_request(
             let status_code =
                 bridge
                     .delivered_status_code
-                    .unwrap_or_else(|| if bridge_ok { 200 } else { 502 });
+                    .unwrap_or(if bridge_ok { 200 } else { 502 });
             let status_code = if final_error.is_some() && status_code < 400 {
                 502
             } else {
@@ -1334,9 +1338,9 @@ pub(in super::super) fn proxy_aggregate_request(
     let message =
         last_attempt_error.unwrap_or_else(|| "aggregate api upstream response failed".to_string());
     let status_code = last_failure_status;
-    let request = request
-        .take()
-        .expect("request should still be available for failure response");
+    let request = request.take().ok_or_else(|| {
+        "aggregate api request already consumed before failure response".to_string()
+    })?;
     super::super::super::record_gateway_request_outcome(path, status_code, Some("aggregate_api"));
     super::super::super::trace_log::log_request_final(
         trace_id,
