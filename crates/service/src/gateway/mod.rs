@@ -390,8 +390,10 @@ pub(crate) use runtime_config::upstream_client;
 pub(crate) use runtime_config::{account_max_inflight_limit, set_account_max_inflight_limit};
 use runtime_config::{
     async_upstream_client_for_account, fresh_async_upstream_client_for_account,
-    fresh_upstream_client_for_account, request_gate_wait_timeout, trace_body_preview_max_bytes,
-    upstream_client_for_account, upstream_stream_timeout, upstream_total_timeout,
+    fresh_upstream_client_for_account, prepare_upstream_client_for_account,
+    prepare_upstream_client_for_aggregate_api_candidate, request_gate_wait_timeout,
+    trace_body_preview_max_bytes, upstream_client_for_account,
+    upstream_client_for_aggregate_api_candidate, upstream_stream_timeout, upstream_total_timeout,
     DEFAULT_GATEWAY_DEBUG,
 };
 use selection::collect_gateway_candidates;

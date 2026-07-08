@@ -2,6 +2,7 @@ use codexmanager_core::auth::DEFAULT_ORIGINATOR;
 use codexmanager_core::auth::{DEFAULT_CLIENT_ID, DEFAULT_ISSUER};
 use reqwest::blocking::Client;
 use reqwest::Proxy;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
@@ -11,6 +12,11 @@ static ASYNC_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new(
 static RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<Client>> = OnceLock::new();
 static ASYNC_RETRY_UPSTREAM_CLIENT: OnceLock<RwLock<reqwest::Client>> = OnceLock::new();
 static UPSTREAM_CLIENT_POOL: OnceLock<RwLock<UpstreamClientPool>> = OnceLock::new();
+static ACCOUNT_CANDIDATE_CLIENTS: OnceLock<
+    RwLock<HashMap<AccountCandidateClientKey, AccountCandidateClients>>,
+> = OnceLock::new();
+static AGGREGATE_CANDIDATE_CLIENTS: OnceLock<RwLock<HashMap<AggregateCandidateClientKey, Client>>> =
+    OnceLock::new();
 #[cfg(test)]
 static UPSTREAM_CLIENT_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
@@ -71,6 +77,7 @@ const DEFAULT_CODEX_IMAGE_MAIN_MODEL: &str = "gpt-5.4-mini";
 const DEFAULT_CODEX_IMAGE_TOOL_MODEL: &str = "gpt-image-2";
 const DEFAULT_CODEX_USER_AGENT_VERSION: &str = "0.130.0";
 const MAX_UPSTREAM_PROXY_POOL_SIZE: usize = 5;
+const MAX_CANDIDATE_CLIENT_CACHE_ENTRIES: usize = 512;
 
 const ENV_REQUEST_GATE_WAIT_TIMEOUT_MS: &str = "CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS";
 const ENV_TRACE_BODY_PREVIEW_MAX_BYTES: &str = "CODEXMANAGER_TRACE_BODY_PREVIEW_MAX_BYTES";
@@ -103,10 +110,58 @@ pub(crate) const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residenc
 #[derive(Default, Clone)]
 struct UpstreamClientPool {
     proxies: Vec<String>,
-    clients: Vec<Client>,
-    async_clients: Vec<reqwest::Client>,
     retry_clients: Vec<Client>,
     async_retry_clients: Vec<reqwest::Client>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AccountCandidateClientKey {
+    account_id: String,
+    proxy_profile: Option<String>,
+}
+
+impl AccountCandidateClientKey {
+    fn new(account_id: &str, proxy_profile: Option<String>) -> Self {
+        Self {
+            account_id: account_id.trim().to_string(),
+            proxy_profile,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AccountCandidateClients {
+    blocking: Client,
+    async_client: reqwest::Client,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AggregateCandidateClientKey {
+    aggregate_api_id: String,
+    url: String,
+    proxy_profile: Option<String>,
+}
+
+impl AggregateCandidateClientKey {
+    fn new(
+        aggregate_api_id: &str,
+        url: &str,
+        proxy_profile: Option<String>,
+    ) -> Result<Self, String> {
+        let aggregate_api_id = aggregate_api_id.trim();
+        if aggregate_api_id.is_empty() {
+            return Err("aggregate api id is required".to_string());
+        }
+        let url = url.trim();
+        if url.is_empty() {
+            return Err("aggregate api url is required".to_string());
+        }
+        Ok(Self {
+            aggregate_api_id: aggregate_api_id.to_string(),
+            url: url.to_string(),
+            proxy_profile,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,28 +171,6 @@ pub(crate) struct ModelForwardRule {
 }
 
 impl UpstreamClientPool {
-    /// 函数 `client_for_account`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - self: 参数 self
-    /// - account_id: 参数 account_id
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    fn client_for_account(&self, account_id: &str) -> Option<&Client> {
-        let idx = stable_proxy_index(account_id, self.clients.len())?;
-        self.clients.get(idx)
-    }
-
-    fn async_client_for_account(&self, account_id: &str) -> Option<&reqwest::Client> {
-        let idx = stable_proxy_index(account_id, self.async_clients.len())?;
-        self.async_clients.get(idx)
-    }
-
     fn retry_client_for_account(&self, account_id: &str) -> Option<&Client> {
         let idx = stable_proxy_index(account_id, self.retry_clients.len())?;
         self.retry_clients.get(idx)
@@ -195,11 +228,21 @@ pub(crate) fn upstream_client() -> Client {
 /// 返回函数执行结果
 pub(crate) fn upstream_client_for_account(account_id: &str) -> Client {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(upstream_client)
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return upstream_client();
+    }
+    account_candidate_clients_for_account(account_id).blocking
+}
+
+pub(crate) fn prepare_upstream_client_for_account(account_id: &str) -> Result<(), String> {
+    ensure_runtime_config_loaded();
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return Err("account id is required".to_string());
+    }
+    let _ = account_candidate_clients_for_account(account_id);
+    Ok(())
 }
 
 /// 函数 `fresh_upstream_client_for_account`
@@ -224,11 +267,11 @@ pub(crate) fn fresh_upstream_client_for_account(account_id: &str) -> Client {
 
 pub(crate) fn async_upstream_client_for_account(account_id: &str) -> reqwest::Client {
     ensure_runtime_config_loaded();
-    let cached =
-        crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool")
-            .async_client_for_account(account_id)
-            .cloned();
-    cached.unwrap_or_else(async_upstream_client)
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return async_upstream_client();
+    }
+    account_candidate_clients_for_account(account_id).async_client
 }
 
 fn async_upstream_client() -> reqwest::Client {
@@ -251,6 +294,100 @@ pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String>
         return Some(proxy_url.to_string());
     }
     current_upstream_proxy_url()
+}
+
+pub(crate) fn upstream_client_for_aggregate_api_candidate(
+    aggregate_api_id: &str,
+    url: &str,
+) -> Client {
+    ensure_runtime_config_loaded();
+    let Ok(key) = aggregate_candidate_client_key(aggregate_api_id, url) else {
+        return upstream_client();
+    };
+    aggregate_candidate_client_for_key(key)
+}
+
+pub(crate) fn prepare_upstream_client_for_aggregate_api_candidate(
+    aggregate_api_id: &str,
+    url: &str,
+) -> Result<(), String> {
+    ensure_runtime_config_loaded();
+    let key = aggregate_candidate_client_key(aggregate_api_id, url)?;
+    let _ = aggregate_candidate_client_for_key(key);
+    Ok(())
+}
+
+fn account_candidate_clients_for_account(account_id: &str) -> AccountCandidateClients {
+    let proxy_profile = account_candidate_proxy_profile(account_id);
+    let key = AccountCandidateClientKey::new(account_id, proxy_profile);
+    if let Some(clients) = crate::lock_utils::read_recover(
+        account_candidate_clients_lock(),
+        "account_candidate_clients",
+    )
+    .get(&key)
+    .cloned()
+    {
+        return clients;
+    }
+
+    let clients = AccountCandidateClients {
+        blocking: build_upstream_client_with_proxy(key.proxy_profile.as_deref()),
+        async_client: build_async_upstream_client_with_proxy(key.proxy_profile.as_deref()),
+    };
+    let mut cache = crate::lock_utils::write_recover(
+        account_candidate_clients_lock(),
+        "account_candidate_clients",
+    );
+    if let Some(existing) = cache.get(&key).cloned() {
+        return existing;
+    }
+    if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(key, clients.clone());
+    clients
+}
+
+fn account_candidate_proxy_profile(account_id: &str) -> Option<String> {
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Some(proxy_url.to_string());
+    }
+    drop(pool);
+    current_upstream_proxy_url()
+}
+
+fn aggregate_candidate_client_key(
+    aggregate_api_id: &str,
+    url: &str,
+) -> Result<AggregateCandidateClientKey, String> {
+    AggregateCandidateClientKey::new(aggregate_api_id, url, current_upstream_proxy_url())
+}
+
+fn aggregate_candidate_client_for_key(key: AggregateCandidateClientKey) -> Client {
+    if let Some(client) = crate::lock_utils::read_recover(
+        aggregate_candidate_clients_lock(),
+        "aggregate_candidate_clients",
+    )
+    .get(&key)
+    .cloned()
+    {
+        return client;
+    }
+
+    let client = build_upstream_client_with_proxy(key.proxy_profile.as_deref());
+    let mut cache = crate::lock_utils::write_recover(
+        aggregate_candidate_clients_lock(),
+        "aggregate_candidate_clients",
+    );
+    if let Some(existing) = cache.get(&key).cloned() {
+        return existing;
+    }
+    if cache.len() >= MAX_CANDIDATE_CLIENT_CACHE_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(key, client.clone());
+    client
 }
 
 /// 函数 `upstream_connect_timeout_cached`
@@ -1411,6 +1548,16 @@ fn upstream_client_pool_lock() -> &'static RwLock<UpstreamClientPool> {
     UPSTREAM_CLIENT_POOL.get_or_init(|| RwLock::new(build_upstream_client_pool()))
 }
 
+fn account_candidate_clients_lock(
+) -> &'static RwLock<HashMap<AccountCandidateClientKey, AccountCandidateClients>> {
+    ACCOUNT_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn aggregate_candidate_clients_lock(
+) -> &'static RwLock<HashMap<AggregateCandidateClientKey, Client>> {
+    AGGREGATE_CANDIDATE_CLIENTS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// 函数 `refresh_upstream_clients_from_runtime_config`
 ///
 /// 作者: gaohongshun
@@ -1453,6 +1600,22 @@ fn refresh_upstream_clients_from_runtime_config() {
     let mut pool_lock =
         crate::lock_utils::write_recover(upstream_client_pool_lock(), "upstream_client_pool");
     *pool_lock = pool;
+    drop(pool_lock);
+
+    clear_candidate_client_caches();
+}
+
+fn clear_candidate_client_caches() {
+    crate::lock_utils::write_recover(
+        account_candidate_clients_lock(),
+        "account_candidate_clients",
+    )
+    .clear();
+    crate::lock_utils::write_recover(
+        aggregate_candidate_clients_lock(),
+        "aggregate_candidate_clients",
+    )
+    .clear();
 }
 
 /// 函数 `build_upstream_client_pool`
@@ -1475,8 +1638,6 @@ fn build_upstream_client_pool() -> UpstreamClientPool {
         return UpstreamClientPool::default();
     }
     let mut proxies = Vec::with_capacity(raw_proxies.len());
-    let mut clients = Vec::with_capacity(raw_proxies.len());
-    let mut async_clients = Vec::with_capacity(raw_proxies.len());
     let mut retry_clients = Vec::with_capacity(raw_proxies.len());
     let mut async_retry_clients = Vec::with_capacity(raw_proxies.len());
     for proxy in raw_proxies.into_iter() {
@@ -1488,27 +1649,21 @@ fn build_upstream_client_pool() -> UpstreamClientPool {
             );
             continue;
         }
-        let client = build_upstream_client_with_proxy(Some(proxy.as_str()));
-        let async_client = build_async_upstream_client_with_proxy(Some(proxy.as_str()));
         let retry_client = build_upstream_client_with_proxy(Some(proxy.as_str()));
         let async_retry_client = build_async_upstream_client_with_proxy(Some(proxy.as_str()));
         proxies.push(proxy);
-        clients.push(client);
-        async_clients.push(async_client);
         retry_clients.push(retry_client);
         async_retry_clients.push(async_retry_client);
     }
-    if clients.is_empty() {
+    if retry_clients.is_empty() {
         UpstreamClientPool::default()
     } else {
         log::info!(
             "event=gateway_proxy_pool_initialized size={}",
-            clients.len()
+            retry_clients.len()
         );
         UpstreamClientPool {
             proxies,
-            clients,
-            async_clients,
             retry_clients,
             async_retry_clients,
         }

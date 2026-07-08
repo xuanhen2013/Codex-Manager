@@ -238,14 +238,10 @@ fn upstream_client_pool_builds_matching_blocking_and_async_clients() {
 
     let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "test_pool");
     assert_eq!(pool.proxies.len(), 2);
-    assert_eq!(pool.clients.len(), pool.proxies.len());
-    assert_eq!(pool.async_clients.len(), pool.proxies.len());
     assert_eq!(pool.retry_clients.len(), pool.proxies.len());
     assert_eq!(pool.async_retry_clients.len(), pool.proxies.len());
 
     let account_id = "account-42";
-    assert!(pool.client_for_account(account_id).is_some());
-    assert!(pool.async_client_for_account(account_id).is_some());
     assert!(pool.retry_client_for_account(account_id).is_some());
     assert!(pool.async_retry_client_for_account(account_id).is_some());
     assert_eq!(
@@ -327,6 +323,80 @@ fn upstream_client_for_account_reuses_cached_proxy_pool_retry_client() {
     assert_eq!(upstream_client_build_count_for_test(), after_first);
     drop(fresh);
     drop(another_fresh);
+}
+
+#[test]
+fn account_candidate_client_prepare_reuses_cached_account_clients() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy_guard = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _proxy_list_guard = EnvGuard::clear(ENV_PROXY_LIST);
+
+    reload_from_env();
+    let _ = upstream_total_timeout();
+    reset_upstream_client_build_count_for_test();
+    reset_async_upstream_client_build_count_for_test();
+
+    prepare_upstream_client_for_account("account-42").expect("prepare account client");
+    assert_eq!(upstream_client_build_count_for_test(), 1);
+    assert_eq!(async_upstream_client_build_count_for_test(), 1);
+
+    prepare_upstream_client_for_account("account-42").expect("prepare account client again");
+    let blocking = upstream_client_for_account("account-42");
+    let async_client = async_upstream_client_for_account("account-42");
+    assert_eq!(upstream_client_build_count_for_test(), 1);
+    assert_eq!(async_upstream_client_build_count_for_test(), 1);
+    drop(blocking);
+    drop(async_client);
+
+    prepare_upstream_client_for_account("account-43").expect("prepare second account client");
+    assert_eq!(upstream_client_build_count_for_test(), 2);
+    assert_eq!(async_upstream_client_build_count_for_test(), 2);
+}
+
+#[test]
+fn aggregate_candidate_client_cache_keys_include_id_and_url() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy_guard = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _proxy_list_guard = EnvGuard::clear(ENV_PROXY_LIST);
+
+    reload_from_env();
+    let _ = upstream_total_timeout();
+    reset_upstream_client_build_count_for_test();
+
+    prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1")
+        .expect("prepare aggregate client");
+    assert_eq!(upstream_client_build_count_for_test(), 1);
+
+    prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1")
+        .expect("prepare same aggregate client");
+    let client = upstream_client_for_aggregate_api_candidate("agg-a", "https://agg.example/v1");
+    assert_eq!(upstream_client_build_count_for_test(), 1);
+    drop(client);
+
+    prepare_upstream_client_for_aggregate_api_candidate("agg-a", "https://other.example/v1")
+        .expect("prepare aggregate client with changed url");
+    assert_eq!(upstream_client_build_count_for_test(), 2);
+
+    prepare_upstream_client_for_aggregate_api_candidate("agg-b", "https://agg.example/v1")
+        .expect("prepare aggregate client with changed id");
+    assert_eq!(upstream_client_build_count_for_test(), 3);
+}
+
+#[test]
+fn aggregate_candidate_client_key_includes_proxy_profile() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy_guard = EnvGuard::clear(ENV_UPSTREAM_PROXY_URL);
+    let _proxy_list_guard = EnvGuard::clear(ENV_PROXY_LIST);
+
+    reload_from_env();
+    let direct_key =
+        aggregate_candidate_client_key("agg-a", "https://agg.example/v1").expect("direct key");
+
+    set_upstream_proxy_url(Some("http://127.0.0.1:7890")).expect("set proxy");
+    let proxied_key =
+        aggregate_candidate_client_key("agg-a", "https://agg.example/v1").expect("proxied key");
+
+    assert_ne!(direct_key, proxied_key);
 }
 
 #[test]

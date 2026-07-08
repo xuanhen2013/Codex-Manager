@@ -118,6 +118,26 @@ fn record_failover_attempt(
     *last_attempt_error = attempt_trace.last_attempt_error.take();
 }
 
+fn prepare_next_account_candidate_client(
+    ordered_account_ids: &[String],
+    candidate_idx: usize,
+    trace_id: &str,
+) {
+    let Some(next_account_id) = ordered_account_ids.get(candidate_idx + 1) else {
+        return;
+    };
+    if let Err(err) =
+        super::super::super::prepare_upstream_client_for_account(next_account_id.as_str())
+    {
+        log::warn!(
+            "event=gateway_account_candidate_client_prepare_failed trace_id={} account_id={} err={}",
+            trace_id,
+            next_account_id,
+            err
+        );
+    }
+}
+
 fn is_challenge_failover_error(error: Option<&str>) -> bool {
     error
         .map(str::trim)
@@ -233,6 +253,10 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
     let usage_snapshots = usage_snapshots_for_candidate_plans(storage, &candidates);
+    let ordered_account_ids = candidates
+        .iter()
+        .map(|(account, _)| account.id.clone())
+        .collect::<Vec<_>>();
     for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
         if deadline::is_expired(request_deadline) {
             let request = request
@@ -300,6 +324,7 @@ pub(in super::super) fn execute_candidate_sequence(
             }
             continue;
         }
+        prepare_next_account_candidate_client(ordered_account_ids.as_slice(), idx, trace_id);
         attempted_account_ids.push(account.id.clone());
 
         let request_ref = request

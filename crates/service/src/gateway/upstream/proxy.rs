@@ -545,6 +545,10 @@ fn proxy_with_aggregate_candidates(
         model_for_log,
         aggregate_api_id,
     );
+    super::protocol::aggregate_api::prepare_first_aggregate_candidate_client(
+        aggregate_api_candidates.as_slice(),
+        trace_id,
+    );
 
     super::protocol::aggregate_api::proxy_aggregate_request(
         super::protocol::aggregate_api::AggregateProxyRequest {
@@ -580,6 +584,47 @@ fn proxy_with_aggregate_candidates(
             started_at,
         },
     )
+}
+
+fn resolve_hybrid_aggregate_candidates_for_prepare(
+    storage: &codexmanager_core::storage::Storage,
+    protocol_type: &str,
+    aggregate_api_id: Option<&str>,
+    key_id: &str,
+    model_for_log: Option<&str>,
+    trace_id: &str,
+) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
+    let candidates = resolve_aggregate_candidates_for_route(
+        storage,
+        protocol_type,
+        aggregate_api_id,
+        model_for_log,
+    )?;
+    let mut preview = candidates.clone();
+    super::protocol::aggregate_api::preview_gateway_route_strategy_to_aggregate_candidates(
+        &mut preview,
+        key_id,
+        model_for_log,
+        aggregate_api_id,
+    );
+    super::protocol::aggregate_api::prepare_first_aggregate_candidate_client(
+        preview.as_slice(),
+        trace_id,
+    );
+    Ok(candidates)
+}
+
+fn take_or_resolve_aggregate_candidates(
+    prepared: &mut Option<Result<Vec<codexmanager_core::storage::AggregateApi>, String>>,
+    storage: &codexmanager_core::storage::Storage,
+    protocol_type: &str,
+    aggregate_api_id: Option<&str>,
+    model_for_log: Option<&str>,
+) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
+    if let Some(result) = prepared.take() {
+        return result;
+    }
+    resolve_aggregate_candidates_for_route(storage, protocol_type, aggregate_api_id, model_for_log)
 }
 
 /// 函数 `proxy_validated_request`
@@ -773,6 +818,7 @@ pub(in super::super) fn proxy_validated_request(
         }
     }
 
+    let mut prepared_hybrid_aggregate_candidates = None;
     let (request, mut candidates) = match prepare_candidates_for_proxy(
         request,
         &storage,
@@ -793,7 +839,8 @@ pub(in super::super) fn proxy_validated_request(
             candidates,
         } => (request, candidates),
         CandidatePrecheckResult::Empty { request } => {
-            match resolve_aggregate_candidates_for_route(
+            match take_or_resolve_aggregate_candidates(
+                &mut prepared_hybrid_aggregate_candidates,
                 &storage,
                 protocol_type.as_str(),
                 aggregate_api_id.as_deref(),
@@ -873,6 +920,24 @@ pub(in super::super) fn proxy_validated_request(
         trace_id.as_str(),
     );
     let base = setup.upstream_base.as_str();
+    if should_fallback_to_aggregate_after_account_exhaustion(execution_plan) {
+        prepared_hybrid_aggregate_candidates =
+            Some(resolve_hybrid_aggregate_candidates_for_prepare(
+                &storage,
+                protocol_type.as_str(),
+                aggregate_api_id.as_deref(),
+                key_id.as_str(),
+                model_for_log.as_deref(),
+                trace_id.as_str(),
+            ));
+        if let Some(Err(err)) = prepared_hybrid_aggregate_candidates.as_ref() {
+            log::debug!(
+                "event=gateway_hybrid_aggregate_candidate_prepare_deferred trace_id={} err={}",
+                trace_id,
+                err
+            );
+        }
+    }
 
     let context = GatewayUpstreamExecutionContext::new(
         &trace_id,
@@ -967,7 +1032,8 @@ pub(in super::super) fn proxy_validated_request(
         last_attempt_error.as_deref(),
     );
     if should_fallback_to_aggregate_after_account_exhaustion(execution_plan) {
-        match resolve_aggregate_candidates_for_route(
+        match take_or_resolve_aggregate_candidates(
+            &mut prepared_hybrid_aggregate_candidates,
             &storage,
             protocol_type.as_str(),
             aggregate_api_id.as_deref(),

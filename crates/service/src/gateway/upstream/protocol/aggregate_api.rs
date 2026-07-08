@@ -469,6 +469,84 @@ pub(crate) fn apply_gateway_route_strategy_to_aggregate_candidates(
     }
 }
 
+pub(crate) fn preview_gateway_route_strategy_to_aggregate_candidates(
+    candidates: &mut [AggregateApi],
+    key_id: &str,
+    model: Option<&str>,
+    preferred_aggregate_api_id: Option<&str>,
+) {
+    if candidates.len() <= 1 {
+        return;
+    }
+    if crate::gateway::current_route_strategy() != "balanced" {
+        return;
+    }
+
+    let preferred_id = preferred_aggregate_api_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let preserves_head = preferred_id
+        .and_then(|preferred_id| candidates.first().map(|first| (preferred_id, first)))
+        .is_some_and(|(preferred_id, first)| first.id == preferred_id);
+
+    if preserves_head {
+        if candidates.len() > 1 {
+            super::super::super::route_hint::preview_balanced_round_robin(
+                &mut candidates[1..],
+                key_id,
+                model,
+            );
+        }
+    } else {
+        super::super::super::route_hint::preview_balanced_round_robin(candidates, key_id, model);
+    }
+}
+
+pub(crate) fn prepare_first_aggregate_candidate_client(
+    candidates: &[AggregateApi],
+    trace_id: &str,
+) {
+    if let Some(candidate) = candidates.first() {
+        prepare_aggregate_candidate_client(candidate, trace_id, "first");
+    }
+}
+
+fn prepare_next_aggregate_candidate_client(
+    ordered_candidates: &[(String, String)],
+    candidate_idx: usize,
+    trace_id: &str,
+) {
+    let Some((candidate_id, candidate_url)) = ordered_candidates.get(candidate_idx + 1) else {
+        return;
+    };
+    if let Err(err) = super::super::super::prepare_upstream_client_for_aggregate_api_candidate(
+        candidate_id.as_str(),
+        candidate_url.as_str(),
+    ) {
+        log::warn!(
+            "event=gateway_aggregate_candidate_client_prepare_failed trace_id={} aggregate_api_id={} phase=next err={}",
+            trace_id,
+            candidate_id,
+            err
+        );
+    }
+}
+
+fn prepare_aggregate_candidate_client(candidate: &AggregateApi, trace_id: &str, phase: &str) {
+    if let Err(err) = super::super::super::prepare_upstream_client_for_aggregate_api_candidate(
+        candidate.id.as_str(),
+        candidate.url.as_str(),
+    ) {
+        log::warn!(
+            "event=gateway_aggregate_candidate_client_prepare_failed trace_id={} aggregate_api_id={} phase={} err={}",
+            trace_id,
+            candidate.id,
+            phase,
+            err
+        );
+    }
+}
+
 /// 函数 `normalize_provider_type_value`
 ///
 /// 作者: gaohongshun
@@ -859,7 +937,6 @@ pub(in super::super) fn proxy_aggregate_request(
         return Ok(());
     }
 
-    let client = super::super::super::upstream_client();
     let mut request = Some(request);
     let mut attempted_aggregate_api_ids = Vec::new();
     let mut last_attempt_url: Option<String> = None;
@@ -872,13 +949,26 @@ pub(in super::super) fn proxy_aggregate_request(
     let total_candidates = aggregate_api_candidates.len();
     let secrets_by_candidate_id =
         aggregate_api_secrets_by_candidate_id(storage, &aggregate_api_candidates)?;
+    let ordered_candidates = aggregate_api_candidates
+        .iter()
+        .map(|candidate| (candidate.id.clone(), candidate.url.clone()))
+        .collect::<Vec<_>>();
     for (candidate_idx, candidate) in aggregate_api_candidates.into_iter().enumerate() {
+        prepare_next_aggregate_candidate_client(
+            ordered_candidates.as_slice(),
+            candidate_idx,
+            trace_id,
+        );
         attempted_aggregate_api_ids.push(candidate.id.clone());
         let candidate_id = candidate.id.clone();
         let candidate_upstream_model =
             aggregate_upstream_model_for_log(&candidate, model_for_log).map(str::to_string);
         let candidate_supplier_name = candidate.supplier_name.clone();
         let candidate_url = candidate.url.clone();
+        let client = super::super::super::upstream_client_for_aggregate_api_candidate(
+            candidate_id.as_str(),
+            candidate_url.as_str(),
+        );
         last_attempt_id = Some(candidate_id.clone());
         last_attempt_upstream_model = candidate_upstream_model.clone();
         let Some(secret) = secrets_by_candidate_id.get(candidate.id.as_str()) else {
@@ -1413,6 +1503,52 @@ mod bridge_tests {
             None,
         );
         assert_eq!(ids(&second), vec!["agg-b", "agg-c", "agg-a"]);
+
+        if let Some(value) = previous {
+            std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);
+        } else {
+            std::env::remove_var("CODEXMANAGER_ROUTE_STRATEGY");
+        }
+        crate::gateway::reload_runtime_config_from_env();
+    }
+
+    #[test]
+    fn preview_route_strategy_does_not_advance_balanced_aggregate_order() {
+        let _guard = crate::test_env_guard();
+        let previous = std::env::var("CODEXMANAGER_ROUTE_STRATEGY").ok();
+        std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", "balanced");
+        crate::gateway::reload_runtime_config_from_env();
+
+        let key_id = "gk-aggregate-preview-route-strategy";
+        let model = Some("gpt-5.4-mini");
+        let mut preview = vec![
+            candidate("agg-a", 0),
+            candidate("agg-b", 1),
+            candidate("agg-c", 2),
+        ];
+        preview_gateway_route_strategy_to_aggregate_candidates(&mut preview, key_id, model, None);
+        assert_eq!(ids(&preview), vec!["agg-a", "agg-b", "agg-c"]);
+
+        let mut first_apply = vec![
+            candidate("agg-a", 0),
+            candidate("agg-b", 1),
+            candidate("agg-c", 2),
+        ];
+        apply_gateway_route_strategy_to_aggregate_candidates(&mut first_apply, key_id, model, None);
+        assert_eq!(ids(&first_apply), vec!["agg-a", "agg-b", "agg-c"]);
+
+        let mut second_apply = vec![
+            candidate("agg-a", 0),
+            candidate("agg-b", 1),
+            candidate("agg-c", 2),
+        ];
+        apply_gateway_route_strategy_to_aggregate_candidates(
+            &mut second_apply,
+            key_id,
+            model,
+            None,
+        );
+        assert_eq!(ids(&second_apply), vec!["agg-b", "agg-c", "agg-a"]);
 
         if let Some(value) = previous {
             std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);
