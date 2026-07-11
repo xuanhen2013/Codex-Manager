@@ -5,8 +5,7 @@ use crate::gateway::{
     apply_request_overrides_with_service_tier_and_prompt_cache_key_scope,
 };
 use axum::http::{HeaderMap, HeaderValue};
-use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
-use codexmanager_core::storage::Storage;
+use codexmanager_core::storage::{ManagedModelV2Upsert, Storage};
 use serde_json::Value;
 
 const COMPACT_API_PATH_ENV: &str = "CODEXMANAGER_COMPACT_API_PATH";
@@ -1479,7 +1478,7 @@ fn deferred_passthrough_keeps_fast_until_codex_candidate_is_selected() {
     assert_eq!(effective_service_tier_for_log.as_deref(), Some("fast"));
 }
 
-/// 函数 `anthropic_model_must_exist_in_cached_model_options`
+/// 函数 `anthropic_model_must_exist_in_v2_catalog`
 ///
 /// 作者: gaohongshun
 ///
@@ -1491,28 +1490,26 @@ fn deferred_passthrough_keeps_fast_until_codex_candidate_is_selected() {
 /// # 返回
 /// 无
 #[test]
-fn anthropic_model_must_exist_in_cached_model_options() {
+fn anthropic_model_must_exist_in_v2_catalog() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
-    crate::apikey_models::save_model_options_with_storage(
-        &storage,
-        &ModelsResponse {
-            models: vec![
-                ModelInfo {
-                    slug: "claude-sonnet-4".to_string(),
-                    display_name: "claude-sonnet-4".to_string(),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    slug: "gpt-5.4-mini".to_string(),
-                    display_name: "gpt-5.4-mini".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        },
-    )
-    .expect("save model catalog");
+    let mut model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("read template model")
+        .expect("template model");
+    model.id.clear();
+    model.slug = "claude-sonnet-4".to_string();
+    model.display_name = "claude-sonnet-4".to_string();
+    model.origin = "custom".to_string();
+    model.builtin_revision = None;
+    model.user_edited = false;
+    model.routes.clear();
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model,
+        })
+        .expect("save V2 model catalog");
 
     assert!(ensure_anthropic_model_is_listed(
         &storage,

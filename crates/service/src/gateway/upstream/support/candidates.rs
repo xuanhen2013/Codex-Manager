@@ -1,17 +1,10 @@
 use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in super::super) enum CandidateSkipReason {
     Cooldown,
     Inflight,
-}
-
-fn account_source_ids_for_model(storage: &Storage, model: &str) -> Result<HashSet<String>, String> {
-    storage
-        .list_available_source_model_ids_by_upstream_model("openai_account", model)
-        .map(|ids| ids.into_iter().collect())
-        .map_err(|err| format!("list source models by upstream model failed: {err}"))
 }
 
 /// 函数 `prepare_gateway_candidates`
@@ -27,33 +20,15 @@ fn account_source_ids_for_model(storage: &Storage, model: &str) -> Result<HashSe
 /// 返回函数执行结果
 pub(crate) fn prepare_gateway_candidates(
     storage: &Storage,
-    request_model: Option<&str>,
+    _request_model: Option<&str>,
     account_plan_filter: Option<&str>,
     low_quota_mode: super::super::super::LowQuotaCandidateMode,
 ) -> Result<Vec<(Account, Token)>, String> {
-    let normalized_model = request_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let account_source_ids = if let Some(model) = normalized_model {
-        let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
-        let source_ids = account_source_ids_for_model(storage, model)?;
-        Some(source_ids.into_iter().collect::<Vec<_>>())
-    } else {
-        None
-    };
     // 中文注释：保持账号原始顺序（按账户排序字段）作为候选顺序，失败时再依次切下一个。
-    let mut candidates = if let Some(account_source_ids) = account_source_ids.as_deref() {
-        super::super::super::collect_gateway_candidates_for_accounts_with_low_quota_mode(
-            storage,
-            account_source_ids,
-            low_quota_mode,
-        )?
-    } else {
-        super::super::super::collect_gateway_candidates_with_low_quota_mode(
-            storage,
-            low_quota_mode,
-        )?
-    };
+    let mut candidates = super::super::super::collect_gateway_candidates_with_low_quota_mode(
+        storage,
+        low_quota_mode,
+    )?;
     let normalized_filter = account_plan_filter
         .map(str::trim)
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("all"));

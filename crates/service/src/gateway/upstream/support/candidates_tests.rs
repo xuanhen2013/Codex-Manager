@@ -32,6 +32,7 @@ fn insert_active_account_with_token(storage: &Storage, account_id: &str, sort: i
             last_refresh: now,
         })
         .expect("insert token");
+    crate::gateway::invalidate_candidate_cache();
 }
 
 fn upsert_account_source_model(storage: &Storage, account_id: &str, upstream_model: &str) {
@@ -96,6 +97,7 @@ fn prepare_gateway_candidates_accepts_direct_upstream_model_without_platform_map
             updated_at: now,
         })
         .expect("upsert source model");
+    crate::gateway::invalidate_candidate_cache();
 
     let candidates = super::prepare_gateway_candidates(
         &storage,
@@ -110,7 +112,7 @@ fn prepare_gateway_candidates_accepts_direct_upstream_model_without_platform_map
 }
 
 #[test]
-fn prepare_gateway_candidates_uses_direct_source_model_even_when_aggregate_mapping_exists() {
+fn prepare_gateway_candidates_uses_account_pool_despite_legacy_aggregate_mapping() {
     let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -159,7 +161,7 @@ fn prepare_gateway_candidates_uses_direct_source_model_even_when_aggregate_mappi
 }
 
 #[test]
-fn prepare_gateway_candidates_keeps_explicit_account_mapping_with_aggregate_mapping() {
+fn prepare_gateway_candidates_ignores_legacy_per_account_mapping() {
     let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -206,12 +208,20 @@ fn prepare_gateway_candidates_keeps_explicit_account_mapping_with_aggregate_mapp
     )
     .expect("prepare candidates");
 
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].0.id, "acc-explicit-route");
+    assert_eq!(
+        candidates
+            .into_iter()
+            .map(|(account, _token)| account.id)
+            .collect::<Vec<_>>(),
+        vec![
+            "acc-explicit-route".to_string(),
+            "acc-other-route".to_string()
+        ]
+    );
 }
 
 #[test]
-fn prepare_gateway_candidates_with_account_mapping_bypasses_global_candidate_cache() {
+fn prepare_gateway_candidates_reuses_complete_account_pool_cache() {
     let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -256,12 +266,15 @@ fn prepare_gateway_candidates_with_account_mapping_bypasses_global_candidate_cac
             .into_iter()
             .map(|(account, _token)| account.id)
             .collect::<Vec<_>>(),
-        vec!["acc-mapped-only".to_string()]
+        vec![
+            "acc-cached-other".to_string(),
+            "acc-mapped-only".to_string()
+        ]
     );
 }
 
 #[test]
-fn prepare_gateway_candidates_ignores_mapping_to_different_upstream_model() {
+fn prepare_gateway_candidates_does_not_filter_account_pool_by_legacy_mapping() {
     let _guard = crate::test_env_guard();
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -292,7 +305,8 @@ fn prepare_gateway_candidates_ignores_mapping_to_different_upstream_model() {
     )
     .expect("prepare candidates");
 
-    assert!(candidates.is_empty());
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].0.id, "acc-review-only");
 }
 
 /// 函数 `allow_openai_fallback_for_account_accepts_individual_plan_tiers`

@@ -152,89 +152,42 @@ fn model_route_error(
     let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    bootstrap_model_routes_for_plan(storage, execution_plan);
-    let model_exists = storage
-        .model_catalog_model_exists("default", model)
-        .map_err(|err| (500, format!("model_catalog_read_failed: {err}")))?;
-    if !model_exists {
+    let managed_model = storage
+        .get_enabled_model_v2(model)
+        .map_err(|err| (500, format!("model_catalog_v2_read_failed: {err}")))?;
+    let Some(managed_model) = managed_model else {
         return Err((404, format!("model_not_found: {model}")));
-    }
+    };
     if let Err(err) = crate::resolve_api_key_model_group_access(storage, key_id, model) {
         if err.contains("model_not_allowed") {
             return Err((403, err));
         }
         return Err((500, err));
     }
+    if crate::distribution_enabled_for_storage(storage)
+        && managed_model.price.price_status == "missing"
+    {
+        return Err((402, format!("model_price_missing: {model}")));
+    }
     let route_source_kinds = source_kinds_for_route(execution_plan);
-    let has_upstream_source_match =
-        direct_upstream_model_matches_route(storage, model, &route_source_kinds)
-            .map_err(|err| (500, format!("source_model_read_failed: {err}")))?;
-    if !has_upstream_source_match {
+    if !managed_model.routes.iter().any(|route| {
+        route.enabled
+            && route_source_kinds
+                .iter()
+                .any(|source_kind| route.source_kind == *source_kind)
+    }) {
         return Err((503, format!("model_unavailable: {model}")));
     }
     Ok(())
-}
-
-fn direct_upstream_model_matches_route(
-    storage: &codexmanager_core::storage::Storage,
-    model: &str,
-    source_kinds: &[&str],
-) -> Result<bool, String> {
-    for source_kind in source_kinds {
-        let ids = storage
-            .list_available_source_model_ids_by_upstream_model(source_kind, model)
-            .map_err(|err| err.to_string())?;
-        if !ids.is_empty() {
-            return Ok(true);
-        }
-        if *source_kind == "aggregate_api" && has_active_aggregate_model_override(storage)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn has_active_aggregate_model_override(
-    storage: &codexmanager_core::storage::Storage,
-) -> Result<bool, String> {
-    let apis = storage
-        .list_aggregate_apis()
-        .map_err(|err| err.to_string())?;
-    Ok(apis.iter().any(|api| {
-        api.status.trim().eq_ignore_ascii_case("active")
-            && api
-                .model_override
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
-    }))
-}
-
-fn bootstrap_model_routes_for_plan(
-    storage: &codexmanager_core::storage::Storage,
-    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
-) {
-    match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => {
-            let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
-        }
-        GatewayUpstreamRouteKind::AggregateApi => {
-            let _ = crate::apikey_models::bootstrap_aggregate_api_model_routes(storage);
-        }
-        GatewayUpstreamRouteKind::HybridAccountFirst => {
-            let _ = crate::apikey_models::bootstrap_account_pool_model_routes(storage, false);
-            let _ = crate::apikey_models::bootstrap_aggregate_api_model_routes(storage);
-        }
-    }
 }
 
 fn source_kinds_for_route(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
 ) -> Vec<&'static str> {
     match execution_plan.route_kind {
-        GatewayUpstreamRouteKind::AccountRotation => vec!["openai_account"],
+        GatewayUpstreamRouteKind::AccountRotation => vec!["account_pool"],
         GatewayUpstreamRouteKind::AggregateApi => vec!["aggregate_api"],
-        GatewayUpstreamRouteKind::HybridAccountFirst => vec!["openai_account", "aggregate_api"],
+        GatewayUpstreamRouteKind::HybridAccountFirst => vec!["account_pool", "aggregate_api"],
     }
 }
 
@@ -368,19 +321,29 @@ fn apply_aggregate_model_filter(
     else {
         return Ok(candidates);
     };
-    let source_ids = storage
-        .list_available_source_model_ids_by_upstream_model("aggregate_api", model)
-        .map_err(|err| format!("list aggregate source models failed: {err}"))?;
-    let allowed = source_ids
+    let managed_model = storage
+        .get_enabled_model_v2(model)
+        .map_err(|err| format!("read aggregate model routes V2 failed: {err}"))?
+        .ok_or_else(|| format!("model_not_found: {model}"))?;
+    let mut routes = std::collections::HashMap::new();
+    for route in managed_model
+        .routes
         .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    candidates.retain(|api| {
-        allowed.contains(&api.id)
-            || api
-                .model_override
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
+        .filter(|route| route.enabled && route.source_kind == "aggregate_api")
+    {
+        let replace = routes.get(&route.source_id).is_none_or(
+            |current: &codexmanager_core::storage::ModelRouteV2| route.priority > current.priority,
+        );
+        if replace {
+            routes.insert(route.source_id.clone(), route);
+        }
+    }
+    candidates.retain_mut(|api| {
+        let Some(route) = routes.get(&api.id) else {
+            return false;
+        };
+        api.model_override = Some(route.upstream_model.clone());
+        true
     });
     if candidates.is_empty() {
         Err(format!("model_unavailable: {model}"))
