@@ -7,12 +7,17 @@ use super::super::attempt_flow::transport::send_upstream_request;
 use super::super::attempt_flow::transport::UpstreamRequestContext;
 use super::super::GatewayUpstreamResponse;
 
-fn should_skip_codex_v1_alt_for_responses(alt_url: &str) -> bool {
-    reqwest::Url::parse(alt_url).ok().is_some_and(|url| {
-        url.path()
-            .to_ascii_lowercase()
-            .ends_with("/backend-api/codex/v1/responses")
-    })
+fn should_skip_codex_v1_alt_for_responses(
+    request_ctx: UpstreamRequestContext<'_>,
+    alt_url: &str,
+) -> bool {
+    request_ctx.protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
+        && reqwest::Url::parse(alt_url).ok().is_some_and(|url| {
+            url.path()
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+                .ends_with("/backend-api/codex/v1/responses")
+        })
 }
 
 pub(in super::super) enum AltPathRetryResult {
@@ -60,7 +65,7 @@ where
     if !matches!(status.as_u16(), 400 | 404) {
         return AltPathRetryResult::NotTriggered;
     }
-    if should_skip_codex_v1_alt_for_responses(alt_url) {
+    if should_skip_codex_v1_alt_for_responses(request_ctx, alt_url) {
         log::warn!(
             "event=gateway_upstream_alt_retry_skipped path={} status={} reason=responses_codex_v1_alt_blocked upstream_url={}",
             request_ctx.request_path,
