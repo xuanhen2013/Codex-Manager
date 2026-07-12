@@ -359,22 +359,31 @@ fn should_skip_image_generation_tool_for_model(obj: &Map<String, Value>) -> bool
         .is_some_and(|model| model.to_ascii_lowercase().ends_with("spark"))
 }
 
-fn is_local_image_gen_function(tool: &Value) -> bool {
-    let is_function = tool
+fn is_local_image_gen_tool(tool: &Value) -> bool {
+    let Some(tool_type) = tool
         .get("type")
         .and_then(Value::as_str)
-        .is_some_and(|tool_type| tool_type.eq_ignore_ascii_case("function"));
-    if !is_function {
+        .map(str::trim)
+        .filter(|tool_type| !tool_type.is_empty())
+    else {
         return false;
-    }
-    tool.get("name")
+    };
+    let Some(name) = tool
+        .get("name")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .is_some_and(|name| {
-            let name = name.to_ascii_lowercase();
-            name == "image_gen" || name.starts_with("image_gen.") || name.starts_with("image_gen__")
-        })
+    else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    if tool_type.eq_ignore_ascii_case("namespace") {
+        return name == "image_gen";
+    }
+    tool_type.eq_ignore_ascii_case("function")
+        && (name == "image_gen"
+            || name.starts_with("image_gen.")
+            || name.starts_with("image_gen__"))
 }
 
 fn ensure_image_generation_tool(path: &str, obj: &mut Map<String, Value>) -> bool {
@@ -397,7 +406,7 @@ fn ensure_image_generation_tool(path: &str, obj: &mut Map<String, Value>) -> boo
     let Some(tools_array) = tools.as_array_mut() else {
         return false;
     };
-    if tools_array.iter().any(is_local_image_gen_function) {
+    if tools_array.iter().any(is_local_image_gen_tool) {
         return false;
     }
     if tools_array.iter().any(|tool| {

@@ -163,11 +163,11 @@ Commit only the focused gateway, tests, and documentation changes. Push the exis
 
 - [ ] **Step 1: Reproduce the conflict in a request rewrite test**
 
-Enable `CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL`, pass a Responses request with a function named `image_gen.imagegen`, and assert that the rewritten request contains only the local function tool.
+Enable `CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL`, then cover both known client forms: a function named `image_gen.imagegen` and a namespace named `image_gen`. Assert that the rewritten request keeps the client tool without adding the hosted tool.
 
 - [ ] **Step 2: Skip hosted-tool injection for local image-gen functions**
 
-Before appending `{ "type": "image_generation" }`, scan existing function tools. Skip the append when a normalized name is `image_gen`, starts with `image_gen.`, or starts with `image_gen__`.
+Before appending `{ "type": "image_generation" }`, scan existing tools. Skip the append for the `image_gen` namespace and for function names equal to `image_gen`, starting with `image_gen.`, or starting with `image_gen__`.
 
 - [ ] **Step 3: Verify existing image-tool behavior**
 

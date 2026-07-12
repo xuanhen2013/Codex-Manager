@@ -34,6 +34,6 @@ This behavior is separate from `strip_session_affinity`, because that flag is al
 
 ## Live replay follow-up
 
-After the 404 masking fix was installed, replaying the original `gpt-5.5` turn exposed the canonical 400 body: CodexManager had auto-injected the hosted `image_generation` tool while the client already declared the local function `image_gen.imagegen`. The upstream rejects that combination.
+After the 404 masking fix was installed, replaying the original `gpt-5.5` turn exposed the canonical 400 body: CodexManager had auto-injected the hosted `image_generation` tool while the client already declared the local image-generation capability. The current Codex client sends it as a namespace tool named `image_gen`, which the upstream expands to the function `image_gen.imagegen`. The upstream rejects that combination.
 
-When image-generation auto-injection is enabled, CodexManager must keep the client's local `image_gen`, `image_gen.*`, or `image_gen__*` function tool and skip adding the hosted `image_generation` tool. Requests without a local image-gen function keep the existing auto-injection behavior.
+When image-generation auto-injection is enabled, CodexManager must keep the client's `image_gen` namespace or local `image_gen`, `image_gen.*`, or `image_gen__*` function tool and skip adding the hosted `image_generation` tool. Requests without a local image-generation tool keep the existing auto-injection behavior.
