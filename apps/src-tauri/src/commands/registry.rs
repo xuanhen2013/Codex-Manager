@@ -148,6 +148,7 @@ macro_rules! invoke_handler {
             crate::commands::apikey::service_model_price_rule_read,
             crate::commands::apikey::service_model_price_rule_upsert,
             crate::commands::apikey::service_apikey_usage_stats,
+            crate::commands::apikey::service_apikey_daily_usage,
             crate::commands::apikey::service_apikey_update_model,
             crate::commands::apikey::service_apikey_delete,
             crate::commands::apikey::service_apikey_disable,

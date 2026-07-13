@@ -6,6 +6,7 @@ export function createApiKeyWebCommands(): Record<string, WebCommandDescriptor> 
     service_apikey_list: { rpcMethod: "apikey/list" },
     service_apikey_create: { rpcMethod: "apikey/create" },
     service_apikey_usage_stats: { rpcMethod: "apikey/usageStats" },
+    service_apikey_daily_usage: { rpcMethod: "apikey/dailyUsage" },
     service_apikey_delete: { rpcMethod: "apikey/delete", mapParams: mapKeyIdToId },
     service_apikey_update_model: { rpcMethod: "apikey/updateModel", mapParams: mapKeyIdToId },
     service_apikey_disable: { rpcMethod: "apikey/disable", mapParams: mapKeyIdToId },

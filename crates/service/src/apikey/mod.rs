@@ -20,3 +20,5 @@ pub(crate) mod service_tier;
 pub(crate) mod update_model;
 #[path = "apikey_usage_stats.rs"]
 pub(crate) mod usage_stats;
+#[path = "apikey_usage_history.rs"]
+pub(crate) mod usage_history;

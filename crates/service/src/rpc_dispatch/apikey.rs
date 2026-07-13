@@ -1,5 +1,6 @@
 use codexmanager_core::rpc::types::{
-    ApiKeyListResult, ApiKeyUsageStatListResult, JsonRpcRequest, JsonRpcResponse,
+    ApiKeyListResult, ApiKeyUsageHistoryResult, ApiKeyUsageStatListResult, JsonRpcRequest,
+    JsonRpcResponse,
     ManagedModelCatalogResult, ManagedModelCatalogUpsertParams, ManagedModelRoutingResult,
     ManagedModelSourceMappingUpsertParams, ManagedModelSourceModelUpsertParams,
     ManagedModelSourceSyncParams, ModelsResponse,
@@ -8,7 +9,7 @@ use codexmanager_core::rpc::types::{
 use crate::RpcActor;
 use crate::{
     apikey_create, apikey_delete, apikey_disable, apikey_enable, apikey_list, apikey_models,
-    apikey_read_secret, apikey_update_model, apikey_usage_stats,
+    apikey_read_secret, apikey_update_model, apikey_usage_history, apikey_usage_stats,
 };
 
 fn ensure_api_key_access(actor: &RpcActor, key_id: &str) -> Result<(), String> {
@@ -23,6 +24,23 @@ fn ensure_api_key_access(actor: &RpcActor, key_id: &str) -> Result<(), String> {
         return Ok(());
     }
     Err("permission_denied: apikey".to_string())
+}
+
+fn i64_array_param(req: &JsonRpcRequest, key: &str) -> Result<Vec<i64>, String> {
+    let values = req
+        .params
+        .as_ref()
+        .and_then(|params| params.get(key))
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| format!("{key} is required"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_i64()
+                .ok_or_else(|| format!("{key} must contain integer timestamps"))
+        })
+        .collect()
 }
 
 fn allowed_model_slugs_for_actor(
@@ -259,6 +277,23 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             apikey_usage_stats::read_api_key_usage_stats_for_actor(actor)
                 .map(|items| ApiKeyUsageStatListResult { items }),
         ),
+        "apikey/dailyUsage" => {
+            let key_id = super::str_param(req, "keyId").unwrap_or("");
+            let start_ts = super::i64_param(req, "startTs");
+            let end_ts = super::i64_param(req, "endTs");
+            super::value_or_error::<ApiKeyUsageHistoryResult>(
+                ensure_api_key_access(actor, key_id)
+                    .and_then(|_| i64_array_param(req, "dayBoundariesTs"))
+                    .and_then(|day_boundaries_ts| {
+                        apikey_usage_history::read_api_key_usage_history(
+                            key_id,
+                            start_ts,
+                            end_ts,
+                            day_boundaries_ts,
+                        )
+                    }),
+            )
+        }
         "apikey/updateModel" => {
             let key_id = super::str_param(req, "id").unwrap_or("");
             let has_name = req

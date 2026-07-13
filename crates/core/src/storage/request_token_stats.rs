@@ -1268,6 +1268,48 @@ impl Storage {
         Ok(items)
     }
 
+    pub fn summarize_request_token_stats_daily_for_key_boundaries(
+        &self,
+        key_id: &str,
+        day_boundaries_ts: &[i64],
+    ) -> Result<Vec<DailyTokenUsageRollup>> {
+        let key_id = key_id.trim();
+        if day_boundaries_ts.len() < 2 || key_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let raw = raw_token_rollup_select(
+            "",
+            "t.created_at >= ?1 AND t.created_at < ?2 AND t.key_id = ?3",
+            "",
+            false,
+        );
+        let hourly = hourly_token_rollup_select(
+            "",
+            &format!("{} AND h.key_id = ?3", hourly_rollup_range_clause()),
+            "",
+        );
+        let sql = request_token_stats_total_rollup_sql(&raw, &hourly);
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut items = Vec::new();
+        for window in day_boundaries_ts.windows(2) {
+            let day_start_ts = window[0];
+            let day_end_ts = window[1];
+            if day_end_ts <= day_start_ts {
+                continue;
+            }
+            let usage = stmt.query_row(params![day_start_ts, day_end_ts, key_id], |row| {
+                token_usage_rollup_from_row(row, 0)
+            })?;
+            items.push(DailyTokenUsageRollup {
+                day_start_ts,
+                day_end_ts,
+                usage,
+            });
+        }
+        Ok(items)
+    }
+
     pub fn summarize_request_token_stats_by_user_between(
         &self,
         start_ts: i64,

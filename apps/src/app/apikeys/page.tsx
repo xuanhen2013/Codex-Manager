@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  BarChart3,
   DollarSign,
   Copy,
   Eye,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiKeyModal } from "@/components/modals/api-key-modal";
+import { ApiKeyUsageHistoryModal } from "@/components/modals/api-key-usage-history-modal";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import {
   MetricCard,
@@ -187,6 +189,7 @@ export default function ApiKeysPage() {
   const [loadingSecretId, setLoadingSecretId] = useState<string | null>(null);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
+  const [usageHistoryKeyId, setUsageHistoryKeyId] = useState<string | null>(null);
   const [deleteKeyId, setDeleteKeyId] = useState<string | null>(null);
   const [ccSwitchImportingId, setCcSwitchImportingId] = useState<string | null>(
     null,
@@ -256,6 +259,7 @@ export default function ApiKeysPage() {
     }
     setApiKeyModalOpen(false);
     setEditingKeyId(null);
+    setUsageHistoryKeyId(null);
     setDeleteKeyId(null);
     setCcSwitchImportingId(null);
   }, [isPageActive]);
@@ -263,6 +267,10 @@ export default function ApiKeysPage() {
   const editingApiKey = useMemo(
     () => apiKeys.find((item) => item.id === editingKeyId) || null,
     [apiKeys, editingKeyId],
+  );
+  const usageHistoryApiKey = useMemo(
+    () => apiKeys.find((item) => item.id === usageHistoryKeyId) || null,
+    [apiKeys, usageHistoryKeyId],
   );
   const handleOwnerSaved = async () => {
     await Promise.all([
@@ -891,6 +899,18 @@ export default function ApiKeysPage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-muted-foreground transition-colors hover:text-primary"
+                            disabled={!isServiceReady}
+                            onClick={() => setUsageHistoryKeyId(key.id)}
+                            title={t("查看每日用量")}
+                            aria-label={t("查看每日用量")}
+                            data-testid={`api-key-usage-${key.id}`}
+                          >
+                            <BarChart3 className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground transition-colors hover:text-primary"
                             disabled={
                               !isServiceReady ||
                               ccSwitchImportingId === key.id ||
@@ -916,28 +936,41 @@ export default function ApiKeysPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                                  <DropdownMenuGroup>
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={!isServiceReady}
-                                onClick={() => openEditModal(key.id)}
-                              >
-                                {t("设置模型与推理")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={!isServiceReady || ccSwitchImportingId === key.id}
-                                onClick={() => void importToCcSwitch(key)}
-                              >
-                                <ExternalLink className="h-4 w-4" /> {t("导入 ccswitch")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2 text-red-500"
-                                disabled={!isServiceReady}
-                                onClick={() => handleDelete(key.id)}
-                              >
-                                <Trash2 className="h-4 w-4" /> {t("删除密钥")}
-                              </DropdownMenuItem>
+                              <DropdownMenuGroup>
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  disabled={!isServiceReady}
+                                  onClick={() => setUsageHistoryKeyId(key.id)}
+                                >
+                                  <BarChart3 className="h-4 w-4" />
+                                  {t("查看每日用量")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  disabled={!isServiceReady}
+                                  onClick={() => openEditModal(key.id)}
+                                >
+                                  {t("设置模型与推理")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="gap-2"
+                                  disabled={
+                                    !isServiceReady ||
+                                    ccSwitchImportingId === key.id
+                                  }
+                                  onClick={() => void importToCcSwitch(key)}
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                  {t("导入 ccswitch")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="gap-2 text-red-500"
+                                  disabled={!isServiceReady}
+                                  onClick={() => handleDelete(key.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                  {t("删除密钥")}
+                                </DropdownMenuItem>
                               </DropdownMenuGroup>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -966,6 +999,14 @@ export default function ApiKeysPage() {
         isAdminMode={isAdminMode}
         showMemberOwnership={showMemberOwnership}
         onOwnerSaved={handleOwnerSaved}
+      />
+      <ApiKeyUsageHistoryModal
+        key={usageHistoryKeyId ?? "closed"}
+        open={Boolean(usageHistoryApiKey)}
+        apiKey={usageHistoryApiKey}
+        onOpenChange={(open) => {
+          if (!open) setUsageHistoryKeyId(null);
+        }}
       />
       <ConfirmDialog
         open={Boolean(deleteKeyId)}

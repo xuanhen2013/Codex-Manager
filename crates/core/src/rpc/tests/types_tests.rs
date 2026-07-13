@@ -1,5 +1,6 @@
 use super::{
-    AccountListResult, AccountSummary, ApiKeyUsageStatSummary, DashboardAdminUsageSummaryResult,
+    AccountListResult, AccountSummary, ApiKeyDailyUsagePoint, ApiKeyUsageHistoryResult,
+    ApiKeyUsageHistoryUsage, ApiKeyUsageStatSummary, DashboardAdminUsageSummaryResult,
     DashboardDailyUsagePoint, DashboardSourceUsageSummary, DashboardTokenUsageResult,
     DashboardUserUsageSummary, RequestLogFilterSummaryResult, RequestLogListParams,
     RequestLogListResult, RequestLogSummary,
@@ -352,6 +353,39 @@ fn api_key_usage_stat_summary_serialization_uses_camel_case() {
     ] {
         assert!(obj.contains_key(key), "missing key: {key}");
     }
+}
+
+#[test]
+fn api_key_usage_history_serialization_uses_camel_case() {
+    let usage = ApiKeyUsageHistoryUsage {
+        input_tokens: 100,
+        cached_input_tokens: 20,
+        output_tokens: 50,
+        reasoning_output_tokens: 5,
+        total_tokens: 130,
+        estimated_cost_usd: 0.42,
+        request_count: 3,
+        success_count: 2,
+        error_count: 1,
+    };
+    let result = ApiKeyUsageHistoryResult {
+        key_id: "gk_test".to_string(),
+        range_start_ts: 1_700_000_000,
+        range_end_ts: 1_700_086_400,
+        usage: usage.clone(),
+        daily_usage: vec![ApiKeyDailyUsagePoint {
+            day_start_ts: 1_700_000_000,
+            day_end_ts: 1_700_086_400,
+            usage,
+        }],
+    };
+
+    let value = serde_json::to_value(result).expect("serialize api key usage history");
+    let obj = value.as_object().expect("api key usage history object");
+    for key in ["keyId", "rangeStartTs", "rangeEndTs", "usage", "dailyUsage"] {
+        assert!(obj.contains_key(key), "missing key: {key}");
+    }
+    assert_eq!(value["dailyUsage"][0]["usage"]["cachedInputTokens"], 20);
 }
 
 #[test]

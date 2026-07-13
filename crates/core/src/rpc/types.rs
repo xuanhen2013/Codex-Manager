@@ -368,6 +368,38 @@ pub struct ApiKeyUsageStatListResult {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ApiKeyUsageHistoryUsage {
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub request_count: i64,
+    pub success_count: i64,
+    pub error_count: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyDailyUsagePoint {
+    pub day_start_ts: i64,
+    pub day_end_ts: i64,
+    pub usage: ApiKeyUsageHistoryUsage,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyUsageHistoryResult {
+    pub key_id: String,
+    pub range_start_ts: i64,
+    pub range_end_ts: i64,
+    pub usage: ApiKeyUsageHistoryUsage,
+    pub daily_usage: Vec<ApiKeyDailyUsagePoint>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuotaApiKeyOverviewResult {
     pub key_count: i64,
     pub limited_key_count: i64,

@@ -1855,6 +1855,75 @@ fn member_api_key_usage_stats_filter_to_owned_keys() {
 }
 
 #[test]
+fn api_key_daily_usage_enforces_key_ownership() {
+    let _guard = test_env_guard();
+    let db_path = setup_dashboard_test_db("codexmanager-member-apikey-daily-usage");
+    let day_start = 1_700_006_400;
+    let user_one = create_test_member("apikey-daily-one", Some(2_000_000));
+    let user_two = create_test_member("apikey-daily-two", Some(2_000_000));
+    let key_one = create_owned_test_api_key(&user_one.id, "daily one key", "gpt-5-mini");
+    let key_two = create_owned_test_api_key(&user_two.id, "daily two key", "gpt-5");
+
+    insert_test_request_log(
+        &key_one,
+        "trace-daily-one",
+        "gpt-5-mini",
+        200,
+        80,
+        10,
+        40,
+        0.08,
+        day_start + 10,
+    );
+
+    let actor = RpcActor::from_parts(Some(ROLE_MEMBER), Some(&user_one.id));
+    let owned = response_result(handle_request_with_actor(
+        rpc_request(
+            "apikey/dailyUsage",
+            serde_json::json!({
+                "keyId": key_one,
+                "startTs": day_start,
+                "endTs": day_start + 86_400,
+                "dayBoundariesTs": [day_start, day_start + 86_400]
+            }),
+        ),
+        actor.clone(),
+    ));
+    assert!(owned.result.get("error").is_none(), "{:?}", owned.result);
+    assert_eq!(owned.result["dailyUsage"][0]["usage"]["totalTokens"], 120);
+
+    let denied = response_result(handle_request_with_actor(
+        rpc_request(
+            "apikey/dailyUsage",
+            serde_json::json!({
+                "keyId": key_two,
+                "startTs": day_start,
+                "endTs": day_start + 86_400,
+                "dayBoundariesTs": [day_start, day_start + 86_400]
+            }),
+        ),
+        actor,
+    ));
+    assert!(rpc_error(&denied).contains("permission_denied"));
+
+    let admin = response_result(handle_request_with_actor(
+        rpc_request(
+            "apikey/dailyUsage",
+            serde_json::json!({
+                "keyId": key_two,
+                "startTs": day_start,
+                "endTs": day_start + 86_400,
+                "dayBoundariesTs": [day_start, day_start + 86_400]
+            }),
+        ),
+        RpcActor::system_admin(),
+    ));
+    assert!(admin.result.get("error").is_none(), "{:?}", admin.result);
+
+    let _ = std::fs::remove_file(db_path);
+}
+
+#[test]
 fn member_created_api_key_ignores_admin_only_routing_fields() {
     let _guard = test_env_guard();
     let db_path = setup_dashboard_test_db("codexmanager-member-apikey-create-sanitizes");

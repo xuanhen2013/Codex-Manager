@@ -1315,6 +1315,13 @@ fn dashboard_rollups_survive_cleared_request_logs() {
     assert_eq!(daily[0].usage.total_tokens, 35);
     assert_eq!(daily[0].usage.request_count, 2);
 
+    let daily_for_key = storage
+        .summarize_request_token_stats_daily_for_key_boundaries("key-owned", &[0, 7_200])
+        .expect("daily api key summary after clear");
+    assert_eq!(daily_for_key.len(), 1);
+    assert_eq!(daily_for_key[0].usage.total_tokens, 35);
+    assert_eq!(daily_for_key[0].usage.request_count, 2);
+
     let by_user = storage
         .summarize_request_token_stats_by_user_between(0, 7_200)
         .expect("user summary");
@@ -1587,6 +1594,95 @@ fn hourly_dashboard_rollups_respect_partial_range_boundaries() {
         .expect("source summary");
     assert_eq!(source.len(), 1);
     assert_eq!(source[0].usage.total_tokens, 20);
+}
+
+#[test]
+fn api_key_daily_usage_combines_hourly_and_raw_stats_with_exclusive_end_boundary() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    for stat in [
+        RequestTokenStat {
+            request_log_id: 1,
+            key_id: Some("key-history".to_string()),
+            input_tokens: Some(10),
+            cached_input_tokens: Some(2),
+            output_tokens: Some(5),
+            reasoning_output_tokens: Some(3),
+            total_tokens: Some(13),
+            estimated_cost_usd: Some(0.10),
+            created_at: 100,
+            ..RequestTokenStat::default()
+        },
+        RequestTokenStat {
+            request_log_id: 2,
+            key_id: Some("key-history".to_string()),
+            input_tokens: Some(20),
+            cached_input_tokens: Some(4),
+            output_tokens: Some(9),
+            reasoning_output_tokens: Some(7),
+            total_tokens: Some(25),
+            estimated_cost_usd: Some(0.20),
+            created_at: 3_700,
+            ..RequestTokenStat::default()
+        },
+        RequestTokenStat {
+            request_log_id: 3,
+            key_id: Some("key-history".to_string()),
+            total_tokens: Some(999),
+            estimated_cost_usd: Some(9.99),
+            created_at: 86_400,
+            ..RequestTokenStat::default()
+        },
+        RequestTokenStat {
+            request_log_id: 4,
+            key_id: Some("key-other".to_string()),
+            total_tokens: Some(999),
+            estimated_cost_usd: Some(9.99),
+            created_at: 3_700,
+            ..RequestTokenStat::default()
+        },
+    ] {
+        storage
+            .insert_request_token_stat(&stat)
+            .expect("insert request token stat");
+    }
+
+    storage
+        .rollup_request_token_stats_before(3_600)
+        .expect("roll up first hour");
+
+    let daily = storage
+        .summarize_request_token_stats_daily_for_key_boundaries(
+            " key-history ",
+            &[0, 86_400],
+        )
+        .expect("summarize api key daily usage");
+    assert_eq!(daily.len(), 1);
+    assert_eq!(daily[0].day_start_ts, 0);
+    assert_eq!(daily[0].day_end_ts, 86_400);
+    assert_eq!(daily[0].usage.input_tokens, 30);
+    assert_eq!(daily[0].usage.cached_input_tokens, 6);
+    assert_eq!(daily[0].usage.output_tokens, 14);
+    assert_eq!(daily[0].usage.reasoning_output_tokens, 10);
+    assert_eq!(daily[0].usage.total_tokens, 38);
+    assert!((daily[0].usage.estimated_cost_usd - 0.30).abs() < f64::EPSILON);
+    assert_eq!(daily[0].usage.request_count, 2);
+
+    let variable_days = storage
+        .summarize_request_token_stats_daily_for_key_boundaries(
+            "key-history",
+            &[0, 86_400, 169_200],
+        )
+        .expect("summarize variable day boundaries");
+    assert_eq!(variable_days.len(), 2);
+    assert_eq!(variable_days[1].day_end_ts - variable_days[1].day_start_ts, 82_800);
+    assert_eq!(variable_days[1].usage.total_tokens, 999);
+
+    assert!(storage
+        .summarize_request_token_stats_daily_for_key_boundaries("key-history", &[86_400])
+        .expect("empty boundaries")
+        .is_empty());
 }
 
 #[test]

@@ -86,6 +86,12 @@ test("createWebCommandMap 复用 keyId 到 id 的参数映射", () => {
   });
 });
 
+test("createWebCommandMap 提供平台密钥每日用量 RPC 映射", () => {
+  assert.deepEqual(commandMap.service_apikey_daily_usage, {
+    rpcMethod: "apikey/dailyUsage",
+  });
+});
+
 test("createWebCommandMap 为登录命令补齐 Web 运行壳参数", () => {
   const startLogin = commandMap.service_login_start;
   assert.ok(startLogin.mapParams);

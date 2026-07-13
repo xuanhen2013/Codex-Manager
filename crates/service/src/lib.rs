@@ -52,6 +52,7 @@ pub(crate) use apikey::models as apikey_models;
 pub(crate) use apikey::profile as apikey_profile;
 pub(crate) use apikey::read_secret as apikey_read_secret;
 pub(crate) use apikey::update_model as apikey_update_model;
+pub(crate) use apikey::usage_history as apikey_usage_history;
 pub(crate) use apikey::usage_stats as apikey_usage_stats;
 pub(crate) use auth::account as auth_account;
 pub(crate) use auth::app_manager::distribution_enabled_for_storage;

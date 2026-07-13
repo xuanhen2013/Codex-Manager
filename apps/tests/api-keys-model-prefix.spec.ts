@@ -271,3 +271,101 @@ test("api key modal can select hybrid rotation on create", async ({ page }) => {
   expect(params.rotationStrategy).toBe("hybrid_rotation");
   expect(params.customKey).toBe("sk-cm-custom-fixed");
 });
+
+test("api key daily usage modal supports date filters on desktop and mobile", async ({
+  page,
+}, testInfo) => {
+  const dailyUsagePayloads: Record<string, unknown>[] = [];
+  const dayStartTs = Math.floor(new Date(2026, 6, 1).getTime() / 1000);
+  await mockRuntime(page);
+  await mockApiKeyRpc(page, {
+    apiKeys: [
+      {
+        id: "key-usage",
+        name: "Usage History Key",
+        model_slug: "gpt-5.3-codex",
+        reasoning_effort: "medium",
+        service_tier: "default",
+        protocol_type: "openai_compat",
+        rotation_strategy: "account_rotation",
+        status: "enabled",
+        created_at: 1_770_000_002,
+      },
+    ],
+    onMethod: (method, payload) => {
+      if (method !== "apikey/dailyUsage") return undefined;
+      dailyUsagePayloads.push(payload);
+      return {
+        keyId: "key-usage",
+        rangeStartTs: dayStartTs,
+        rangeEndTs: dayStartTs + 3 * 86_400,
+        usage: {
+          inputTokens: 12_000,
+          cachedInputTokens: 2_000,
+          outputTokens: 4_500,
+          reasoningOutputTokens: 1_100,
+          totalTokens: 14_500,
+          estimatedCostUsd: 0.1825,
+          requestCount: 9,
+          successCount: 8,
+          errorCount: 1,
+        },
+        dailyUsage: [0, 1, 2].map((offset) => ({
+          dayStartTs: dayStartTs + offset * 86_400,
+          dayEndTs: dayStartTs + (offset + 1) * 86_400,
+          usage: {
+            inputTokens: 4_000 + offset * 500,
+            cachedInputTokens: 500,
+            outputTokens: 1_500,
+            reasoningOutputTokens: 300,
+            totalTokens: 4_500 + offset * 500,
+            estimatedCostUsd: 0.05 + offset * 0.01,
+            requestCount: 3,
+            successCount: offset === 2 ? 2 : 3,
+            errorCount: offset === 2 ? 1 : 0,
+          },
+        })),
+      };
+    },
+  });
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/apikeys/");
+  await page.getByTestId("api-key-usage-key-usage").click();
+
+  const dialog = page.getByTestId("api-key-usage-history-modal");
+  await expect(dialog.getByRole("heading", { name: "每日用量" })).toBeVisible();
+  await expect(dialog.getByText("$0.1825", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("1.45万", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("api-key-usage-desktop.png"),
+    fullPage: true,
+  });
+
+  await dialog.getByRole("button", { name: "自定义" }).click();
+  await dialog.getByLabel("开始日期").fill("2026-06-01");
+  await dialog.getByLabel("结束日期").fill("2026-06-30");
+  await dialog.getByRole("button", { name: "应用" }).click();
+  await expect.poll(() => dailyUsagePayloads.length).toBeGreaterThan(1);
+  const latestParams = dailyUsagePayloads.at(-1)?.params as Record<string, unknown>;
+  expect(latestParams.keyId).toBe("key-usage");
+  expect(latestParams.startTs).toBe(
+    Math.floor(new Date(2026, 5, 1).getTime() / 1000),
+  );
+  expect(latestParams.endTs).toBe(
+    Math.floor(new Date(2026, 6, 1).getTime() / 1000),
+  );
+  expect(latestParams.dayBoundariesTs).toHaveLength(31);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toBeVisible();
+  const bounds = await dialog.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  expect(bounds!.height).toBeLessThanOrEqual(844);
+  await page.screenshot({
+    path: testInfo.outputPath("api-key-usage-mobile.png"),
+    fullPage: true,
+  });
+});

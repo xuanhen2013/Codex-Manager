@@ -119,3 +119,29 @@ export interface ApiKeyUsageStat {
   totalTokens: number;
   estimatedCostUsd: number;
 }
+
+export interface ApiKeyUsageHistoryUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  requestCount: number;
+  successCount: number;
+  errorCount: number;
+}
+
+export interface ApiKeyDailyUsagePoint {
+  dayStartTs: number;
+  dayEndTs: number;
+  usage: ApiKeyUsageHistoryUsage;
+}
+
+export interface ApiKeyUsageHistory {
+  keyId: string;
+  rangeStartTs: number;
+  rangeEndTs: number;
+  usage: ApiKeyUsageHistoryUsage;
+  dailyUsage: ApiKeyDailyUsagePoint[];
+}

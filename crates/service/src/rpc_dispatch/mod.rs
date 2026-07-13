@@ -199,6 +199,7 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "accountManager/session/current",
     "accountManager/status",
     "apikey/create",
+    "apikey/dailyUsage",
     "apikey/delete",
     "apikey/disable",
     "apikey/enable",

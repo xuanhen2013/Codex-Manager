@@ -46,6 +46,7 @@ import {
   readUsageResetConsumeResult,
   readUsageResetCredits,
 } from "./usage-reset-credits";
+import { readApiKeyUsageHistory } from "./api-key-usage-history";
 import {
   AccountListResult,
   AccountUsage,
@@ -60,6 +61,7 @@ import {
   AggregateApiTestResult,
   ApiKey,
   ApiKeyCreateResult,
+  ApiKeyUsageHistory,
   ApiKeyUsageStat,
   ChatgptAuthTokensRefreshAllResult,
   ChatgptAuthTokensRefreshResult,
@@ -839,6 +841,18 @@ export const accountClient = {
   async listApiKeyUsageStats(): Promise<ApiKeyUsageStat[]> {
     const result = await invoke<unknown>("service_apikey_usage_stats", withAddr());
     return normalizeApiKeyUsageStats(result);
+  },
+  async readApiKeyDailyUsage(
+    keyId: string,
+    startTs: number,
+    endTs: number,
+    dayBoundariesTs: number[],
+  ): Promise<ApiKeyUsageHistory> {
+    const result = await invoke<unknown>(
+      "service_apikey_daily_usage",
+      withAddr({ keyId, startTs, endTs, dayBoundariesTs }),
+    );
+    return readApiKeyUsageHistory(result);
   },
   deleteApiKey: (keyId: string) =>
     invoke("service_apikey_delete", withAddr({ keyId })),

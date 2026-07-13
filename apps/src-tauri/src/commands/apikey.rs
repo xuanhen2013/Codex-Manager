@@ -236,6 +236,23 @@ pub async fn service_apikey_usage_stats(addr: Option<String>) -> Result<serde_js
     rpc_call_in_background("apikey/usageStats", addr, None).await
 }
 
+#[tauri::command]
+pub async fn service_apikey_daily_usage(
+    addr: Option<String>,
+    key_id: String,
+    start_ts: i64,
+    end_ts: i64,
+    day_boundaries_ts: Vec<i64>,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({
+        "keyId": key_id,
+        "startTs": start_ts,
+        "endTs": end_ts,
+        "dayBoundariesTs": day_boundaries_ts,
+    });
+    rpc_call_in_background("apikey/dailyUsage", addr, Some(params)).await
+}
+
 /// 函数 `service_apikey_update_model`
 ///
 /// 作者: gaohongshun
