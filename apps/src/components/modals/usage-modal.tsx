@@ -237,7 +237,6 @@ export default function UsageModal({
       <DialogContent
         className="glass-card grid-rows-[auto_minmax(0,1fr)_auto] p-6"
         style={{
-          height: "min(680px, calc(100vh - 2rem))",
           maxWidth: "none",
           width: "min(700px, calc(100vw - 2rem))",
         }}
