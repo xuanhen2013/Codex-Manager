@@ -255,6 +255,31 @@ pub struct UsageReadResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UsageResetCreditResult {
+    pub id: String,
+    pub status: String,
+    pub granted_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageResetCreditsResult {
+    pub available_count: Option<i64>,
+    pub credits: Vec<UsageResetCreditResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageResetCreditsConsumeResult {
+    pub reset_applied: bool,
+    pub reset_credits: Option<UsageResetCreditsResult>,
+    pub usage_refreshed: bool,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RateLimitWindowResult {
     pub used_percent: i64,
     pub window_duration_mins: Option<i64>,

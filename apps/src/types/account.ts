@@ -13,6 +13,25 @@ export interface AccountUsage {
   capturedAt: number | null;
 }
 
+export interface AccountUsageResetCredit {
+  id: string;
+  status: string;
+  grantedAt: string;
+  expiresAt: string;
+}
+
+export interface AccountUsageResetCredits {
+  availableCount: number | null;
+  credits: AccountUsageResetCredit[];
+}
+
+export interface AccountUsageResetConsumeResult {
+  resetApplied: boolean;
+  resetCredits: AccountUsageResetCredits | null;
+  usageRefreshed: boolean;
+  warning: string | null;
+}
+
 export interface Account {
   id: string;
   name: string;

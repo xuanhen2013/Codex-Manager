@@ -498,6 +498,80 @@ fn usage_request_headers_use_official_chatgpt_account_header_name() {
     assert_eq!(headers.len(), 1);
 }
 
+#[test]
+fn reset_credits_request_uses_account_scope_and_codex_desktop_headers() {
+    let (_guard, _restore) = usage_header_runtime_scope();
+    let server = Server::http("127.0.0.1:0").expect("start reset credits server");
+    let addr = format!("http://{}", server.server_addr());
+    let handle = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reset credits server timeout")
+            .expect("receive reset credits request");
+        assert_eq!(request.method().as_str(), "GET");
+        assert_eq!(request.url(), "/api/codex/rate-limit-reset-credits");
+        let header = |name: &'static str| {
+            request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv(name))
+                .map(|header| header.value.as_str().to_string())
+        };
+        assert_eq!(
+            header("Authorization").as_deref(),
+            Some("Bearer access-token")
+        );
+        assert_eq!(header("ChatGPT-Account-ID").as_deref(), Some("workspace-1"));
+        assert_eq!(header("OpenAI-Beta").as_deref(), Some("codex-1"));
+        assert_eq!(header("Originator").as_deref(), Some("Codex Desktop"));
+
+        request
+            .respond(
+                Response::from_string(r#"{"available_count":1,"credits":[]}"#)
+                    .with_status_code(TinyStatusCode(200))
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/json")
+                            .expect("content-type header"),
+                    ),
+            )
+            .expect("respond reset credits request");
+    });
+
+    let payload = super::fetch_usage_reset_credits(&addr, "access-token", Some("workspace-1"))
+        .expect("fetch reset credits");
+    assert_eq!(payload["available_count"], 1);
+    handle.join().expect("join reset credits server");
+}
+
+#[test]
+fn reset_credit_consume_posts_redeem_request_id() {
+    let (_guard, _restore) = usage_header_runtime_scope();
+    let server = Server::http("127.0.0.1:0").expect("start consume reset credit server");
+    let addr = format!("http://{}", server.server_addr());
+    let handle = thread::spawn(move || {
+        let mut request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("consume reset credit server timeout")
+            .expect("receive consume reset credit request");
+        assert_eq!(request.method().as_str(), "POST");
+        assert_eq!(request.url(), "/api/codex/rate-limit-reset-credits/consume");
+        let mut body = String::new();
+        request
+            .as_reader()
+            .read_to_string(&mut body)
+            .expect("read consume body");
+        let payload: serde_json::Value = serde_json::from_str(&body).expect("parse consume body");
+        assert_eq!(payload["redeem_request_id"], "redeem-1");
+        request
+            .respond(Response::empty(TinyStatusCode(204)))
+            .expect("respond consume reset credit request");
+    });
+
+    super::consume_usage_reset_credit(&addr, "access-token", Some("workspace-1"), "redeem-1")
+        .expect("consume reset credit");
+    handle.join().expect("join consume reset credit server");
+}
+
 /// 函数 `subscription_request_uses_only_authorization_without_custom_usage_headers`
 ///
 /// 作者: gaohongshun

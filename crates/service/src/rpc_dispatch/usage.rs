@@ -2,7 +2,7 @@ use codexmanager_core::rpc::types::{
     JsonRpcRequest, JsonRpcResponse, UsageListResult, UsageReadResult,
 };
 
-use crate::{usage_aggregate, usage_list, usage_read, usage_refresh};
+use crate::{usage_aggregate, usage_list, usage_read, usage_refresh, usage_reset_credits};
 
 /// 函数 `try_handle`
 ///
@@ -42,6 +42,24 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 None => usage_refresh::refresh_usage_for_all_accounts(),
             };
             super::ok_or_error(result)
+        }
+        "account/usage/resetCredits/read" => {
+            let account_id =
+                super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
+            super::value_or_error(match account_id {
+                Some(account_id) => usage_reset_credits::read_usage_reset_credits(account_id),
+                None => Err("account_id is required".to_string()),
+            })
+        }
+        "account/usage/resetCredits/consume" => {
+            let account_id =
+                super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
+            super::value_or_error(match account_id {
+                Some(account_id) => {
+                    usage_reset_credits::consume_usage_reset_credit_for_account(account_id)
+                }
+                None => Err("account_id is required".to_string()),
+            })
         }
         _ => return None,
     };

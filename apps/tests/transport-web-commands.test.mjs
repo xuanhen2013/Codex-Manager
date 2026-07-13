@@ -110,6 +110,15 @@ test("createWebCommandMap 为账号预热命令提供 Web RPC 映射", () => {
   });
 });
 
+test("createWebCommandMap 为额度重置次数查询和消费提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_usage_reset_credits_read, {
+    rpcMethod: "account/usage/resetCredits/read",
+  });
+  assert.deepEqual(commandMap.service_usage_reset_credits_consume, {
+    rpcMethod: "account/usage/resetCredits/consume",
+  });
+});
+
 test("createWebCommandMap 为批量账号排序提供 Web RPC 映射", () => {
   assert.deepEqual(commandMap.service_account_update_sorts, {
     rpcMethod: "account/updateSorts",

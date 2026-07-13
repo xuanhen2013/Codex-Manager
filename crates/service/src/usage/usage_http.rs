@@ -1,5 +1,8 @@
 use chrono::DateTime;
-use codexmanager_core::usage::{accounts_check_endpoint, usage_endpoint};
+use codexmanager_core::usage::{
+    accounts_check_endpoint, rate_limit_reset_credits_consume_endpoint,
+    rate_limit_reset_credits_endpoint, usage_endpoint,
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::Client;
 use std::collections::HashMap;
@@ -37,6 +40,7 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 const AUTH_ERROR_HEADER: &str = "x-openai-authorization-error";
+const CODEX_DESKTOP_ORIGINATOR: &str = "Codex Desktop";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefreshTokenAuthErrorReason {
@@ -1006,6 +1010,32 @@ pub(crate) fn fetch_usage_snapshot(
     run_usage_future(fetch_usage_snapshot_async(base_url, bearer, workspace_id))
 }
 
+pub(crate) fn fetch_usage_reset_credits(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    run_usage_future(fetch_usage_reset_credits_async(
+        base_url,
+        bearer,
+        workspace_id,
+    ))
+}
+
+pub(crate) fn consume_usage_reset_credit(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    redeem_request_id: &str,
+) -> Result<(), String> {
+    run_usage_future(consume_usage_reset_credit_async(
+        base_url,
+        bearer,
+        workspace_id,
+        redeem_request_id,
+    ))
+}
+
 /// 函数 `fetch_account_subscription`
 ///
 /// 作者: gaohongshun
@@ -1106,6 +1136,87 @@ async fn fetch_usage_snapshot_async(
     read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
         .await
         .map_err(|e| format!("read usage endpoint json failed: {e}"))
+}
+
+fn build_usage_reset_credits_request_headers(workspace_id: Option<&str>) -> HeaderMap {
+    let mut headers = build_usage_request_headers(workspace_id);
+    headers.insert(
+        HeaderName::from_static("openai-beta"),
+        HeaderValue::from_static("codex-1"),
+    );
+    headers.insert(
+        HeaderName::from_static("originator"),
+        HeaderValue::from_static(CODEX_DESKTOP_ORIGINATOR),
+    );
+    headers
+}
+
+async fn fetch_usage_reset_credits_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let url = rate_limit_reset_credits_endpoint(base_url);
+    let build_request = || {
+        usage_http_client()
+            .get(&url)
+            .header("Authorization", format!("Bearer {bearer}"))
+            .headers(build_usage_reset_credits_request_headers(workspace_id))
+    };
+    let resp = match build_request().send().await {
+        Ok(resp) => resp,
+        Err(first_err) => {
+            rebuild_usage_http_client();
+            build_request().send().await.map_err(|second_err| {
+                format!("{}; retry_after_client_rebuild: {}", first_err, second_err)
+            })?
+        }
+    };
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
+        return Err(summarize_endpoint_error_response(
+            "usage reset credits",
+            status,
+            &headers,
+            &body,
+            false,
+        ));
+    }
+    read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
+        .await
+        .map_err(|err| format!("read usage reset credits response json failed: {err}"))
+}
+
+async fn consume_usage_reset_credit_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    redeem_request_id: &str,
+) -> Result<(), String> {
+    let url = rate_limit_reset_credits_consume_endpoint(base_url);
+    let resp = usage_http_client()
+        .post(url)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .headers(build_usage_reset_credits_request_headers(workspace_id))
+        .json(&serde_json::json!({ "redeem_request_id": redeem_request_id }))
+        .send()
+        .await
+        .map_err(|err| format!("usage reset credit request failed: {err}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
+        return Err(summarize_endpoint_error_response(
+            "usage reset credit consume",
+            status,
+            &headers,
+            &body,
+            false,
+        ));
+    }
+    Ok(())
 }
 
 async fn fetch_accounts_check_response_async(

@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Calendar,
   Clock,
@@ -8,6 +11,8 @@ import {
   ShieldAlert,
   type LucideIcon,
   RefreshCw,
+  RotateCcw,
+  TicketCheck,
   Zap,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -43,6 +48,9 @@ import {
 } from "@/lib/utils/usage";
 import { Account } from "@/types";
 import { useI18n } from "@/lib/i18n/provider";
+import { accountClient } from "@/lib/api/account-client";
+import { getAppErrorMessage } from "@/lib/api/transport";
+import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 
 interface UsageModalProps {
   account: Account | null;
@@ -163,7 +171,38 @@ export default function UsageModal({
   isRefreshing,
   isRefreshingRt,
 }: UsageModalProps) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const queryClient = useQueryClient();
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const accountId = account?.id || "";
+  const resetCreditsQuery = useQuery({
+    queryKey: ["usage-reset-credits", accountId],
+    queryFn: () => accountClient.getUsageResetCredits(accountId),
+    enabled: open && Boolean(accountId) && Boolean(account?.hasToken),
+    staleTime: 15_000,
+    retry: false,
+  });
+  const consumeResetCreditMutation = useMutation({
+    mutationFn: () => accountClient.consumeUsageResetCredit(accountId),
+    onSuccess: async (result) => {
+      if (result.resetCredits) {
+        queryClient.setQueryData(["usage-reset-credits", accountId], result.resetCredits);
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["usage-reset-credits", accountId] });
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["usage", "list"] }),
+        queryClient.invalidateQueries({ queryKey: ["usage-aggregate"] }),
+      ]);
+      toast.success(t("额度已重置"));
+      if (result.warning) {
+        toast.warning(`${t("额度重置成功，但刷新部分数据失败")}: ${result.warning}`);
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("额度重置失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
   if (!account) return null;
   const subscriptionStatusLabel = formatAccountSubscriptionStatusLabel(account, t);
   const subscriptionPlanLabel = formatAccountSubscriptionPlanLabel(account, t);
@@ -171,8 +210,29 @@ export default function UsageModal({
   const secondaryWindowOnly = isSecondaryWindowOnlyUsage(account.usage);
   const usageBuckets = getUsageDisplayBuckets(account.usage);
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
+  const resetCredits = resetCreditsQuery.data;
+  const resetCreditsAvailableCount = resetCredits?.availableCount ?? null;
+  const canConsumeResetCredit =
+    account.hasToken &&
+    (resetCreditsAvailableCount ?? 0) > 0 &&
+    !consumeResetCreditMutation.isPending;
+
+  const formatResetCreditExpiry = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString(locale, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="glass-card grid-rows-[auto_minmax(0,1fr)_auto] p-6"
@@ -244,6 +304,76 @@ export default function UsageModal({
                   </CardContent>
                 </Card>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card size="sm">
+            <CardHeader className="flex-row items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <CardTitle>{t("主动额度重置")}</CardTitle>
+                <CardDescription>
+                  {t("每次重置会消耗 1 次可用次数，并立即重置当前 Codex 额度窗口。")}
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0 gap-2"
+                disabled={!canConsumeResetCredit}
+                onClick={() => setResetConfirmOpen(true)}
+              >
+                <RotateCcw
+                  className={cn(
+                    "h-3.5 w-3.5",
+                    consumeResetCreditMutation.isPending && "animate-spin",
+                  )}
+                />
+                {consumeResetCreditMutation.isPending ? t("重置中...") : t("重置额度")}
+              </Button>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
+                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <TicketCheck className="h-3.5 w-3.5" />
+                  {t("可用重置次数")}
+                </span>
+                <span className="text-base font-semibold">
+                  {resetCreditsQuery.isLoading
+                    ? t("查询中...")
+                    : resetCreditsQuery.isError
+                      ? "--"
+                      : (resetCreditsAvailableCount ?? 0)}
+                </span>
+              </div>
+
+              {resetCreditsQuery.isError ? (
+                <Alert variant="destructive">
+                  <ShieldAlert className="h-4 w-4" />
+                  <AlertTitle>{t("重置次数查询失败")}</AlertTitle>
+                  <AlertDescription>
+                    {getAppErrorMessage(resetCreditsQuery.error)}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
+              {(resetCredits?.credits.length ?? 0) > 0 ? (
+                <div className="grid gap-2">
+                  <div className="text-[10px] font-medium text-muted-foreground">
+                    {t("重置次数过期时间")}
+                  </div>
+                  {resetCredits?.credits.map((credit, index) => (
+                    <div
+                      key={credit.id || `${credit.expiresAt}-${index}`}
+                      className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs"
+                    >
+                      <span>{t("第 {index} 次", { index: index + 1 })}</span>
+                      <span className="text-right text-muted-foreground">
+                        {formatResetCreditExpiry(credit.expiresAt)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -336,5 +466,16 @@ export default function UsageModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={resetConfirmOpen}
+      onOpenChange={setResetConfirmOpen}
+      title={t("确认重置额度")}
+      description={t("此操作会消耗 1 次主动重置次数，并立即重置账号 {name} 的 Codex 额度。", {
+        name: account.name,
+      })}
+      confirmText={t("消耗 1 次并重置")}
+      onConfirm={() => consumeResetCreditMutation.mutate()}
+    />
+    </>
   );
 }

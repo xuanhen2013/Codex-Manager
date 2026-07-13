@@ -3,6 +3,23 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
+  "主动额度重置": "Manual quota reset",
+  "每次重置会消耗 1 次可用次数，并立即重置当前 Codex 额度窗口。":
+    "Each reset consumes one available credit and immediately resets the current Codex quota windows.",
+  "可用重置次数": "Available resets",
+  "查询中...": "Loading...",
+  "重置次数查询失败": "Failed to load reset credits",
+  "重置次数过期时间": "Reset credit expiry",
+  "第 {index} 次": "Reset {index}",
+  "重置额度": "Reset quota",
+  "重置中...": "Resetting...",
+  "确认重置额度": "Confirm quota reset",
+  "此操作会消耗 1 次主动重置次数，并立即重置账号 {name} 的 Codex 额度。":
+    "This consumes one manual reset and immediately resets the Codex quota for {name}.",
+  "消耗 1 次并重置": "Consume 1 and reset",
+  "额度已重置": "Quota reset successfully",
+  "额度重置失败": "Quota reset failed",
+  "额度重置成功，但刷新部分数据失败": "Quota reset succeeded, but some data failed to refresh",
   "5h 容量覆盖（Token）": "5h capacity override (tokens)",
   "7d 容量覆盖（Token）": "7d capacity override (tokens)",
   "AT/RT 刷新中...": "Refreshing AT/RT...",

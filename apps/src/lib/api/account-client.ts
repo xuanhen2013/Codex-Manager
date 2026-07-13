@@ -43,8 +43,14 @@ import {
 import { serializeManagedModelForRpc } from "./model-catalog";
 import { unwrapUsageSnapshotPayload } from "./usage-response";
 import {
+  readUsageResetConsumeResult,
+  readUsageResetCredits,
+} from "./usage-reset-credits";
+import {
   AccountListResult,
   AccountUsage,
+  AccountUsageResetConsumeResult,
+  AccountUsageResetCredits,
   AggregateApi,
   AggregateApiBalanceRefreshResult,
   AggregateApiCreateResult,
@@ -544,6 +550,22 @@ export const accountClient = {
           : {}
       )
     );
+  },
+  async getUsageResetCredits(accountId: string): Promise<AccountUsageResetCredits> {
+    const result = await invoke<unknown>(
+      "service_usage_reset_credits_read",
+      withAddr({ accountId, account_id: accountId }),
+    );
+    return readUsageResetCredits(result);
+  },
+  async consumeUsageResetCredit(
+    accountId: string,
+  ): Promise<AccountUsageResetConsumeResult> {
+    const result = await invoke<unknown>(
+      "service_usage_reset_credits_consume",
+      withAddr({ accountId, account_id: accountId }),
+    );
+    return readUsageResetConsumeResult(result);
   },
   async aggregateUsage(): Promise<UsageAggregateSummary> {
     const result = await invoke<unknown>("service_usage_aggregate", withAddr());

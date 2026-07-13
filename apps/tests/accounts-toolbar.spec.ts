@@ -53,6 +53,7 @@ const SETTINGS_SNAPSHOT = {
 
 test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
   const usageRefreshPayloads: Record<string, unknown>[] = [];
+  const resetCreditConsumePayloads: Record<string, unknown>[] = [];
   const rtRefreshPayloads: Record<string, unknown>[] = [];
   let refreshAllRtCount = 0;
 
@@ -109,6 +110,7 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
             label: "qxcnms@gmail.com",
             plan_type: "plus",
             status: "active",
+            has_token: true,
             sort: 0,
           },
         ],
@@ -129,6 +131,40 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
           : {},
       );
       await ok({});
+      return;
+    }
+    if (method === "account/usage/resetCredits/read") {
+      await ok({
+        availableCount: 2,
+        credits: [
+          {
+            id: "credit-1",
+            status: "available",
+            grantedAt: "2026-07-01T00:00:00Z",
+            expiresAt: "2026-08-01T00:00:00Z",
+          },
+          {
+            id: "credit-2",
+            status: "available",
+            grantedAt: "2026-07-01T00:00:00Z",
+            expiresAt: "2026-09-01T00:00:00Z",
+          },
+        ],
+      });
+      return;
+    }
+    if (method === "account/usage/resetCredits/consume") {
+      resetCreditConsumePayloads.push(
+        payload?.params && typeof payload.params === "object"
+          ? (payload.params as Record<string, unknown>)
+          : {},
+      );
+      await ok({
+        resetApplied: true,
+        resetCredits: { availableCount: 1, credits: [] },
+        usageRefreshed: true,
+        warning: null,
+      });
       return;
     }
     if (method === "account/chatgptAuthTokens/refresh") {
@@ -195,6 +231,16 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
   await page.getByRole("button", { name: "用量详情" }).click();
   const usageDialog = page.getByRole("dialog", { name: "用量详情" });
   await expect(usageDialog.getByRole("button", { name: "刷新 AT/RT" })).toBeVisible();
+  await expect(usageDialog.getByText("可用重置次数")).toBeVisible();
+  await expect(usageDialog.getByText("2", { exact: true })).toBeVisible();
+
+  await usageDialog.getByRole("button", { name: "重置额度" }).click();
+  const resetDialog = page.getByRole("dialog", { name: "确认重置额度" });
+  await resetDialog.getByRole("button", { name: "消耗 1 次并重置" }).click();
+  await expect.poll(() => resetCreditConsumePayloads.length).toBe(1);
+  expect(resetCreditConsumePayloads[0].accountId).toBe("acct-plus-1");
+  expect(resetCreditConsumePayloads[0].account_id).toBe("acct-plus-1");
+  await expect(usageDialog.getByText("1", { exact: true })).toBeVisible();
 
   await usageDialog.getByRole("button", { name: "立即刷新" }).click();
   await expect.poll(() => usageRefreshPayloads.length).toBe(1);
