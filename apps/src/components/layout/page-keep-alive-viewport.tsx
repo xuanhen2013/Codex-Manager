@@ -120,7 +120,11 @@ export function PageKeepAliveViewport({
   );
   const pruneShellTabs = useAppStore((state) => state.pruneShellTabs);
   const { isDesktopRuntime } = useRuntimeCapabilities();
-  const { data: session, isLoading: isSessionLoading } = useAppSession();
+  const {
+    data: session,
+    isLoading: isSessionLoading,
+    isSessionQueryEnabled,
+  } = useAppSession();
   const role = resolveSessionRole(session, isSessionLoading, isDesktopRuntime);
   const routeAccess = useMemo(
     () => ({ role, mode: session?.mode ?? null }),
@@ -147,10 +151,21 @@ export function PageKeepAliveViewport({
   }, [currentShellPath, routeAccess, t]);
 
   useEffect(() => {
-    if (isSessionLoading) return;
+    if (
+      !isDesktopRuntime &&
+      (!isSessionQueryEnabled || isSessionLoading)
+    ) {
+      return;
+    }
     const allowedPaths = getAllowedTopLevelRoutes(routeAccess).map((route) => route.path);
     pruneShellTabs(allowedPaths, getFirstAllowedTopLevelRoutePath(routeAccess));
-  }, [isSessionLoading, pruneShellTabs, routeAccess]);
+  }, [
+    isDesktopRuntime,
+    isSessionLoading,
+    isSessionQueryEnabled,
+    pruneShellTabs,
+    routeAccess,
+  ]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

@@ -113,6 +113,16 @@ async function mockRuntimeAndRpc(page: Page) {
       });
       return;
     }
+    if (method === "accountManager/session/current") {
+      await ok({
+        mode: "none",
+        currentUser: null,
+        role: "system_admin",
+        permissions: [],
+        distributionEnabled: false,
+      });
+      return;
+    }
     if (method === "aggregateApi/list") {
       await ok({ items: [] });
       return;
@@ -153,20 +163,20 @@ test("temporary Codex CLI guide close survives a hard reload in the same tab", a
 
   await page.goto("/aggregate-api/");
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "本次关闭" }).click();
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).not.toBeVisible();
 
   await page.reload();
   await expect(
-    page.getByRole("columnheader", { name: "供应商 / URL" }).last(),
+    page.getByRole("columnheader", { name: "V2 routes" }).last(),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).not.toBeVisible();
 });
 
@@ -178,9 +188,9 @@ test("collapsed sidebar brand uses the app title", async ({ page }) => {
 
   await page.goto("/");
   const brandButton = page.getByRole("button", {
-    name: "重新打开 Codex CLI 引导",
+    name: "重新打开 Codex 引导",
   });
-  await expect(brandButton).toHaveAttribute("title", "重新打开 Codex CLI 引导");
+  await expect(brandButton).toHaveAttribute("title", "重新打开 Codex 引导");
 
   await page.getByRole("button", { name: "收起侧边栏" }).click();
 
@@ -201,7 +211,7 @@ test("checking don't show again persists the guide dismissal before reload", asy
 
   await page.goto("/aggregate-api/");
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).toBeVisible();
 
   await page
@@ -217,15 +227,15 @@ test("checking don't show again persists the guide dismissal before reload", asy
     )
     .toBe(true);
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).not.toBeVisible();
 
   await page.evaluate(() => window.sessionStorage.clear());
   await page.reload();
   await expect(
-    page.getByRole("columnheader", { name: "供应商 / URL" }).last(),
+    page.getByRole("columnheader", { name: "V2 routes" }).last(),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Codex CLI 首次接入引导" }),
+    page.getByRole("heading", { name: "Codex 首次接入引导" }),
   ).not.toBeVisible();
 });
