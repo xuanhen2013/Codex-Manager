@@ -5,6 +5,14 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+### Changed
+
+- Cut over the model catalog to V2: fresh databases seed eight builtin models (seven in the normal list), while models, integer price tiers, routes, permission groups, and instructions policies are saved in one transaction.
+- Gateway routing, local `/v1/models`, model groups, and model selectors now read V2 only; remote merge/prune, supplier `/models` discovery, request-time bootstrap, and compiled price fallbacks were removed.
+- Added local JSON preview/commit plus price, route, and instructions editing. Builtins can only be disabled; custom models can be deleted.
+- `models_cache.json` is now exported only by an explicit desktop or Web action and never carries a model personality prompt.
+- Wallet charging now records integer price tiers, immutable charge snapshots, and idempotent ledger updates in one transaction.
+
 ## [0.4.0] - 2026-06-24
 
 ### Changed

@@ -5,6 +5,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 模型目录一次性切换到 V2：fresh DB 内置 8 个 builtin（普通列表显示 7 个），模型、整数价格阶梯、routes、权限组和 instructions policy 由单个事务保存。
+- Gateway、本地 `/v1/models`、模型组和模型选择器只读取 V2；删除远端目录 merge/prune、供应商 `/models` 发现、请求时 bootstrap 和编译期价格 fallback。
+- 模型管理页新增本地 JSON preview/commit、price missing、route/instructions 编辑；builtin 只能禁用，custom 可以删除。
+- `models_cache.json` 改为桌面/Web 都只由用户主动导出，且导出不包含模型人格 prompt。
+- 钱包扣费改为整数价格 tier、不可变 request charge snapshot 与幂等 ledger 同事务更新。
+
 ## [0.4.0] - 2026-06-24
 
 ### Changed
