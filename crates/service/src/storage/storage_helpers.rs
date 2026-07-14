@@ -22,6 +22,7 @@ const ENV_STORAGE_ACQUIRE_TIMEOUT_MS: &str = "CODEXMANAGER_STORAGE_ACQUIRE_TIMEO
 static INITIALIZED_STORAGE_PATHS: OnceLock<Mutex<HashMap<String, ()>>> = OnceLock::new();
 
 const MODEL_CATALOG_V2_MIGRATION: &str = "112_model_catalog_v2";
+const MODEL_BILLING_V2_HARDENING_MIGRATION: &str = "113_model_billing_v2_hardening";
 
 struct ModelCatalogMigrationLock {
     path: PathBuf,
@@ -587,16 +588,24 @@ fn model_catalog_v2_migration_needed(db_path: &Path) -> Result<bool, String> {
     if !sqlite_table_exists(&conn, "schema_migrations")? {
         return Ok(true);
     }
-    let applied = conn
-        .query_row(
-            "SELECT 1 FROM schema_migrations WHERE version=?1 LIMIT 1",
-            [MODEL_CATALOG_V2_MIGRATION],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(|err| format!("read migration marker failed: {err}"))?
-        .is_some();
-    Ok(!applied)
+    for version in [
+        MODEL_CATALOG_V2_MIGRATION,
+        MODEL_BILLING_V2_HARDENING_MIGRATION,
+    ] {
+        let applied = conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version=?1 LIMIT 1",
+                [version],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|err| format!("read migration marker failed: {err}"))?
+            .is_some();
+        if !applied {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn preflight_model_catalog_v2(db_path: &Path) -> Result<(), String> {

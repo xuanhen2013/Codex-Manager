@@ -393,16 +393,16 @@ fn insert_seed(
     seed: &BuiltinModelSeed,
     now: i64,
 ) -> Result<()> {
-    let id = builtin_id(&seed.slug);
+    let proposed_id = builtin_id(&seed.slug);
     conn.execute(
         "INSERT OR IGNORE INTO models (
            id,slug,display_name,description,origin,enabled,supported_in_api,visibility,
            sort_order,context_window,max_context_window,default_reasoning_effort,
            capabilities_json,instructions_mode,instructions_text,builtin_revision,user_edited,
            created_at,updated_at
-         ) VALUES (?1,?2,?3,?4,'builtin',1,1,?5,?6,?7,?8,?9,?10,'passthrough',NULL,?11,0,?12,?12)",
+        ) VALUES (?1,?2,?3,?4,'builtin',1,1,?5,?6,?7,?8,?9,?10,'passthrough',NULL,?11,0,?12,?12)",
         params![
-            id,
+            proposed_id,
             seed.slug,
             seed.display_name,
             seed.description,
@@ -416,6 +416,17 @@ fn insert_seed(
             now
         ],
     )?;
+    let (id, origin) = conn.query_row(
+        "SELECT id,origin FROM models WHERE slug=?1 COLLATE NOCASE",
+        [&seed.slug],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    if origin != "builtin" {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "builtin seed slug {} is owned by a custom model",
+            seed.slug
+        )));
+    }
     let base = seed
         .price_tiers
         .iter()
@@ -1329,6 +1340,59 @@ mod tests {
         let model = storage.get_managed_model_v2("gpt-5.4").unwrap().unwrap();
         assert_eq!(model.display_name, "Edited");
         assert!(!model.enabled);
+    }
+
+    #[test]
+    fn seed_reuses_legacy_builtin_id_for_existing_slug() {
+        let storage = storage();
+        let slug = "gpt-5.4";
+        let current_id = builtin_id(slug);
+        let legacy_id = "builtin:gpt-5_4";
+
+        storage
+            .conn
+            .execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")
+            .expect("disable foreign keys for legacy fixture");
+        storage
+            .conn
+            .execute(
+                "UPDATE models SET id=?2 WHERE id=?1",
+                params![current_id, legacy_id],
+            )
+            .expect("rewrite legacy model id");
+        for table in ["model_prices", "model_price_tiers", "model_routes"] {
+            storage
+                .conn
+                .execute(
+                    &format!("UPDATE {table} SET model_id=?2 WHERE model_id=?1"),
+                    params![current_id, legacy_id],
+                )
+                .expect("rewrite legacy child model id");
+        }
+        storage
+            .conn
+            .execute_batch("COMMIT; PRAGMA foreign_keys=ON;")
+            .expect("commit legacy fixture");
+
+        storage
+            .seed_missing_builtin_models_v2()
+            .expect("seed with legacy builtin id");
+
+        let model = storage
+            .get_managed_model_v2(slug)
+            .expect("read model")
+            .expect("model exists");
+        assert_eq!(model.id, legacy_id);
+        assert_eq!(model.price.price_status, "official");
+        assert_eq!(model.price_tiers.len(), 2);
+        assert_eq!(model.routes.len(), 1);
+        let foreign_key_errors: i64 = storage
+            .conn
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .expect("foreign key check");
+        assert_eq!(foreign_key_errors, 0);
     }
 
     #[test]
