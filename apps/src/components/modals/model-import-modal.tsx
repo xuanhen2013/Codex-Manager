@@ -95,14 +95,11 @@ export function ModelImportModal({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
-    const frameId = window.requestAnimationFrame(() => {
-      setJsonContent("");
-      setConflictStrategy("keep_existing");
-      setPreview(EMPTY_PREVIEW);
-      setError(null);
-    });
-    return () => window.cancelAnimationFrame(frameId);
+    if (open) return;
+    setJsonContent("");
+    setConflictStrategy("keep_existing");
+    setPreview(EMPTY_PREVIEW);
+    setError(null);
   }, [open]);
 
   const input = (): ManagedModelImportV2Params => ({
