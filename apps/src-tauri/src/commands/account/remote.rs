@@ -294,7 +294,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .expect("payload");
         let expected = serde_json::json!({
@@ -320,7 +319,6 @@ mod tests {
         let actual = account_update_payload(
             "acc-1".to_string(),
             Some(5),
-            None,
             None,
             None,
             None,
@@ -360,7 +358,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
         .expect("payload");
         let expected = serde_json::json!({
@@ -375,7 +372,6 @@ mod tests {
             "acc-1".to_string(),
             None,
             Some(true),
-            None,
             None,
             None,
             None,
