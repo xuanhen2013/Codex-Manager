@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -281,15 +281,6 @@ export function ModelCatalogModal({
   );
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const frameId = window.requestAnimationFrame(() => {
-      setDraft(buildDraft(model, nextSortOrder));
-      setError(null);
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, [model, nextSortOrder, open]);
-
   const title = useMemo(
     () => (model ? t("编辑模型") : t("新增自定义模型")),
     [model, t],
@@ -496,7 +487,7 @@ export function ModelCatalogModal({
                     id="model-tags"
                     value={draft.tags}
                     onChange={(event) => updateDraft("tags", event.target.value)}
-                    placeholder="coding, reasoning"
+                    placeholder={t("例如：编程, 推理")}
                   />
                 </div>
               </div>
@@ -569,14 +560,14 @@ export function ModelCatalogModal({
                   </CardContent>
                 </Card>
                 <div className="space-y-2">
-                  <Label>{t("可见性")}</Label>
+                  <Label htmlFor="model-visibility">{t("可见性")}</Label>
                   <Select
                     value={draft.visibility}
                     onValueChange={(value) =>
                       updateDraft("visibility", (value || "list") as ModelVisibilityV2)
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="model-visibility" aria-label={t("可见性")}>
                       <SelectValue>
                         {(value) => value === "hide" ? t("隐藏") : t("列表显示")}
                       </SelectValue>
@@ -607,11 +598,11 @@ export function ModelCatalogModal({
 
             <TabsContent value="price" className="mt-4 space-y-4">
               <Card size="sm">
-                <CardHeader><CardTitle>{t("基础价格（USD / 1M tokens）")}</CardTitle></CardHeader>
+                <CardHeader><CardTitle>{t("基础价格（美元 / 百万令牌）")}</CardTitle></CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-3">
                   <div className="space-y-2">
                     <Label htmlFor="price-input">{t("输入价格")}</Label>
-                    <Input id="price-input" inputMode="decimal" value={draft.inputPrice} onChange={(event) => updateDraft("inputPrice", event.target.value)} placeholder={t("留空表示 price missing")} />
+                    <Input id="price-input" inputMode="decimal" value={draft.inputPrice} onChange={(event) => updateDraft("inputPrice", event.target.value)} placeholder={t("留空表示价格缺失")} />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="price-cached">{t("缓存输入价格")}</Label>
@@ -628,7 +619,7 @@ export function ModelCatalogModal({
                 <CardHeader><CardTitle>{t("可选长上下文阶梯价")}</CardTitle></CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-4">
                   <div className="space-y-2">
-                    <Label htmlFor="price-long-threshold">{t("输入 token 阈值")}</Label>
+                    <Label htmlFor="price-long-threshold">{t("输入令牌阈值")}</Label>
                     <Input id="price-long-threshold" type="number" min="1" value={draft.longContextThreshold} onChange={(event) => updateDraft("longContextThreshold", event.target.value)} />
                   </div>
                   <div className="space-y-2">
@@ -675,7 +666,7 @@ export function ModelCatalogModal({
                     <CardContent className="space-y-3">
                       <div className="grid gap-3 md:grid-cols-[170px_minmax(0,1fr)_minmax(0,1fr)]">
                         <div className="space-y-2">
-                          <Label>{t("来源类型")}</Label>
+                          <Label htmlFor={`route-kind-${index}`}>{t("来源类型")}</Label>
                           <Select
                             value={route.sourceKind}
                             onValueChange={(value) => {
@@ -684,7 +675,7 @@ export function ModelCatalogModal({
                               updateRoute(index, "sourceId", sourceKind === "account_pool" ? "default" : "");
                             }}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger id={`route-kind-${index}`} aria-label={t("来源类型")}>
                               <SelectValue>
                                 {(value) => value === "aggregate_api" ? t("聚合 API") : t("账号池")}
                               </SelectValue>
@@ -699,7 +690,7 @@ export function ModelCatalogModal({
                           <Label htmlFor={`route-source-${index}`}>{t("来源 ID")}</Label>
                           {route.sourceKind === "aggregate_api" && aggregateApis.length > 0 ? (
                             <Select value={route.sourceId} onValueChange={(value) => updateRoute(index, "sourceId", value || "")}>
-                              <SelectTrigger id={`route-source-${index}`}><SelectValue placeholder={t("选择聚合 API")} /></SelectTrigger>
+                              <SelectTrigger id={`route-source-${index}`} aria-label={t("来源 ID")}><SelectValue placeholder={t("选择聚合 API")} /></SelectTrigger>
                               <SelectContent><SelectGroup>
                                 {aggregateApis.map((api) => (
                                   <SelectItem key={api.id} value={api.id}>{api.supplierName || api.id}</SelectItem>
@@ -725,8 +716,8 @@ export function ModelCatalogModal({
                           <Input id={`route-weight-${index}`} type="number" min="1" value={route.weight} onChange={(event) => updateRoute(index, "weight", event.target.value)} />
                         </div>
                         <div className="flex h-9 items-center gap-2">
-                          <Switch checked={route.enabled} onCheckedChange={(checked) => updateRoute(index, "enabled", checked)} />
-                          <span className="text-sm">{t("启用路由")}</span>
+                          <Switch id={`route-enabled-${index}`} aria-label={t("启用路由")} checked={route.enabled} onCheckedChange={(checked) => updateRoute(index, "enabled", checked)} />
+                          <Label htmlFor={`route-enabled-${index}`}>{t("启用路由")}</Label>
                         </div>
                         <Button type="button" variant="ghost" size="icon" aria-label={t("删除路由")} onClick={() => updateDraft("routes", draft.routes.filter((_, routeIndex) => routeIndex !== index))}>
                           <Trash2 className="h-4 w-4" />
@@ -740,9 +731,9 @@ export function ModelCatalogModal({
 
             <TabsContent value="instructions" className="mt-4 space-y-4">
               <div className="space-y-2">
-                <Label>{t("指令模式")}</Label>
+                <Label htmlFor="model-instructions-mode">{t("指令模式")}</Label>
                 <Select value={draft.instructionsMode} onValueChange={(value) => updateDraft("instructionsMode", (value || "passthrough") as ModelInstructionsModeV2)}>
-                  <SelectTrigger>
+                  <SelectTrigger id="model-instructions-mode" aria-label={t("指令模式")}>
                     <SelectValue>
                       {(value) => value === "fallback" ? t("兜底") : value === "override" ? t("覆盖") : t("透传")}
                     </SelectValue>

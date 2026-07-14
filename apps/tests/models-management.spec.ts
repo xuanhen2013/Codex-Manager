@@ -364,6 +364,45 @@ async function installMockRuntime(page: Page): Promise<MockState> {
   return state;
 }
 
+test("编辑器不依赖后续动画帧即可载入目标模型", async ({ page }) => {
+  await installMockRuntime(page);
+  await page.goto("/models/");
+  await expect(
+    page.getByRole("main").getByRole("heading", { name: "模型管理" }),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    const testWindow = window as typeof window & {
+      __nativeRequestAnimationFrame?: typeof window.requestAnimationFrame;
+    };
+    testWindow.__nativeRequestAnimationFrame = window.requestAnimationFrame;
+    window.requestAnimationFrame = () => 1;
+  });
+  await page
+    .getByRole("button", { name: "编辑模型 gpt-5.4", exact: true })
+    .click();
+  await expect(page.getByLabel("模型标识（Slug）")).toHaveValue("gpt-5.4");
+  await expect(page.getByLabel("显示名称")).toHaveValue("GPT-5.4");
+  await expect(page.getByLabel("描述")).toHaveValue("gpt-5.4 builtin");
+  await expect(page.getByLabel("提供方")).toHaveValue("openai");
+  await expect(page.getByLabel("模型系列")).toHaveValue("gpt-5");
+  await expect(page.getByLabel("模型分类")).toHaveValue("reasoning");
+  await expect(page.getByLabel("标签")).toHaveValue("coding");
+  await expect(page.getByLabel("标签")).toHaveAttribute(
+    "placeholder",
+    "例如：编程, 推理",
+  );
+  await expect(page.getByLabel("排序")).toHaveValue("16");
+  await expect(page.getByLabel("上下文窗口", { exact: true })).toHaveValue(
+    "272000",
+  );
+  await expect(page.getByLabel("最大上下文窗口", { exact: true })).toHaveValue(
+    "1000000",
+  );
+  await expect(page.getByLabel("默认推理强度")).toHaveValue("medium");
+  await expect(page.getByRole("combobox", { name: "可见性" })).toBeVisible();
+});
+
 test("模型目录 V2 完成本地管理、原子保存、导入和主动导出", async ({ page }) => {
   const state = await installMockRuntime(page);
 
@@ -413,12 +452,14 @@ test("模型目录 V2 完成本地管理、原子保存、导入和主动导出"
 
   await page.getByRole("tab", { name: "路由" }).click();
   await page.getByRole("button", { name: "添加聚合路由" }).click();
+  await expect(page.getByRole("combobox", { name: "来源类型" })).toHaveCount(2);
+  await expect(page.getByRole("switch", { name: "启用路由" })).toHaveCount(2);
   await page.locator("#route-source-1").click();
   await page.getByRole("option", { name: "Aggregate Test" }).click();
   await page.locator("#route-model-1").fill("upstream-custom-v1");
 
   await page.getByRole("tab", { name: "指令策略" }).click();
-  await page.getByRole("combobox").filter({ hasText: "透传" }).click();
+  await page.getByRole("combobox", { name: "指令模式" }).click();
   await page.getByRole("option", { name: "兜底" }).click();
   await page.locator("#model-instructions-text").fill("Use the local policy.");
   await page.getByRole("button", { name: "保存模型" }).click();

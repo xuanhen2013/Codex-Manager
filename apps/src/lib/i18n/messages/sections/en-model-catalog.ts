@@ -16,6 +16,7 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   提供方: "Provider",
   模型系列: "Model family",
   模型分类: "Model category",
+  "例如：编程, 推理": "For example: coding, reasoning",
   排序: "Sort order",
   默认推理强度: "Default reasoning effort",
   启用模型: "Enable model",
@@ -25,11 +26,11 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   隐藏: "Hidden",
   "关键能力 JSON": "Capabilities JSON",
   "关键能力 JSON 必须是对象": "Capabilities JSON must be an object",
-  "基础价格（USD / 1M tokens）": "Base prices (USD / 1M tokens)",
+  "基础价格（美元 / 百万令牌）": "Base prices (USD / 1M tokens)",
   输入价格: "Input price",
   缓存输入价格: "Cached-input price",
   输出价格: "Output price",
-  "留空表示 price missing": "Leave blank for price missing",
+  留空表示价格缺失: "Leave blank for price missing",
   "价格必须是非负十进制数": "Price must be a non-negative decimal number",
   "价格最多支持 6 位有效小数":
     "Price supports at most six significant decimal places",
@@ -40,7 +41,7 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   "配置长上下文价格前必须先填写基础三价":
     "Fill all three base prices before configuring long-context prices",
   可选长上下文阶梯价: "Optional long-context price tier",
-  "输入 token 阈值": "Input-token threshold",
+  输入令牌阈值: "Input-token threshold",
   长上下文阈值: "Long-context threshold",
   "长上下文阈值和三项价格必须完整填写":
     "The long-context threshold and all three prices must be filled",

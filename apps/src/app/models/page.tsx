@@ -433,9 +433,9 @@ export default function ModelsPage() {
         </Card>
       </PageWorkspace>
 
-      {isAdminMode ? (
+      {isAdminMode && editorOpen ? (
         <ModelCatalogModal
-          open={editorOpen}
+          open
           onOpenChange={setEditorOpen}
           model={editingModel}
           nextSortOrder={nextSortOrder}
