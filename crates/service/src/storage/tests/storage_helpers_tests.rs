@@ -55,7 +55,7 @@ fn unique_db_path(prefix: &str) -> String {
 }
 
 #[test]
-fn pending_billing_hardening_requires_model_catalog_backup() {
+fn pending_model_catalog_data_migration_requires_backup() {
     let db_path = unique_db_path("codexmanager-model-billing-backup");
     let conn = Connection::open(&db_path).expect("open database");
     conn.execute_batch(
@@ -78,11 +78,21 @@ fn pending_billing_hardening_requires_model_catalog_backup() {
         ["113_model_billing_v2_hardening"],
     )
     .expect("mark hardening complete");
+
+    assert!(
+        model_catalog_v2_migration_needed(std::path::Path::new(&db_path))
+            .expect("inspect pending GPT-5.6 pricing migration")
+    );
+    conn.execute(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES(?1,3)",
+        ["114_model_catalog_gpt56_prices"],
+    )
+    .expect("mark GPT-5.6 pricing migration complete");
     drop(conn);
 
     assert!(
         !model_catalog_v2_migration_needed(std::path::Path::new(&db_path))
-            .expect("inspect completed hardening")
+            .expect("inspect completed catalog migrations")
     );
     let _ = std::fs::remove_file(&db_path);
 }

@@ -476,7 +476,7 @@ mod tests {
         let request_log_id = storage.conn.last_insert_rowid();
         let mut input = ChargeSnapshotInputV2 {
             request_log_id,
-            model_slug: "gpt-5.6-sol".into(),
+            model_slug: "codex-auto-review".into(),
             usage_source: "actual".into(),
             input_tokens: 1,
             cached_input_tokens: 0,

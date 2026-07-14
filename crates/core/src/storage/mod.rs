@@ -1859,6 +1859,7 @@ impl Storage {
         )?;
         self.apply_model_catalog_v2_migration()?;
         self.apply_model_billing_v2_hardening_migration()?;
+        self.apply_gpt56_pricing_migration()?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_aggregate_apis_table()?;
         self.ensure_aggregate_api_secrets_table()?;

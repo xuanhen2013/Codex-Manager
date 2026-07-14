@@ -26,7 +26,19 @@ fn catalog_prices_are_exact_and_missing_prices_do_not_fallback() {
     assert_close(mini.cached_input_price_per_1m, 0.075);
     assert_close(mini.output_price_per_1m, 4.5);
     assert!(resolve_model_price_from_catalog(&prices, "gpt-5.4-mini-snapshot", 0).is_none());
-    assert!(resolve_model_price_from_catalog(&prices, "gpt-5.6-sol", 0).is_none());
+    let sol = resolve_model_price_from_catalog(&prices, "gpt-5.6-sol", 0).expect("sol");
+    assert_close(sol.input_price_per_1m, 5.0);
+    assert_close(sol.cached_input_price_per_1m, 5.0);
+    assert_close(sol.output_price_per_1m, 30.0);
+    let terra = resolve_model_price_from_catalog(&prices, "gpt-5.6-terra", 0).expect("terra");
+    assert_close(terra.input_price_per_1m, 2.5);
+    assert_close(terra.cached_input_price_per_1m, 2.5);
+    assert_close(terra.output_price_per_1m, 15.0);
+    let luna = resolve_model_price_from_catalog(&prices, "gpt-5.6-luna", 0).expect("luna");
+    assert_close(luna.input_price_per_1m, 1.0);
+    assert_close(luna.cached_input_price_per_1m, 1.0);
+    assert_close(luna.output_price_per_1m, 6.0);
+    assert!(resolve_model_price_from_catalog(&prices, "codex-auto-review", 0).is_none());
     assert!(resolve_model_price_from_catalog(&prices, "unknown-provider-model", 0).is_none());
 }
 
@@ -52,7 +64,7 @@ fn catalog_cost_uses_cached_subset_once() {
 }
 
 #[test]
-fn zero_balance_is_known_but_positive_balance_requires_price() {
+fn zero_balance_is_known_and_positive_balance_uses_gpt56_price() {
     let (_storage, prices) = prices();
     assert_eq!(
         estimate_remaining_tokens_from_usd_with_catalog(&prices, "gpt-5.6-sol", 0.0),
@@ -60,7 +72,7 @@ fn zero_balance_is_known_but_positive_balance_requires_price() {
     );
     assert_eq!(
         estimate_remaining_tokens_from_usd_with_catalog(&prices, "gpt-5.6-sol", 1.0),
-        None
+        Some(80_000)
     );
 }
 

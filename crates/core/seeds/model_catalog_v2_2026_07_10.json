@@ -1,5 +1,5 @@
 {
-  "revision": 1,
+  "revision": 2,
   "source_sha256": "4914710f243f67c3b32895bfc91e51798cddd2f4020f4c82230fef2798eb0076",
   "models": [
     {
@@ -12,9 +12,11 @@
       "context_window": 372000,
       "max_context_window": 372000,
       "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority"],"input_modalities":["text","image"],"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image"},
-      "price_status": "missing",
-      "price_source": null,
-      "price_tiers": []
+      "price_status": "estimated",
+      "price_source": "user_provided_openai_gpt-5.6_2026-07-14_cached_at_input_rate",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":5000000,"output_microusd_per_1m":30000000}
+      ]
     },
     {
       "slug": "gpt-5.6-terra",
@@ -26,9 +28,11 @@
       "context_window": 372000,
       "max_context_window": 372000,
       "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max","ultra"],"service_tiers":["priority"],"input_modalities":["text","image"],"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image"},
-      "price_status": "missing",
-      "price_source": null,
-      "price_tiers": []
+      "price_status": "estimated",
+      "price_source": "user_provided_openai_gpt-5.6_2026-07-14_cached_at_input_rate",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":2500000,"cached_input_microusd_per_1m":2500000,"output_microusd_per_1m":15000000}
+      ]
     },
     {
       "slug": "gpt-5.6-luna",
@@ -40,9 +44,11 @@
       "context_window": 372000,
       "max_context_window": 372000,
       "capabilities": {"reasoning_efforts":["low","medium","high","xhigh","max"],"service_tiers":["priority"],"input_modalities":["text","image"],"supports_parallel_tool_calls":true,"supports_reasoning_summaries":true,"default_reasoning_summary":"none","supports_verbosity":true,"default_verbosity":"low","supports_image_detail_original":true,"supports_search_tool":true,"apply_patch_tool_type":"freeform","web_search_tool_type":"text_and_image"},
-      "price_status": "missing",
-      "price_source": null,
-      "price_tiers": []
+      "price_status": "estimated",
+      "price_source": "user_provided_openai_gpt-5.6_2026-07-14_cached_at_input_rate",
+      "price_tiers": [
+        {"min_input_tokens":0,"input_microusd_per_1m":1000000,"cached_input_microusd_per_1m":1000000,"output_microusd_per_1m":6000000}
+      ]
     },
     {
       "slug": "gpt-5.5",

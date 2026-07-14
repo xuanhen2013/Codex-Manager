@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use super::{now_ts, ModelGroupAccess, ModelGroupModel, ModelPriceTierV2, Storage};
 
 const MIGRATION_VERSION: &str = "112_model_catalog_v2";
+const GPT56_PRICING_MIGRATION_VERSION: &str = "114_model_catalog_gpt56_prices";
 const DEFAULT_MODEL_GROUP_ID: &str = "mg_default";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1001,6 +1002,49 @@ impl Storage {
         tx.commit()
     }
 
+    pub(super) fn apply_gpt56_pricing_migration(&self) -> Result<()> {
+        if self.has_migration(GPT56_PRICING_MIGRATION_VERSION)? {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute_batch(include_str!(
+            "../../migrations/114_model_catalog_gpt56_prices.sql"
+        ))?;
+        let invalid_rows: i64 = tx.query_row(
+            "SELECT COUNT(*)
+             FROM models m
+             JOIN model_prices p ON p.model_id=m.id
+             LEFT JOIN model_price_tiers t
+               ON t.model_id=m.id AND t.min_input_tokens=0
+             WHERE p.price_source='user_provided_openai_gpt-5.6_2026-07-14_cached_at_input_rate'
+               AND (m.origin<>'builtin' OR p.price_status<>'estimated'
+                 OR p.input_microusd_per_1m IS NULL
+                 OR p.cached_input_microusd_per_1m IS NULL
+                 OR p.output_microusd_per_1m IS NULL
+                 OR t.model_id IS NULL
+                 OR t.input_microusd_per_1m<>p.input_microusd_per_1m
+                 OR t.cached_input_microusd_per_1m<>p.cached_input_microusd_per_1m
+                 OR t.output_microusd_per_1m<>p.output_microusd_per_1m)",
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid_rows != 0 {
+            return Err(rusqlite::Error::SqliteFailure(
+                (),
+                Some("GPT-5.6 pricing migration smoke check failed".to_string()),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO schema_migrations(version,applied_at) VALUES(?1,?2)",
+            params![GPT56_PRICING_MIGRATION_VERSION, now_ts()],
+        )?;
+        tx.commit()?;
+        if let Some(migrations) = self.applied_migrations.borrow_mut().as_mut() {
+            migrations.insert(GPT56_PRICING_MIGRATION_VERSION.to_string());
+        }
+        Ok(())
+    }
+
     pub fn smoke_check_model_catalog_v2(&self) -> Result<()> {
         migration_smoke(&self.conn)
     }
@@ -1321,8 +1365,20 @@ mod tests {
             all.iter()
                 .filter(|model| model.price.price_status == "missing")
                 .count(),
-            4
+            1
         );
+        for (slug, input, output) in [
+            ("gpt-5.6-sol", 5_000_000, 30_000_000),
+            ("gpt-5.6-terra", 2_500_000, 15_000_000),
+            ("gpt-5.6-luna", 1_000_000, 6_000_000),
+        ] {
+            let model = all.iter().find(|model| model.slug == slug).unwrap();
+            assert_eq!(model.price.price_status, "estimated");
+            assert_eq!(model.price.input_microusd_per_1m, Some(input));
+            assert_eq!(model.price.cached_input_microusd_per_1m, Some(input));
+            assert_eq!(model.price.output_microusd_per_1m, Some(output));
+            assert_eq!(model.price_tiers.len(), 1);
+        }
         let gpt54 = all.iter().find(|model| model.slug == "gpt-5.4").unwrap();
         assert_eq!(gpt54.price_tiers.len(), 2);
         assert_eq!(gpt54.price_tiers[1].min_input_tokens, 272_000);
@@ -1340,6 +1396,78 @@ mod tests {
         let model = storage.get_managed_model_v2("gpt-5.4").unwrap().unwrap();
         assert_eq!(model.display_name, "Edited");
         assert!(!model.enabled);
+    }
+
+    #[test]
+    fn gpt56_pricing_migration_only_fills_unedited_missing_builtin_prices() {
+        let storage = storage();
+        storage
+            .conn
+            .execute(
+                "DELETE FROM schema_migrations WHERE version=?1",
+                [GPT56_PRICING_MIGRATION_VERSION],
+            )
+            .unwrap();
+        storage.applied_migrations.borrow_mut().take();
+
+        for slug in ["gpt-5.6-sol", "gpt-5.6-terra"] {
+            storage
+                .conn
+                .execute(
+                    "DELETE FROM model_price_tiers
+                     WHERE model_id=(SELECT id FROM models WHERE slug=?1)",
+                    [slug],
+                )
+                .unwrap();
+            storage
+                .conn
+                .execute(
+                    "UPDATE model_prices
+                     SET input_microusd_per_1m=NULL,cached_input_microusd_per_1m=NULL,
+                         output_microusd_per_1m=NULL,price_status='missing',price_source=NULL
+                     WHERE model_id=(SELECT id FROM models WHERE slug=?1)",
+                    [slug],
+                )
+                .unwrap();
+        }
+        storage
+            .conn
+            .execute(
+                "UPDATE models SET user_edited=1 WHERE slug='gpt-5.6-terra'",
+                [],
+            )
+            .unwrap();
+
+        storage.apply_gpt56_pricing_migration().unwrap();
+        storage.apply_gpt56_pricing_migration().unwrap();
+
+        let sol = storage
+            .get_managed_model_v2("gpt-5.6-sol")
+            .unwrap()
+            .unwrap();
+        assert_eq!(sol.price.price_status, "estimated");
+        assert_eq!(sol.price.input_microusd_per_1m, Some(5_000_000));
+        assert_eq!(sol.price.cached_input_microusd_per_1m, Some(5_000_000));
+        assert_eq!(sol.price.output_microusd_per_1m, Some(30_000_000));
+        assert_eq!(sol.price_tiers.len(), 1);
+        assert_eq!(sol.builtin_revision, Some(2));
+
+        let terra = storage
+            .get_managed_model_v2("gpt-5.6-terra")
+            .unwrap()
+            .unwrap();
+        assert_eq!(terra.price.price_status, "missing");
+        assert!(terra.price_tiers.is_empty());
+
+        let applied: i64 = storage
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version=?1",
+                [GPT56_PRICING_MIGRATION_VERSION],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
     }
 
     #[test]
