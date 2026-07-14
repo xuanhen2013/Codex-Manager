@@ -223,7 +223,6 @@ export default function ModelsPage() {
     <>
       <PageWorkspace>
         <PageHeader
-          eyebrow="V2"
           title={isAdminMode ? t("模型管理") : t("可用模型")}
           description={t("本地模型目录是唯一运行时真相源；价格、路由和 instructions policy 原子保存。")}
           actions={

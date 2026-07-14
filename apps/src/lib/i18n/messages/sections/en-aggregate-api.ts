@@ -5,16 +5,16 @@ import type { MessageCatalog } from "../types";
 export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   "Upstream routing": "Upstream routing",
   显式路由: "Explicit routes",
-  "这里只管理上游连接；模型 route 在模型目录 V2 中显式配置，页面不会访问供应商 `/models`。":
-    "This page only manages upstream connections. Model routes are configured explicitly in Model Catalog V2, and the page never accesses a supplier `/models` endpoint.",
+  "这里只管理上游连接；模型路由在“模型管理”中显式配置，页面不会访问供应商 `/models`。":
+    "This page only manages upstream connections. Model routes are configured explicitly in Model Management, and the page never accesses a supplier `/models` endpoint.",
   "新建聚合 API": "New aggregate API",
-  "已有 V2 route": "Has V2 route",
+  已有模型路由: "Has model routes",
   测试失败: "Tests failed",
   "测试中...": "Testing...",
   上游连接: "Upstream connections",
-  "连通性测试只使用已配置的 V2 route 对应模型。":
-    "Connection tests only use models referenced by configured V2 routes.",
-  "V2 routes": "V2 routes",
+  "连通性测试只使用已配置路由对应的模型。":
+    "Connection tests only use models referenced by configured routes.",
+  模型路由: "Model routes",
   供应商: "Supplier",
   连通性: "Connectivity",
   连通性测试成功: "Connection test succeeded",
@@ -26,8 +26,8 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   "暂无聚合 API，点击右上角新建":
     "No aggregate APIs yet. Create one from the top-right corner.",
   "测试 route": "Test route",
-  "删除连接时会同时删除引用它的模型目录 V2 routes；legacy 模型表不会被改写。":
-    "Deleting a connection also deletes Model Catalog V2 routes that reference it; legacy model tables are not modified.",
+  "删除连接时会同时删除引用它的模型路由。":
+    "Deleting a connection also deletes model routes that reference it.",
   "配置一个最小转发上游，保存 URL 和密钥后即可用于平台密钥轮转。":
     "Configure a minimal forwarding upstream; after saving its URL and key it can be used for API-key rotation.",
   "New API 用户 ID": "New API user ID",

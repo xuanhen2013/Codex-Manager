@@ -206,6 +206,17 @@ test("Codex CLI guide keeps its panels and footer from overlapping", async ({
   expect(stackedConfig!.y).toBeGreaterThanOrEqual(
     stackedSteps!.y + stackedSteps!.height,
   );
+  const scrollState = await scrollArea.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    };
+  });
+  expect(scrollState.scrollHeight).toBeGreaterThan(scrollState.clientHeight);
+  expect(scrollState.scrollTop).toBeGreaterThan(0);
+  await expect(footer).toBeVisible();
 });
 
 test("temporary Codex CLI guide close survives a hard reload in the same tab", async ({
@@ -225,7 +236,7 @@ test("temporary Codex CLI guide close survives a hard reload in the same tab", a
 
   await page.reload();
   await expect(
-    page.getByRole("columnheader", { name: "V2 routes" }).last(),
+    page.getByRole("columnheader", { name: "模型路由" }).last(),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Codex 首次接入引导" }),
@@ -285,7 +296,7 @@ test("checking don't show again persists the guide dismissal before reload", asy
   await page.evaluate(() => window.sessionStorage.clear());
   await page.reload();
   await expect(
-    page.getByRole("columnheader", { name: "V2 routes" }).last(),
+    page.getByRole("columnheader", { name: "模型路由" }).last(),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Codex 首次接入引导" }),

@@ -45,8 +45,8 @@ export const KO_MODELS_MESSAGES: MessageCatalog = {
   批量删除失败: "일괄 삭제 실패",
   "删除中...": "삭제 중...",
   "共 {count} 条": "총 {count}개",
-  "支持模型目录 V2 导出格式和 Codex catalog 格式；所有导入项都会作为 custom 模型处理。":
-    "Model Catalog V2 내보내기 및 Codex catalog 형식을 지원하며 모든 항목은 custom 모델로 가져옵니다.",
+  "支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为自定义模型处理。":
+    "모델 카탈로그 내보내기 및 Codex catalog 형식을 지원하며 모든 항목은 사용자 정의 모델로 가져옵니다.",
   "本地 JSON 文件": "로컬 JSON 파일",
   冲突策略: "충돌 정책",
   预览导入: "가져오기 미리 보기",

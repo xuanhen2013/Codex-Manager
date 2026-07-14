@@ -413,7 +413,7 @@ export function ModelCatalogModal({
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
-              {t("模型、价格、路由和指令策略将通过一次 V2 原子保存提交。")}
+              {t("模型、价格、路由和指令策略将通过一次原子保存提交。")}
             </DialogDescription>
           </DialogHeader>
 

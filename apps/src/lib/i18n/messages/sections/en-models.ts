@@ -44,8 +44,8 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   "批量删除完成：成功{success}个，失败{failed}个":
     "Batch deletion completed: {success} succeeded, {failed} failed",
   批量删除失败: "Batch deletion failed",
-  "支持模型目录 V2 导出格式和 Codex catalog 格式；所有导入项都会作为 custom 模型处理。":
-    "Supports Model Catalog V2 exports and Codex catalog JSON; every imported item becomes a custom model.",
+  "支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为自定义模型处理。":
+    "Supports model catalog exports and Codex catalog JSON; every imported item becomes a custom model.",
   "本地 JSON 文件": "Local JSON file",
   冲突策略: "Conflict strategy",
   预览导入: "Preview import",

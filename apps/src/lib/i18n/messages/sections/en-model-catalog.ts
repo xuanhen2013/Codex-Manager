@@ -3,8 +3,8 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
-  "模型、价格、路由和指令策略将通过一次 V2 原子保存提交。":
-    "The model, prices, routes, and instructions policy are committed by one atomic V2 save.",
+  "模型、价格、路由和指令策略将通过一次原子保存提交。":
+    "The model, prices, routes, and instructions policy are committed by one atomic save.",
   "模型、价格、路由和 instructions policy 将通过一次 V2 原子保存提交。":
     "The model, prices, routes, and instructions policy are committed by one atomic V2 save.",
   基本信息: "Basic information",

@@ -147,7 +147,7 @@ export function ModelImportModal({
           <DialogHeader>
             <DialogTitle>{t("从本地 JSON 导入")}</DialogTitle>
             <DialogDescription>
-              {t("支持模型目录 V2 导出格式和 Codex catalog 格式；所有导入项都会作为 custom 模型处理。")}
+              {t("支持模型目录导出格式和 Codex catalog 格式；所有导入项都会作为自定义模型处理。")}
             </DialogDescription>
           </DialogHeader>
 

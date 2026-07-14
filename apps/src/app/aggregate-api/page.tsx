@@ -261,7 +261,7 @@ export default function AggregateApiPage() {
         <PageHeader
           eyebrow={t("显式路由")}
           title={t("聚合 API")}
-          description={t("这里只管理上游连接；模型 route 在模型目录 V2 中显式配置，页面不会访问供应商 `/models`。")}
+          description={t("这里只管理上游连接；模型路由在“模型管理”中显式配置，页面不会访问供应商 `/models`。")}
           actions={
             <Button
               size="sm"
@@ -280,7 +280,7 @@ export default function AggregateApiPage() {
         <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <MetricCard title={t("总数")} value={aggregateApis.length} icon={Database} tone="blue" />
           <MetricCard title={t("已启用")} value={activeCount} icon={ShieldCheck} tone="emerald" />
-          <MetricCard title={t("已有 V2 route")} value={routedCount} icon={Gauge} tone="violet" />
+          <MetricCard title={t("已有模型路由")} value={routedCount} icon={Gauge} tone="violet" />
           <MetricCard title={t("测试失败")} value={failedCount} icon={Unplug} tone="rose" />
         </section>
 
@@ -290,7 +290,7 @@ export default function AggregateApiPage() {
               <div>
                 <CardTitle>{t("上游连接")}</CardTitle>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {t("连通性测试只使用已配置的 V2 route 对应模型。")}
+                  {t("连通性测试只使用已配置路由对应的模型。")}
                 </p>
               </div>
               <Select value={providerFilter} onValueChange={(value) => setProviderFilter(value || "all")}>
@@ -312,7 +312,7 @@ export default function AggregateApiPage() {
                     <TableHead>{t("供应商")}</TableHead>
                     <TableHead>{t("类型")}</TableHead>
                     <TableHead>{t("密钥")}</TableHead>
-                    <TableHead>{t("V2 routes")}</TableHead>
+                    <TableHead>{t("模型路由")}</TableHead>
                     <TableHead>{t("余额")}</TableHead>
                     <TableHead>{t("连通性")}</TableHead>
                     <TableHead>{t("启用")}</TableHead>
@@ -434,7 +434,7 @@ export default function AggregateApiPage() {
           if (!open) setDeleteId(null);
         }}
         title={t("删除聚合 API")}
-        description={t("删除连接时会同时删除引用它的模型目录 V2 routes；legacy 模型表不会被改写。")}
+        description={t("删除连接时会同时删除引用它的模型路由。")}
         confirmText={t("删除")}
         confirmVariant="destructive"
         onConfirm={() => {

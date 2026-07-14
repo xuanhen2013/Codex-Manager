@@ -3,8 +3,8 @@
 import type { MessageCatalog } from "../types";
 
 export const KO_MODEL_CATALOG_MESSAGES: MessageCatalog = {
-  "模型、价格、路由和指令策略将通过一次 V2 原子保存提交。":
-    "모델, 가격, 라우트 및 지침 정책은 하나의 V2 원자적 저장으로 커밋됩니다.",
+  "模型、价格、路由和指令策略将通过一次原子保存提交。":
+    "모델, 가격, 라우트 및 지침 정책은 하나의 원자적 저장으로 커밋됩니다.",
   "模型、价格、路由和 instructions policy 将通过一次 V2 原子保存提交。":
     "모델, 가격, 라우트 및 instructions 정책은 하나의 V2 원자적 저장으로 커밋됩니다.",
   基本信息: "기본 정보",

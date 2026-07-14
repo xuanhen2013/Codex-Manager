@@ -206,9 +206,13 @@ export function CodexCliOnboardingDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         initialFocus={introFocusRef}
-        className="glass-card mission-panel h-[min(82dvh,760px)] max-h-[min(82dvh,760px)] overflow-hidden p-0 sm:!max-w-[min(92vw,980px)]"
+        className="glass-card mission-panel overflow-hidden p-0 sm:!max-w-[min(92vw,980px)]"
+        style={{ height: "82vh", maxHeight: "760px" }}
       >
-        <div className="flex h-full min-h-0 flex-col">
+        <div
+          className="grid h-full min-h-0"
+          style={{ gridTemplateRows: "auto minmax(0, 1fr) auto" }}
+        >
           <DialogHeader className="shrink-0 border-b border-border/60 px-5 py-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div
@@ -236,7 +240,12 @@ export function CodexCliOnboardingDialog({
           <div
             ref={scrollContainerRef}
             data-testid="codex-guide-scroll"
-            className="grid min-h-0 flex-1 auto-rows-max content-start items-start gap-3 overflow-y-auto px-5 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(340px,0.86fr)]"
+            className="grid min-h-0 auto-rows-max content-start items-start gap-3 overflow-y-auto overscroll-contain px-5 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(340px,0.86fr)]"
+            style={{
+              overflowY: "auto",
+              scrollbarGutter: "stable",
+              WebkitOverflowScrolling: "touch",
+            }}
           >
             <div className="min-w-0 space-y-3">
               <section className="rounded-md border border-border/60 bg-background/45 p-4 shadow-sm">
@@ -382,7 +391,7 @@ export function CodexCliOnboardingDialog({
             </section>
           </div>
 
-          <DialogFooter className="mx-0 mb-0 mt-auto shrink-0 rounded-b-lg border-t border-border/60 bg-background/95 px-5 py-3 sm:flex-nowrap sm:items-center sm:justify-between">
+          <DialogFooter className="mx-0 mb-0 shrink-0 rounded-b-lg border-t border-border/60 bg-background/95 px-5 py-3 sm:flex-nowrap sm:items-center sm:justify-between">
             <label className="flex items-center gap-3 pr-4 text-sm text-muted-foreground">
               <Checkbox
                 checked={dismissPermanently}
