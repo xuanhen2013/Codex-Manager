@@ -295,6 +295,7 @@ test("api key daily usage modal supports date filters on desktop and mobile", as
     onMethod: (method, payload) => {
       if (method !== "apikey/dailyUsage") return undefined;
       dailyUsagePayloads.push(payload);
+      const requestNumber = dailyUsagePayloads.length;
       return {
         keyId: "key-usage",
         rangeStartTs: dayStartTs,
@@ -305,7 +306,7 @@ test("api key daily usage modal supports date filters on desktop and mobile", as
           outputTokens: 4_500,
           reasoningOutputTokens: 1_100,
           totalTokens: 14_500,
-          estimatedCostUsd: 0.1825,
+          estimatedCostUsd: requestNumber === 1 ? 0.1825 : 0.2825,
           requestCount: 9,
           successCount: 8,
           errorCount: 1,
@@ -337,6 +338,13 @@ test("api key daily usage modal supports date filters on desktop and mobile", as
   await expect(dialog.getByRole("heading", { name: "每日用量" })).toBeVisible();
   await expect(dialog.getByText("$0.1825", { exact: true })).toBeVisible();
   await expect(dialog.getByText("1.45万", { exact: true })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await page.getByTestId("api-key-usage-key-usage").click();
+  await expect.poll(() => dailyUsagePayloads.length).toBe(2);
+  await expect(dialog.getByText("$0.2825", { exact: true })).toBeVisible();
+
   await page.screenshot({
     path: testInfo.outputPath("api-key-usage-desktop.png"),
     fullPage: true,
@@ -346,7 +354,7 @@ test("api key daily usage modal supports date filters on desktop and mobile", as
   await dialog.getByLabel("开始日期").fill("2026-06-01");
   await dialog.getByLabel("结束日期").fill("2026-06-30");
   await dialog.getByRole("button", { name: "应用" }).click();
-  await expect.poll(() => dailyUsagePayloads.length).toBeGreaterThan(1);
+  await expect.poll(() => dailyUsagePayloads.length).toBe(3);
   const latestParams = dailyUsagePayloads.at(-1)?.params as Record<string, unknown>;
   expect(latestParams.keyId).toBe("key-usage");
   expect(latestParams.startTs).toBe(

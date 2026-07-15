@@ -123,6 +123,7 @@ export function ApiKeyUsageHistoryModal({
     enabled: open && Boolean(keyId),
     retry: 1,
     staleTime: 30_000,
+    refetchOnMount: "always",
   });
 
   const selectPreset = (nextPreset: ApiKeyUsageRangePreset) => {
