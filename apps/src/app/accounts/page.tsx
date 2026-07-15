@@ -103,7 +103,6 @@ export default function AccountsPage() {
   const [tagsDraft, setTagsDraft] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [sortDraft, setSortDraft] = useState("");
-  const [modelWhitelistDraft, setModelWhitelistDraft] = useState("");
   const [quotaPrimaryDraft, setQuotaPrimaryDraft] = useState("");
   const [quotaSecondaryDraft, setQuotaSecondaryDraft] = useState("");
   const [accountEditorState, setAccountEditorState] =
@@ -438,7 +437,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
       currentTags: account.tags.join(", "),
       currentNote: account.note || "",
       currentSort: account.priority,
-      currentModelSlugs: account.modelSlugs.join(", "),
       currentQuotaPrimaryWindowTokens: account.quotaCapacityPrimaryWindowTokens,
       currentQuotaSecondaryWindowTokens: account.quotaCapacitySecondaryWindowTokens,
     });
@@ -446,7 +444,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setTagsDraft(account.tags.join(", "));
     setNoteDraft(account.note || "");
     setSortDraft(String(account.priority));
-    setModelWhitelistDraft(account.modelSlugs.join(", "));
     setQuotaPrimaryDraft(
       account.quotaCapacityPrimaryWindowTokens == null
         ? ""
@@ -539,8 +536,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
     const nextTags = normalizeTagsDraft(tagsDraft);
     const nextTagsText = nextTags.join(", ");
     const nextNote = noteDraft.trim();
-    const nextModelSlugs = normalizeTagsDraft(modelWhitelistDraft);
-    const nextModelSlugsText = nextModelSlugs.join(", ");
     const parseOptionalTokenCapacity = (value: string) => {
       const trimmed = value.trim();
       if (!trimmed) return null;
@@ -578,7 +573,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
       nextTagsText === accountEditorState.currentTags &&
       nextNote === accountEditorState.currentNote &&
       nextSort === accountEditorState.currentSort &&
-      nextModelSlugsText === accountEditorState.currentModelSlugs &&
       nextPrimaryCapacity === accountEditorState.currentQuotaPrimaryWindowTokens &&
       nextSecondaryCapacity === accountEditorState.currentQuotaSecondaryWindowTokens
     ) {
@@ -592,7 +586,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
         note: nextNote || null,
         tags: nextTags,
         sort: nextSort,
-        modelSlugs: nextModelSlugs,
         quotaCapacityPrimaryWindowTokens: nextPrimaryCapacity ?? 0,
         quotaCapacitySecondaryWindowTokens: nextSecondaryCapacity ?? 0,
       });
@@ -648,7 +641,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
       tagsDraft={tagsDraft}
       noteDraft={noteDraft}
       sortDraft={sortDraft}
-      modelWhitelistDraft={modelWhitelistDraft}
       quotaPrimaryDraft={quotaPrimaryDraft}
       quotaSecondaryDraft={quotaSecondaryDraft}
       isRefreshingAllAccounts={isRefreshingAllAccounts}
@@ -678,7 +670,6 @@ const toggleCleanupStatus = (rawStatus: string) => {
       setTagsDraft={setTagsDraft}
       setNoteDraft={setNoteDraft}
       setSortDraft={setSortDraft}
-      setModelWhitelistDraft={setModelWhitelistDraft}
       setQuotaPrimaryDraft={setQuotaPrimaryDraft}
       setQuotaSecondaryDraft={setQuotaSecondaryDraft}
       setPage={setPage}

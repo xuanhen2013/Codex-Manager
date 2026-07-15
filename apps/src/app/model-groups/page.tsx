@@ -65,27 +65,26 @@ import {
 } from "@/hooks/useAppSession";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
-import { accountClient } from "@/lib/api/account-client";
+import { managedModelsV2Client } from "@/lib/api/managed-models-v2";
 import { appClient } from "@/lib/api/app-client";
 import { getAppErrorMessage } from "@/lib/api/transport";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { cn } from "@/lib/utils";
 import { formatTsFromSeconds } from "@/lib/utils/usage";
-import { AppUser, ManagedModelInfo, ModelGroup, ModelGroupModel } from "@/types";
+import { AppUser, ManagedModelV2, ModelGroup, ModelGroupModel } from "@/types";
 
 type ManageTab = "base" | "models" | "users";
 
 type ModelDraft = {
   enabled: boolean;
   rateMultiplier: string;
-  billingModelSlug: string;
   note: string;
 };
 
 const QUERY_KEYS = {
   groups: ["model-groups"] as const,
-  models: ["model-groups", "catalog"] as const,
+  models: ["managed-models-v2", "groups"] as const,
   users: ["model-groups", "users"] as const,
 };
 
@@ -110,7 +109,6 @@ function modelDraftFromEntry(entry?: ModelGroupModel): ModelDraft {
   return {
     enabled: Boolean(entry),
     rateMultiplier: multiplierToText(entry?.rateMultiplierMillis),
-    billingModelSlug: entry?.billingModelSlug || "",
     note: entry?.note || "",
   };
 }
@@ -158,7 +156,7 @@ export default function ModelGroupsPage() {
   });
   const modelsQuery = useQuery({
     queryKey: QUERY_KEYS.models,
-    queryFn: () => accountClient.listManagedModels(false),
+    queryFn: () => managedModelsV2Client.list(false),
     enabled: shouldQuery,
   });
   const usersQuery = useQuery({
@@ -272,7 +270,6 @@ export default function ModelGroupsPage() {
               platformModelSlug: model.slug,
               enabled: true,
               rateMultiplierMillis: parseMultiplier(draft.rateMultiplier),
-              billingModelSlug: draft.billingModelSlug.trim() || null,
               note: draft.note.trim() || null,
             };
           })
@@ -280,7 +277,6 @@ export default function ModelGroupsPage() {
           platformModelSlug: string;
           enabled: boolean;
           rateMultiplierMillis: number | null;
-          billingModelSlug: string | null;
           note: string | null;
         }>,
       });
@@ -660,18 +656,17 @@ export default function ModelGroupsPage() {
                         <TableHead className="w-[72px]">{t("启用")}</TableHead>
                         <TableHead className="min-w-[220px]">{t("平台模型")}</TableHead>
                         <TableHead className="w-[140px]">{t("倍率")}</TableHead>
-                        <TableHead className="w-[220px]">{t("计费模型")}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {catalogModels.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={4} className="py-10 text-center text-sm text-muted-foreground">
+                          <TableCell colSpan={3} className="py-10 text-center text-sm text-muted-foreground">
                             {t("暂无平台模型")}
                           </TableCell>
                         </TableRow>
                       ) : (
-                        catalogModels.map((model: ManagedModelInfo) => {
+                        catalogModels.map((model: ManagedModelV2) => {
                           const draft = modelDrafts[model.slug] ?? modelDraftFromEntry();
                           return (
                             <TableRow key={model.slug}>
@@ -705,21 +700,6 @@ export default function ModelGroupsPage() {
                                       [model.slug]: {
                                         ...draft,
                                         rateMultiplier: event.target.value,
-                                      },
-                                    }))
-                                  }
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  value={draft.billingModelSlug}
-                                  placeholder={model.slug}
-                                  onChange={(event) =>
-                                    setModelDrafts((current) => ({
-                                      ...current,
-                                      [model.slug]: {
-                                        ...draft,
-                                        billingModelSlug: event.target.value,
                                       },
                                     }))
                                   }

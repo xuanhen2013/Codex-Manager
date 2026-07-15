@@ -115,6 +115,12 @@ pub fn run() {
             if let Ok(log_dir) = app.path().app_log_dir() {
                 log::info!("log dir: {}", log_dir.display());
             }
+            codexmanager_service::initialize_storage_if_needed().map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("database migration failed; refusing desktop startup: {err}"),
+                )
+            })?;
             let usage_refresh_event_app = app.handle().clone();
             codexmanager_service::set_usage_refresh_completed_handler(move |event| {
                 let payload = UsageRefreshCompletedPayload {

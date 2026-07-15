@@ -57,7 +57,7 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
   const rtRefreshPayloads: Record<string, unknown>[] = [];
   let refreshAllRtCount = 0;
 
-  await page.route("**/api/runtime", async (route) => {
+  await page.route("**/api/runtime**", async (route) => {
     await route.fulfill({
       contentType: "application/json; charset=utf-8",
       body: JSON.stringify({
@@ -73,7 +73,7 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
     });
   });
 
-  await page.route("**/api/rpc", async (route) => {
+  await page.route("**/api/rpc**", async (route) => {
     const payload = route.request().postDataJSON();
     const method = typeof payload?.method === "string" ? payload.method : "";
     const id = payload?.id ?? 1;
@@ -98,6 +98,16 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
         codexHome: "C:/Users/Test/.codex",
         platformFamily: "windows",
         platformOs: "windows",
+      });
+      return;
+    }
+    if (method === "accountManager/session/current") {
+      await ok({
+        mode: "none",
+        currentUser: null,
+        role: "system_admin",
+        permissions: ["system:admin"],
+        distributionEnabled: false,
       });
       return;
     }
@@ -217,7 +227,7 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
 
   await page.goto("/accounts/");
 
-  await expect(page.getByRole("heading", { name: "账号管理" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "OpenAI 账号池" })).toBeVisible();
 
   const warmupButton = page.getByRole("button", { name: "预热" });
   await expect(warmupButton).toBeVisible();

@@ -30,14 +30,6 @@
 - 本地预校验
 - 请求/鉴权/输入前置检查
 
-### `model_picker/`
-
-负责：
-
-- 模型选择与解析
-- 与请求模型决策相关的轻量逻辑
-- `/v1/models` 目录解析与结构化模型目录对接
-
 ### `observability/`
 
 负责：
@@ -77,7 +69,7 @@
 
 负责：
 
-- 选路
+- 按模型目录 V2 的显式 route 选路
 - cooldown
 - failover
 - request gate

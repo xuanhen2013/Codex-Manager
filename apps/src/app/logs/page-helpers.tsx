@@ -332,11 +332,16 @@ export function normalizeAggregateApiUrl(value: string): string {
 
 export function formatModelEffortDisplay(log: RequestLog): string {
   const model = String(log.model || "").trim();
+  const clientEffort = String(log.clientReasoningEffort || "").trim();
   const effort = String(log.reasoningEffort || "").trim();
-  if (model && effort) {
-    return `${model}/${effort}`;
+  const displayedEffort =
+    clientEffort && effort && clientEffort.toLowerCase() !== effort.toLowerCase()
+      ? `${clientEffort}→${effort}`
+      : effort || clientEffort;
+  if (model && displayedEffort) {
+    return `${model}/${displayedEffort}`;
   }
-  return model || effort || "-";
+  return model || displayedEffort || "-";
 }
 
 export function normalizeRequestType(value: string): "ws" | "http" {

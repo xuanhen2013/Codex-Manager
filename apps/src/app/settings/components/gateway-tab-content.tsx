@@ -32,7 +32,6 @@ export function GatewayTabContent({
   t,
   snapshot,
   updateSettings,
-  onModelCatalogAutoRemoteFetchChange,
   quotaGuardInputValues,
   setQuotaGuardDraft,
   saveQuotaGuardField,
@@ -60,7 +59,6 @@ export function GatewayTabContent({
     mutateAsync: (patch: Partial<AppSettings>) => Promise<unknown>;
     isPending: boolean;
   };
-  onModelCatalogAutoRemoteFetchChange: (checked: boolean) => void;
   quotaGuardInputValues: {
     primaryMinRemainingPercent: string;
     secondaryMinRemainingPercent: string;
@@ -170,20 +168,6 @@ export function GatewayTabContent({
           />
         </div>
 
-        <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1">
-            <Label>{t("自动拉取远端模型目录")}</Label>
-            <p className="text-[10px] text-muted-foreground">
-              {t("开启后本地模型目录为空时会自动从远端拉取；关闭后只在点击“远端并入”时拉取。")}
-            </p>
-          </div>
-          <Switch
-            checked={snapshot.modelCatalogAutoRemoteFetch}
-            onCheckedChange={(checked) =>
-              onModelCatalogAutoRemoteFetchChange(checked)
-            }
-          />
-        </div>
         <div className="grid gap-4 border-t pt-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="space-y-1">
@@ -192,7 +176,7 @@ export function GatewayTabContent({
                 <Label>{t("额度保护")}</Label>
               </div>
               <p className="text-[10px] text-muted-foreground">
-                {t("低于保留百分比的账号会从网关路由和远端模型刷新候选中跳过。")}
+                {t("低于保留百分比的账号会从网关路由候选中跳过。")}
               </p>
             </div>
             <Switch

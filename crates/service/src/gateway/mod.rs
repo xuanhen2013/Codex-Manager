@@ -84,7 +84,6 @@ mod local_response;
 mod local_validation;
 #[path = "observability/metrics.rs"]
 mod metrics;
-mod model_picker;
 #[path = "request/official_responses_http.rs"]
 mod official_responses_http;
 #[path = "auth/openai_fallback.rs"]
@@ -142,10 +141,13 @@ pub(super) use request_helpers::{
 };
 #[cfg(test)]
 use request_helpers::{should_drop_incoming_header, should_drop_incoming_header_for_failover};
-pub(crate) use request_log::{RequestLogTraceContext, RequestLogUsage};
+pub(crate) use request_log::{
+    estimate_input_tokens_from_body, RequestLogTraceContext, RequestLogUsage,
+};
 #[cfg(test)]
 use request_rewrite::apply_request_overrides_with_service_tier_and_prompt_cache_key;
 use request_rewrite::{
+    apply_codex_candidate_transport_rules, apply_request_overrides_for_deferred_aggregate,
     apply_request_overrides_with_service_tier_and_forced_prompt_cache_key_scope,
     apply_request_overrides_with_service_tier_and_prompt_cache_key_scope, compute_upstream_url,
 };
@@ -380,7 +382,6 @@ fn decode_base64_header_value(input: &[u8]) -> Option<Vec<u8>> {
 pub(super) use incoming_headers::IncomingHeaderSnapshot;
 use local_count_tokens::maybe_respond_local_count_tokens;
 use local_models::maybe_respond_local_models;
-pub(crate) use model_picker::fetch_models_for_picker;
 use openai_fallback::try_openai_fallback;
 pub(crate) use request_entry::handle_gateway_request;
 use request_gate::{request_gate_lock, RequestGateAcquireError};
@@ -403,7 +404,6 @@ pub(crate) use runtime_config::{
 };
 use selection::collect_gateway_candidates;
 pub(crate) use selection::{
-    collect_gateway_candidates_for_accounts_with_low_quota_mode,
     collect_gateway_candidates_with_low_quota_mode, current_quota_guard_config,
     invalidate_candidate_cache, set_quota_guard_config, LowQuotaCandidateMode, QuotaGuardConfig,
 };

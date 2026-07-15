@@ -150,6 +150,25 @@ fn rewrite_body_model_override(body: &Bytes, model_override: Option<&str>) -> By
         .unwrap_or_else(|_| body.clone())
 }
 
+fn rewrite_body_for_candidate_transport(
+    body: &Bytes,
+    candidate: &AggregateApi,
+    path: &str,
+    upstream_url: &str,
+) -> Bytes {
+    let rewritten = rewrite_body_model_override(body, candidate.model_override.as_deref());
+    if normalize_provider_type_value(candidate.provider_type.as_str())
+        == AGGREGATE_API_PROVIDER_CODEX
+        && super::super::config::should_send_chatgpt_account_header(upstream_url)
+    {
+        return Bytes::from(super::super::super::apply_codex_candidate_transport_rules(
+            path,
+            rewritten.to_vec(),
+        ));
+    }
+    rewritten
+}
+
 fn is_minimax_responses_request(base_url: &str, supplier_name: Option<&str>, path: &str) -> bool {
     let is_responses_path = path == "/v1/responses" || path.starts_with("/v1/responses?");
     if !is_responses_path {
@@ -1058,6 +1077,8 @@ pub(in super::super) fn proxy_aggregate_request(
         request_deadline,
         started_at,
     } = params;
+    let estimated_input_tokens =
+        super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
         let message = "aggregate api not found".to_string();
         super::super::super::record_gateway_request_outcome(path, 404, Some("aggregate_api"));
@@ -1138,6 +1159,47 @@ pub(in super::super) fn proxy_aggregate_request(
             }
         };
 
+        let base_upstream_url =
+            match build_upstream_url(candidate_url.as_str(), effective_path.as_str()) {
+                Ok(url) => url,
+                Err(_) => {
+                    last_attempt_url = Some(candidate_url.clone());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some("invalid aggregate api url".to_string());
+                    last_failure_status = 502;
+                    continue;
+                }
+            };
+        let candidate_body = rewrite_body_for_candidate_transport(
+            body,
+            &candidate,
+            path,
+            base_upstream_url.as_str(),
+        );
+        let candidate_body = rewrite_minimax_responses_body(
+            &candidate_body,
+            candidate.url.as_str(),
+            candidate.supplier_name.as_deref(),
+            path,
+        );
+        let upstream_body = if bridge_responses_to_anthropic {
+            match adapt_openai_responses_to_anthropic_messages(
+                candidate_body.as_ref(),
+                candidate.model_override.as_deref(),
+            ) {
+                Ok(body) => Bytes::from(body),
+                Err(err) => {
+                    last_attempt_url = Some(base_upstream_url.to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 502;
+                    continue;
+                }
+            }
+        } else {
+            candidate_body
+        };
+
         let mut succeeded = false;
         for attempt_idx in 0..=AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
             if super::super::support::deadline::is_expired(request_deadline) {
@@ -1191,7 +1253,10 @@ pub(in super::super) fn proxy_aggregate_request(
                     reasoning_for_log,
                     Some(candidate_url.as_str()),
                     Some(504),
-                    RequestLogUsage::default(),
+                    RequestLogUsage {
+                        estimated_input_tokens: Some(estimated_input_tokens),
+                        ..Default::default()
+                    },
                     Some(message.as_str()),
                     Some(started_at.elapsed().as_millis()),
                 );
@@ -1199,17 +1264,7 @@ pub(in super::super) fn proxy_aggregate_request(
                 return Ok(());
             }
 
-            let mut url = match build_upstream_url(candidate_url.as_str(), effective_path.as_str())
-            {
-                Ok(url) => url,
-                Err(_) => {
-                    last_attempt_url = Some(candidate_url.clone());
-                    last_attempt_supplier_name = candidate_supplier_name.clone();
-                    last_attempt_error = Some("invalid aggregate api url".to_string());
-                    last_failure_status = 502;
-                    break;
-                }
-            };
+            let mut url = base_upstream_url.clone();
 
             match &auth_config {
                 AggregateApiAuthConfig::ApiKeyQuery { name } => {
@@ -1228,23 +1283,6 @@ pub(in super::super) fn proxy_aggregate_request(
                 }
                 _ => {}
             }
-
-            let rewritten_body =
-                rewrite_body_model_override(body, candidate.model_override.as_deref());
-            let rewritten_body = rewrite_minimax_responses_body(
-                &rewritten_body,
-                candidate.url.as_str(),
-                candidate.supplier_name.as_deref(),
-                path,
-            );
-            let upstream_body = if bridge_responses_to_anthropic {
-                Bytes::from(adapt_openai_responses_to_anthropic_messages(
-                    rewritten_body.as_ref(),
-                    candidate.model_override.as_deref(),
-                )?)
-            } else {
-                rewritten_body
-            };
 
             let request_ref = request.as_ref().ok_or_else(|| {
                 "aggregate api request already consumed before upstream attempt".to_string()
@@ -1461,6 +1499,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     total_tokens: usage.total_tokens,
                     reasoning_output_tokens: usage.reasoning_output_tokens,
                     first_response_ms: usage.first_response_ms,
+                    estimated_input_tokens: Some(estimated_input_tokens),
                 },
                 final_error.as_deref(),
                 Some(started_at.elapsed().as_millis()),
@@ -1526,7 +1565,10 @@ pub(in super::super) fn proxy_aggregate_request(
         reasoning_for_log,
         last_attempt_url.as_deref(),
         Some(status_code),
-        RequestLogUsage::default(),
+        RequestLogUsage {
+            estimated_input_tokens: Some(estimated_input_tokens),
+            ..Default::default()
+        },
         Some(message.as_str()),
         Some(started_at.elapsed().as_millis()),
     );
@@ -1590,6 +1632,67 @@ mod bridge_tests {
             last_balance_error: None,
             last_balance_json: None,
         }
+    }
+
+    #[test]
+    fn candidate_transport_rewrite_isolated_between_codex_and_generic_upstreams() {
+        let _guard = crate::test_env_guard();
+        let body = Bytes::from_static(
+            br#"{"model":"platform-model","input":"hello","stream":false,"service_tier":"fast"}"#,
+        );
+        let mut codex = candidate("codex", 0);
+        codex.model_override = Some("gpt-5.4".to_string());
+        let mut generic = candidate("generic", 1);
+        generic.model_override = Some("MiniMax-M3".to_string());
+        let mut claude = candidate("claude", 2);
+        claude.provider_type = AGGREGATE_API_PROVIDER_CLAUDE.to_string();
+
+        let codex_body = rewrite_body_for_candidate_transport(
+            &body,
+            &codex,
+            "/v1/responses",
+            "https://chatgpt.com/backend-api/codex/responses",
+        );
+        let generic_body = rewrite_body_for_candidate_transport(
+            &body,
+            &generic,
+            "/v1/responses",
+            "https://api.example.com/v1/responses",
+        );
+        let claude_body = rewrite_body_for_candidate_transport(
+            &body,
+            &claude,
+            "/v1/responses",
+            "https://proxy.example.com/backend-api/codex/responses",
+        );
+        let codex_value: Value = serde_json::from_slice(codex_body.as_ref()).expect("codex body");
+        let generic_value: Value =
+            serde_json::from_slice(generic_body.as_ref()).expect("generic body");
+        let claude_value: Value =
+            serde_json::from_slice(claude_body.as_ref()).expect("claude body");
+
+        assert_eq!(codex_value["model"], "gpt-5.4");
+        assert_eq!(
+            codex_value["instructions"],
+            "Follow the user's instructions."
+        );
+        assert_eq!(codex_value["stream"], true);
+        assert_eq!(codex_value["store"], false);
+        assert_eq!(codex_value["service_tier"], "priority");
+
+        assert_eq!(generic_value["model"], "MiniMax-M3");
+        assert_eq!(generic_value["input"], "hello");
+        assert_eq!(generic_value["stream"], false);
+        assert_eq!(generic_value["service_tier"], "fast");
+        assert!(generic_value.get("instructions").is_none());
+        assert!(generic_value.get("store").is_none());
+        assert!(generic_value.get("tool_choice").is_none());
+        assert!(generic_value.get("include").is_none());
+
+        assert_eq!(claude_value["model"], "platform-model");
+        assert_eq!(claude_value["service_tier"], "fast");
+        assert!(claude_value.get("instructions").is_none());
+        assert!(claude_value.get("store").is_none());
     }
 
     /// 函数 `ids`

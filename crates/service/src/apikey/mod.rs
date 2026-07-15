@@ -8,8 +8,6 @@ pub(crate) mod disable;
 pub(crate) mod enable;
 #[path = "apikey_list.rs"]
 pub(crate) mod list;
-#[path = "apikey_models.rs"]
-pub(crate) mod models;
 #[path = "apikey_profile.rs"]
 pub(crate) mod profile;
 #[path = "apikey_read_secret.rs"]
@@ -18,7 +16,7 @@ pub(crate) mod read_secret;
 pub(crate) mod service_tier;
 #[path = "apikey_update_model.rs"]
 pub(crate) mod update_model;
-#[path = "apikey_usage_stats.rs"]
-pub(crate) mod usage_stats;
 #[path = "apikey_usage_history.rs"]
 pub(crate) mod usage_history;
+#[path = "apikey_usage_stats.rs"]
+pub(crate) mod usage_stats;

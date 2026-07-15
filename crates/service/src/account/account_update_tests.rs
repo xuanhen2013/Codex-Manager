@@ -79,7 +79,6 @@ fn update_account_preferred_uses_existence_check_without_loading_account() {
         None,
         None,
         None,
-        None,
     )
     .expect("set preferred");
 
@@ -95,7 +94,6 @@ fn update_account_preferred_uses_existence_check_without_loading_account() {
         "acc-missing",
         None,
         Some(true),
-        None,
         None,
         None,
         None,

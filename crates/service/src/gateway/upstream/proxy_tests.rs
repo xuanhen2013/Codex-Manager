@@ -8,13 +8,9 @@ use super::{
 use crate::gateway::upstream::executor::{
     GatewayUpstreamExecutionPlan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
 };
-use codexmanager_core::rpc::types::{
-    ManagedModelCatalogEntry, ManagedModelCatalogResult, ModelInfo,
-};
 use codexmanager_core::storage::{
-    now_ts, Account, AggregateApi, ModelSourceMapping, ModelSourceModel, Storage,
+    now_ts, Account, AggregateApi, ManagedModelV2Upsert, ModelRouteV2, Storage,
 };
-use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 fn execution_plan(route_kind: GatewayUpstreamRouteKind) -> GatewayUpstreamExecutionPlan {
@@ -93,52 +89,72 @@ fn insert_test_aggregate_api_with_model_override(storage: &Storage, id: &str, mo
 }
 
 fn seed_platform_catalog(storage: &Storage, slug: &str) {
-    crate::apikey_models::save_managed_model_catalog_with_storage(
-        storage,
-        &ManagedModelCatalogResult {
-            items: vec![ManagedModelCatalogEntry {
-                model: ModelInfo {
-                    slug: slug.to_string(),
-                    display_name: slug.to_string(),
-                    supported_in_api: true,
-                    visibility: Some("list".to_string()),
-                    ..Default::default()
-                },
-                source_kind: "remote".to_string(),
-                user_edited: false,
-                sort_index: 0,
-                updated_at: now_ts(),
-            }],
-            extra: BTreeMap::new(),
-        },
-    )
-    .expect("seed platform catalog");
+    if storage
+        .get_managed_model_v2(slug)
+        .expect("read V2 model")
+        .is_some()
+    {
+        return;
+    }
+    let mut model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("read template model")
+        .expect("template model");
+    model.id.clear();
+    model.slug = slug.to_string();
+    model.display_name = slug.to_string();
+    model.origin = "custom".to_string();
+    model.builtin_revision = None;
+    model.user_edited = false;
+    model.routes.clear();
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model,
+        })
+        .expect("seed V2 platform catalog");
 }
 
-fn seed_source_model(storage: &Storage, source_kind: &str, source_id: &str, upstream_model: &str) {
-    let now = now_ts();
+fn add_model_route_v2(
+    storage: &Storage,
+    slug: &str,
+    source_kind: &str,
+    source_id: &str,
+    upstream_model: &str,
+) {
+    seed_platform_catalog(storage, slug);
+    let mut model = storage
+        .get_managed_model_v2(slug)
+        .expect("read V2 model")
+        .expect("V2 model");
+    model.routes.push(ModelRouteV2 {
+        source_kind: source_kind.to_string(),
+        source_id: source_id.to_string(),
+        upstream_model: upstream_model.to_string(),
+        enabled: true,
+        weight: 1,
+        ..Default::default()
+    });
     storage
-        .upsert_model_source_model(&ModelSourceModel {
-            source_kind: source_kind.to_string(),
-            source_id: source_id.to_string(),
-            upstream_model: upstream_model.to_string(),
-            display_name: Some(upstream_model.to_string()),
-            status: "available".to_string(),
-            discovery_kind: "manual".to_string(),
-            last_synced_at: Some(now),
-            extra_json: "{}".to_string(),
-            created_at: now,
-            updated_at: now,
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some(slug.to_string()),
+            model,
         })
-        .expect("seed source model");
+        .expect("save V2 model route");
 }
 
 #[test]
 fn aggregate_route_model_validation_accepts_model_override_candidate() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
-    seed_platform_catalog(&storage, "gpt-5.4");
     insert_test_aggregate_api_with_model_override(&storage, "agg-minimax", "MiniMax-M3");
+    add_model_route_v2(
+        &storage,
+        "gpt-5.4",
+        "aggregate_api",
+        "agg-minimax",
+        "MiniMax-M3",
+    );
 
     model_route_error(
         &storage,
@@ -154,6 +170,13 @@ fn aggregate_candidate_filter_keeps_model_override_candidate_for_client_model() 
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     insert_test_aggregate_api_with_model_override(&storage, "agg-minimax", "MiniMax-M3");
+    add_model_route_v2(
+        &storage,
+        "gpt-5.4",
+        "aggregate_api",
+        "agg-minimax",
+        "MiniMax-M3",
+    );
 
     let candidates =
         resolve_aggregate_candidates_for_route(&storage, "openai_responses", None, Some("gpt-5.4"))
@@ -355,18 +378,17 @@ fn provider_upstream_hint_reports_expected_aggregate_provider_type() {
 }
 
 #[test]
-fn aggregate_route_model_validation_bootstraps_aggregate_source() {
+fn aggregate_route_model_validation_uses_explicit_v2_route() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     insert_test_aggregate_api(&storage, "agg-route");
-    storage
-        .upsert_discovered_model_source_models(
-            "aggregate_api",
-            "agg-route",
-            &["vendor-route".to_string()],
-            "synced",
-        )
-        .expect("seed aggregate source model");
+    add_model_route_v2(
+        &storage,
+        "vendor-route",
+        "aggregate_api",
+        "agg-route",
+        "vendor-upstream",
+    );
 
     model_route_error(
         &storage,
@@ -374,49 +396,22 @@ fn aggregate_route_model_validation_bootstraps_aggregate_source() {
         Some("vendor-route"),
         execution_plan(GatewayUpstreamRouteKind::AggregateApi),
     )
-    .expect("aggregate route should bootstrap source mapping");
-
-    let mappings = storage
-        .list_enabled_model_source_mappings_for_platform("vendor-route")
-        .expect("list mappings");
-    assert_eq!(mappings.len(), 1);
-    assert_eq!(mappings[0].source_kind, "aggregate_api");
-    assert_eq!(mappings[0].source_id, "agg-route");
+    .expect("explicit aggregate V2 route should be usable");
 }
 
 #[test]
-fn aggregate_route_model_filter_uses_batched_source_mappings() {
+fn aggregate_route_model_filter_uses_v2_routes() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     insert_test_aggregate_api(&storage, "agg-with-model");
     insert_test_aggregate_api(&storage, "agg-without-model");
-    let now = now_ts();
-    seed_source_model(
+    add_model_route_v2(
         &storage,
+        "vendor-batched",
         "aggregate_api",
         "agg-with-model",
-        "vendor-batched",
+        "vendor-top",
     );
-    for (id, source_id, upstream_model, priority) in [
-        ("map-low", "agg-with-model", "vendor-low", 0),
-        ("map-top", "agg-with-model", "vendor-top", 5),
-    ] {
-        storage
-            .upsert_model_source_mapping(&ModelSourceMapping {
-                id: id.to_string(),
-                platform_model_slug: "vendor-batched".to_string(),
-                source_kind: "aggregate_api".to_string(),
-                source_id: source_id.to_string(),
-                upstream_model: upstream_model.to_string(),
-                enabled: true,
-                priority,
-                weight: 1,
-                billing_model_slug: None,
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("seed aggregate mapping");
-    }
 
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
@@ -428,7 +423,7 @@ fn aggregate_route_model_filter_uses_batched_source_mappings() {
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "agg-with-model");
-    assert_eq!(candidates[0].model_override.as_deref(), None);
+    assert_eq!(candidates[0].model_override.as_deref(), Some("vendor-top"));
 }
 
 #[test]
@@ -437,43 +432,20 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
     storage.init().expect("init storage");
     insert_test_aggregate_api_with_provider(&storage, "agg-codex-explicit", "codex");
     insert_test_aggregate_api_with_provider(&storage, "agg-claude-explicit", "claude");
-    let now = now_ts();
-    seed_source_model(
+    add_model_route_v2(
         &storage,
+        "vendor-cross-provider",
         "aggregate_api",
         "agg-codex-explicit",
-        "vendor-cross-provider",
+        "vendor-codex",
     );
-    seed_source_model(
+    add_model_route_v2(
         &storage,
+        "vendor-cross-provider",
         "aggregate_api",
         "agg-claude-explicit",
-        "vendor-cross-provider",
+        "vendor-claude",
     );
-    for (id, source_id, upstream_model) in [
-        ("map-codex-explicit", "agg-codex-explicit", "vendor-codex"),
-        (
-            "map-claude-explicit",
-            "agg-claude-explicit",
-            "vendor-claude",
-        ),
-    ] {
-        storage
-            .upsert_model_source_mapping(&ModelSourceMapping {
-                id: id.to_string(),
-                platform_model_slug: "vendor-cross-provider".to_string(),
-                source_kind: "aggregate_api".to_string(),
-                source_id: source_id.to_string(),
-                upstream_model: upstream_model.to_string(),
-                enabled: true,
-                priority: 0,
-                weight: 1,
-                billing_model_slug: None,
-                created_at: now,
-                updated_at: now,
-            })
-            .expect("seed aggregate mapping");
-    }
 
     let openai_candidates = resolve_aggregate_candidates_for_route(
         &storage,
@@ -490,7 +462,10 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         openai_candidate_ids,
         vec!["agg-claude-explicit", "agg-codex-explicit"]
     );
-    assert_eq!(openai_candidates[0].model_override.as_deref(), None);
+    assert_eq!(
+        openai_candidates[0].model_override.as_deref(),
+        Some("vendor-claude")
+    );
 
     let anthropic_candidates = resolve_aggregate_candidates_for_route(
         &storage,
@@ -507,7 +482,10 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         anthropic_candidate_ids,
         vec!["agg-codex-explicit", "agg-claude-explicit"]
     );
-    assert_eq!(anthropic_candidates[0].model_override.as_deref(), None);
+    assert_eq!(
+        anthropic_candidates[0].model_override.as_deref(),
+        Some("vendor-codex")
+    );
 }
 
 #[test]
@@ -515,22 +493,13 @@ fn account_route_model_validation_ignores_aggregate_only_mapping() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     seed_platform_catalog(&storage, "vendor-account-route");
-    let now = now_ts();
-    storage
-        .upsert_model_source_mapping(&ModelSourceMapping {
-            id: "mapping-aggregate-only".to_string(),
-            platform_model_slug: "vendor-account-route".to_string(),
-            source_kind: "aggregate_api".to_string(),
-            source_id: "agg-only".to_string(),
-            upstream_model: "vendor-account-route".to_string(),
-            enabled: true,
-            priority: 0,
-            weight: 1,
-            billing_model_slug: None,
-            created_at: now,
-            updated_at: now,
-        })
-        .expect("seed aggregate mapping");
+    add_model_route_v2(
+        &storage,
+        "vendor-account-route",
+        "aggregate_api",
+        "agg-only",
+        "vendor-account-route",
+    );
 
     let err = model_route_error(
         &storage,
@@ -549,14 +518,13 @@ fn hybrid_model_validation_accepts_aggregate_mapping() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
     insert_test_aggregate_api(&storage, "agg-hybrid");
-    storage
-        .upsert_discovered_model_source_models(
-            "aggregate_api",
-            "agg-hybrid",
-            &["vendor-hybrid".to_string()],
-            "synced",
-        )
-        .expect("seed aggregate source model");
+    add_model_route_v2(
+        &storage,
+        "vendor-hybrid",
+        "aggregate_api",
+        "agg-hybrid",
+        "vendor-hybrid-upstream",
+    );
 
     model_route_error(
         &storage,

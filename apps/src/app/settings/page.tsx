@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { appClient } from "@/lib/api/app-client";
-import { accountClient } from "@/lib/api/account-client";
 import type {
   UpdateCheckResult,
   UpdatePrepareResult,
@@ -1036,25 +1035,6 @@ function AdminSettingsPage() {
    * # 返回
    * 返回函数执行结果
    */
-  const handleModelCatalogAutoRemoteFetchChange = (checked: boolean) => {
-    void updateSettings
-      .mutateAsync({ modelCatalogAutoRemoteFetch: checked })
-      .then(async () => {
-        if (!checked) return;
-        try {
-          const catalog = await accountClient.listManagedModels(false);
-          queryClient.setQueryData(["managed-model-catalog"], catalog);
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["managed-model-catalog"] }),
-            queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
-            queryClient.invalidateQueries({ queryKey: ["apikey-models"] }),
-          ]);
-        } catch (error) {
-          toast.error(`${t("刷新模型失败")}: ${getAppErrorMessage(error)}`);
-        }
-      })
-      .catch(() => undefined);
-  };
   const saveTransportField = (
     key:
       | "sseKeepaliveIntervalMs"
@@ -1449,7 +1429,6 @@ function AdminSettingsPage() {
             t={t}
             snapshot={snapshot}
             updateSettings={updateSettings}
-            onModelCatalogAutoRemoteFetchChange={handleModelCatalogAutoRemoteFetchChange}
             quotaGuardInputValues={quotaGuardInputValues}
             setQuotaGuardDraft={setQuotaGuardDraft}
             saveQuotaGuardField={saveQuotaGuardField}

@@ -22,6 +22,7 @@ pub(in super::super) struct GatewayUpstreamExecutionContext<'a> {
     gateway_mode_for_log: Option<&'a str>,
     route_strategy_for_log: Option<&'a str>,
     route_source_for_log: Option<&'a str>,
+    estimated_input_tokens: i64,
     candidate_count: usize,
     account_max_inflight: usize,
 }
@@ -60,6 +61,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         gateway_mode_for_log: Option<&'a str>,
         route_strategy_for_log: Option<&'a str>,
         route_source_for_log: Option<&'a str>,
+        estimated_input_tokens: i64,
         candidate_count: usize,
         account_max_inflight: usize,
     ) -> Self {
@@ -84,6 +86,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             gateway_mode_for_log,
             route_strategy_for_log,
             route_source_for_log,
+            estimated_input_tokens,
             candidate_count,
             account_max_inflight,
         }
@@ -309,11 +312,14 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         upstream_url: Option<&str>,
         model_for_log: Option<&str>,
         status_code: u16,
-        usage: super::super::super::request_log::RequestLogUsage,
+        mut usage: super::super::super::request_log::RequestLogUsage,
         error: Option<&str>,
         elapsed_ms: u128,
         attempted_account_ids: Option<&[String]>,
     ) {
+        if usage.estimated_input_tokens.is_none() {
+            usage.estimated_input_tokens = Some(self.estimated_input_tokens);
+        }
         let platform_model_for_log = self.model_for_log.or(model_for_log);
         let direct_upstream_model =
             resolve_direct_upstream_model_for_log(platform_model_for_log, model_for_log);

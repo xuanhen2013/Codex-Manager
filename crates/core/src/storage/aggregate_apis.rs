@@ -3,10 +3,6 @@ use std::collections::HashMap;
 
 use super::aggregate_apis_sql::*;
 use super::key_id_filters::{normalize_text_ids, text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
-use super::model_sources::{
-    delete_model_source_mapping_preferences_for_source_sql,
-    delete_model_source_mappings_for_source_sql, delete_model_source_models_for_source_sql,
-};
 use super::{
     now_ts, AggregateApi, AggregateApiDashboardSourceMetadata, AggregateApiListSnapshot,
     AggregateApiListSummary, AggregateApiOverviewStats, AggregateApiQuotaSourceSummary,
@@ -585,16 +581,8 @@ impl Storage {
         tx.execute(delete_aggregate_api_balance_secret_by_id_sql(), [api_id])?;
         tx.execute(delete_aggregate_api_secret_by_id_sql(), [api_id])?;
         tx.execute(
-            delete_model_source_mapping_preferences_for_source_sql(),
-            (AGGREGATE_API_MODEL_SOURCE_KIND, api_id),
-        )?;
-        tx.execute(
-            delete_model_source_mappings_for_source_sql(),
-            (AGGREGATE_API_MODEL_SOURCE_KIND, api_id),
-        )?;
-        tx.execute(
-            delete_model_source_models_for_source_sql(),
-            (AGGREGATE_API_MODEL_SOURCE_KIND, api_id),
+            "DELETE FROM model_routes WHERE source_kind='aggregate_api' AND source_id=?1",
+            [api_id],
         )?;
         tx.execute(delete_aggregate_api_by_id_sql(), [api_id])?;
         tx.commit()?;

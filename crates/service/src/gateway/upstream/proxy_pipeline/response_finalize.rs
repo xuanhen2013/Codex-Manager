@@ -299,6 +299,7 @@ pub(super) fn finalize_upstream_response(
             total_tokens: usage.total_tokens,
             reasoning_output_tokens: usage.reasoning_output_tokens,
             first_response_ms: usage.first_response_ms,
+            estimated_input_tokens: None,
         },
         final_error.as_deref(),
         started_at.elapsed().as_millis(),

@@ -63,6 +63,46 @@ fn resolve_effective_request_overrides(
     )
 }
 
+fn instruction_protocol_for_passthrough(
+    protocol_type: &str,
+) -> crate::models_v2::instructions::InstructionProtocolV2 {
+    match protocol_type {
+        PROTOCOL_ANTHROPIC_NATIVE => {
+            crate::models_v2::instructions::InstructionProtocolV2::Anthropic
+        }
+        PROTOCOL_GEMINI_NATIVE => crate::models_v2::instructions::InstructionProtocolV2::Gemini,
+        _ => crate::models_v2::instructions::InstructionProtocolV2::OpenAi,
+    }
+}
+
+fn apply_model_instructions_policy(
+    storage: &codexmanager_core::storage::Storage,
+    model_slug: Option<&str>,
+    body: Vec<u8>,
+    protocol: crate::models_v2::instructions::InstructionProtocolV2,
+) -> Result<Vec<u8>, LocalValidationError> {
+    let Some(model_slug) = model_slug.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(body);
+    };
+    let model = storage
+        .get_enabled_model_v2(model_slug)
+        .map_err(|err| {
+            LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+        })?
+        .ok_or_else(|| LocalValidationError::new(404, format!("model_not_found: {model_slug}")))?;
+    let Ok(mut value) = serde_json::from_slice::<Value>(&body) else {
+        return Ok(body);
+    };
+    crate::models_v2::instructions::apply_model_instructions_v2(&mut value, &model, protocol)
+        .map_err(|err| LocalValidationError::new(400, err))?;
+    serde_json::to_vec(&value).map_err(|err| {
+        LocalValidationError::new(
+            500,
+            format!("serialize instructions policy body failed: {err}"),
+        )
+    })
+}
+
 fn is_removed_openai_compat_request_path(normalized_path: &str) -> bool {
     normalized_path.starts_with("/v1/completions")
 }
@@ -140,12 +180,12 @@ fn ensure_anthropic_model_is_listed(
         ));
     };
 
-    let models = crate::apikey_models::read_model_options_from_storage(storage).map_err(|err| {
+    let models = crate::models_v2::models_response_with_storage(storage).map_err(|err| {
         LocalValidationError::new(
             500,
             crate::gateway::bilingual_error(
-                "读取模型缓存失败",
-                format!("model options cache read failed: {err}"),
+                "读取模型目录 V2 失败",
+                format!("model catalog V2 read failed: {err}"),
             ),
         )
     })?;
@@ -1366,6 +1406,21 @@ fn resolve_override_source_for_log(
     }
 }
 
+fn resolve_reasoning_source_for_log(
+    client_value: Option<&str>,
+    effective_value: Option<&str>,
+    api_key_profile_value: Option<&str>,
+) -> Option<String> {
+    if api_key_profile_value
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+        && crate::reasoning_effort::is_ultra_to_max_normalization(client_value, effective_value)
+    {
+        return Some("client_request_normalized".to_string());
+    }
+    resolve_override_source_for_log(client_value, effective_value, api_key_profile_value)
+}
+
 fn resolve_preferred_client_prompt_cache_key(
     protocol_type: &str,
     incoming_headers: &super::super::IncomingHeaderSnapshot,
@@ -1680,24 +1735,22 @@ fn apply_passthrough_request_overrides(
     let effective_model = model_override
         .map(str::to_string)
         .or(default_effective_model);
-    let rewritten_body =
-        super::super::apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
-            path,
-            body,
-            effective_model.as_deref(),
-            effective_reasoning.as_deref(),
-            effective_service_tier.as_deref(),
-            api_key.upstream_base_url.as_deref(),
-            None,
-            true,
-        );
-    let normalized = normalize_official_responses_body_snapshot(
-        transport_request_path(path).as_str(),
-        rewritten_body,
+    // Aggregate and hybrid fallback requests share this body across candidates.
+    // Candidate-specific Codex transport rules are applied only inside the
+    // aggregate attempt loop after the actual upstream has been selected.
+    let rewritten_body = super::super::apply_request_overrides_for_deferred_aggregate(
+        path,
+        body,
+        effective_model.as_deref(),
+        effective_reasoning.as_deref(),
+        effective_service_tier.as_deref(),
     );
-    let request_meta = normalized.metadata;
+    let request_meta = super::super::parse_request_json_value(&rewritten_body)
+        .as_ref()
+        .map(super::super::parse_request_metadata_from_value)
+        .unwrap_or_default();
     (
-        normalized.body,
+        rewritten_body,
         request_meta.model.or(api_key.model_slug.clone()),
         request_meta
             .reasoning_effort
@@ -1838,7 +1891,7 @@ pub(super) fn build_local_validation_result(
             api_key.model_slug.as_deref(),
         );
         let client_reasoning_for_log = initial_request_meta.reasoning_effort.clone();
-        let reasoning_source_for_log = resolve_override_source_for_log(
+        let reasoning_source_for_log = resolve_reasoning_source_for_log(
             client_reasoning_for_log.as_deref(),
             reasoning_for_log.as_deref(),
             api_key.reasoning_effort.as_deref(),
@@ -1848,6 +1901,12 @@ pub(super) fn build_local_validation_result(
             effective_service_tier_for_log.as_deref(),
             api_key.service_tier.as_deref(),
         );
+        rewritten_body = apply_model_instructions_policy(
+            &storage,
+            model_for_log.as_deref(),
+            rewritten_body,
+            instruction_protocol_for_passthrough(effective_protocol_type),
+        )?;
         let mut rewritten_body_value_for_validation = None;
         if is_non_native_openai_responses_api_request(
             effective_protocol_type,
@@ -1926,6 +1985,16 @@ pub(super) fn build_local_validation_result(
         compact_model_override_for_logical_request.as_deref(),
     )
     .0;
+    let passthrough_model_for_policy = compact_model_override_for_logical_request
+        .as_deref()
+        .or(api_key.model_slug.as_deref())
+        .or(initial_request_meta.model.as_deref());
+    passthrough_body = apply_model_instructions_policy(
+        &storage,
+        passthrough_model_for_policy,
+        passthrough_body,
+        instruction_protocol_for_passthrough(effective_protocol_type),
+    )?;
     let mut passthrough_body_value_for_validation = None;
     if is_non_native_openai_responses_api_request(
         effective_protocol_type,
@@ -2074,6 +2143,15 @@ pub(super) fn build_local_validation_result(
             .or(initial_request_meta.model.as_deref()),
     )
     .or(effective_model);
+    let instruction_model = effective_model
+        .as_deref()
+        .or(initial_request_meta.model.as_deref());
+    body = apply_model_instructions_policy(
+        &storage,
+        instruction_model,
+        body,
+        crate::models_v2::instructions::InstructionProtocolV2::OpenAi,
+    )?;
     let preferred_prompt_cache_key = resolve_preferred_client_prompt_cache_key(
         effective_protocol_type,
         &incoming_headers,
@@ -2188,7 +2266,7 @@ pub(super) fn build_local_validation_result(
     let reasoning_for_log = request_meta
         .reasoning_effort
         .or(api_key.reasoning_effort.clone());
-    let reasoning_source_for_log = resolve_override_source_for_log(
+    let reasoning_source_for_log = resolve_reasoning_source_for_log(
         client_reasoning_for_log.as_deref(),
         reasoning_for_log.as_deref(),
         api_key.reasoning_effort.as_deref(),

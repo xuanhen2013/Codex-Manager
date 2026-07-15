@@ -23,7 +23,7 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
     let storage = Storage::open(&db_path).expect("open db");
     storage.init().expect("init db");
     let _rules_guard = GatewayModelForwardRulesResetGuard::reset();
-    seed_model_catalog_models(&storage, &["gpt-5.4-mini", "gpt-5.4"]);
+    seed_model_catalog_models(&storage, &["gpt-5.4-mini", "gpt-5.4", "gpt-image-2"]);
     let now = now_ts();
     storage
         .insert_account(&Account {

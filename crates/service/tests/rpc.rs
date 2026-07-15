@@ -3023,7 +3023,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         "apikey/create",
         Some(serde_json::json!({
             "name": "Member key",
-            "modelSlug": "gpt-5",
+            "modelSlug": "gpt-5.4-mini",
             "rotationStrategy": "account_rotation"
         })),
     );
@@ -3033,17 +3033,33 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
     storage.init().expect("init storage");
     codexmanager_service::wallet_precheck_for_api_key(&storage, &key_id)
         .expect("unassigned api key should bypass wallet precheck");
-    let missing_owner_charge = codexmanager_service::wallet_charge_for_request(
+    let unassigned_request_log_id = storage
+        .insert_request_log(&codexmanager_core::storage::RequestLog {
+            key_id: Some(key_id.clone()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            model: Some("gpt-5.4-mini".to_string()),
+            status_code: Some(200),
+            created_at: codexmanager_core::storage::now_ts(),
+            ..Default::default()
+        })
+        .expect("insert unassigned request log");
+    let missing_owner_charge = codexmanager_service::record_request_charge_v2(
         &storage,
         Some(&key_id),
-        41,
-        0.25,
+        unassigned_request_log_id,
+        "gpt-5.4-mini",
         None,
-        Some("default"),
+        "actual",
+        1,
+        0,
+        0,
         None,
+        true,
     )
-    .expect("unassigned api key should bypass wallet charge");
-    assert!(missing_owner_charge.is_none());
+    .expect("unassigned api key should record an uncharged snapshot");
+    assert_eq!(missing_owner_charge.rate_multiplier_millis, 1_000);
+    assert_eq!(storage.request_charge_ledger_entry_count().unwrap(), 0);
 
     let admin_owner_error = call_rpc(
         207,
@@ -3114,7 +3130,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
             "priority": 10
         })),
     );
-    let rule_id = rules["items"]
+    let _rule_id = rules["items"]
         .as_array()
         .expect("billing rules")
         .iter()
@@ -3123,21 +3139,47 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         .expect("rule id")
         .to_string();
 
-    let charge_entry = codexmanager_service::wallet_charge_for_request(
+    let group_id = storage
+        .default_model_group_id()
+        .expect("read default group")
+        .expect("default group");
+    let mut group = storage
+        .find_model_group(&group_id)
+        .expect("read default group")
+        .expect("default group");
+    group.rate_multiplier_millis = 1_500;
+    group.updated_at = codexmanager_core::storage::now_ts();
+    storage
+        .upsert_model_group(&group)
+        .expect("save group multiplier");
+    let request_log_id = storage
+        .insert_request_log(&codexmanager_core::storage::RequestLog {
+            key_id: Some(key_id.clone()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            model: Some("gpt-5.4-mini".to_string()),
+            status_code: Some(200),
+            created_at: codexmanager_core::storage::now_ts(),
+            ..Default::default()
+        })
+        .expect("insert charged request log");
+    let charge_snapshot = codexmanager_service::record_request_charge_v2(
         &storage,
         Some(&key_id),
-        42,
-        0.25,
+        request_log_id,
+        "gpt-5.4-mini",
         None,
-        Some("default"),
+        "actual",
+        333_333,
+        0,
+        0,
         Some(r#"{"test":true}"#.to_string()),
+        true,
     )
-    .expect("charge wallet")
-    .expect("charge entry");
-    assert_eq!(
-        charge_entry.pricing_rule_id.as_deref(),
-        Some(rule_id.as_str())
-    );
+    .expect("charge wallet");
+    assert_eq!(charge_snapshot.base_cost_microusd, 250_000);
+    assert_eq!(charge_snapshot.charged_cost_microusd, 375_000);
+    assert_eq!(charge_snapshot.rate_multiplier_millis, 1_500);
     let charged_wallet = storage
         .find_wallet_by_owner("user", &user_id)
         .expect("read wallet")

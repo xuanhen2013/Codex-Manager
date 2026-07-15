@@ -560,9 +560,9 @@ fn read_available_model_count(
     storage: &codexmanager_core::storage::Storage,
 ) -> Result<usize, String> {
     storage
-        .count_available_model_catalog_models("default")
-        .map(|count| count.max(0) as usize)
-        .map_err(|err| format!("count model catalog failed: {err}"))
+        .list_api_models_v2()
+        .map(|models| models.len())
+        .map_err(|err| format!("count model catalog V2 failed: {err}"))
 }
 
 fn build_api_key_summary(api_keys: &[ApiKeySummary]) -> MemberDashboardApiKeySummary {

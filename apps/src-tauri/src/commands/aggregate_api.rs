@@ -54,7 +54,6 @@ pub async fn service_aggregate_api_create(
     balance_query_access_token: Option<String>,
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
-    model_slugs: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "providerType": provider_type,
@@ -76,7 +75,6 @@ pub async fn service_aggregate_api_create(
         "balanceQueryAccessToken": balance_query_access_token,
         "balanceQueryUserId": balance_query_user_id,
         "balanceQueryConfigJson": balance_query_config_json,
-        "modelSlugs": model_slugs,
     });
     rpc_call_in_background("aggregateApi/create", addr, Some(params)).await
 }
@@ -122,7 +120,6 @@ pub async fn service_aggregate_api_update(
     balance_query_access_token: Option<String>,
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
-    model_slugs: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({
         "id": id,
@@ -146,7 +143,6 @@ pub async fn service_aggregate_api_update(
         "balanceQueryAccessToken": balance_query_access_token,
         "balanceQueryUserId": balance_query_user_id,
         "balanceQueryConfigJson": balance_query_config_json,
-        "modelSlugs": model_slugs,
     });
     rpc_call_in_background("aggregateApi/update", addr, Some(params)).await
 }
@@ -221,60 +217,4 @@ pub async fn service_aggregate_api_refresh_balance(
 ) -> Result<serde_json::Value, String> {
     let params = serde_json::json!({ "id": id });
     rpc_call_in_background("aggregateApi/refreshBalance", addr, Some(params)).await
-}
-
-#[tauri::command]
-pub async fn service_aggregate_api_supplier_models_list(
-    addr: Option<String>,
-    supplier_key: Option<String>,
-    provider_type: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({
-        "supplierKey": supplier_key,
-        "providerType": provider_type,
-    });
-    rpc_call_in_background("aggregateApi/supplierModels/list", addr, Some(params)).await
-}
-
-#[tauri::command]
-pub async fn service_aggregate_api_supplier_model_save(
-    addr: Option<String>,
-    payload: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    rpc_call_in_background("aggregateApi/supplierModels/save", addr, Some(payload)).await
-}
-
-#[tauri::command]
-pub async fn service_aggregate_api_supplier_model_delete(
-    addr: Option<String>,
-    supplier_key: String,
-    provider_type: String,
-    upstream_model: String,
-) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({
-        "supplierKey": supplier_key,
-        "providerType": provider_type,
-        "upstreamModel": upstream_model,
-    });
-    rpc_call_in_background("aggregateApi/supplierModels/delete", addr, Some(params)).await
-}
-
-#[tauri::command]
-pub async fn service_aggregate_api_supplier_models_import(
-    addr: Option<String>,
-    api_id: String,
-    supplier_key: Option<String>,
-    provider_type: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let params = serde_json::json!({
-        "apiId": api_id,
-        "supplierKey": supplier_key,
-        "providerType": provider_type,
-    });
-    rpc_call_in_background(
-        "aggregateApi/sourceModels/importSupplier",
-        addr,
-        Some(params),
-    )
-    .await
 }

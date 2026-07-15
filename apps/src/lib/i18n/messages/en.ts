@@ -441,10 +441,6 @@ export const EN_MESSAGES: MessageCatalog = {
   "已导出到本地 Codex 缓存": "Exported to local Codex cache",
   "Codex 缓存已下载，请保存到 `~/.codex/models_cache.json`":
     "Codex cache downloaded. Please save it to `~/.codex/models_cache.json`.",
-  "保存后会自动同步到 `~/.codex/models_cache.json`；如需让 `/model` 立即看到最新模型与说明，仍需重启正在运行中的 Codex 会话。桌面端可直接点击上方导出按钮替换本地缓存；浏览器模式则会下载同名 `models_cache.json`，再手动放入 `~/.codex/`。":
-    "After saving, the cache is automatically synced to `~/.codex/models_cache.json`. To make `/model` pick up the latest models and descriptions immediately, you still need to restart the running Codex session. On desktop, use the export button above to replace the local cache directly; in browser mode, a `models_cache.json` file will be downloaded and you can place it into `~/.codex/` manually.",
-  "保存后会自动同步到 `~/.codex/models_cache.json`；如需让 `/model` 立即看到最新模型与说明，仍需重启正在运行中的 Codex 会话。Web 端可通过上方导出按钮下载同名 `models_cache.json`，再手动放入本地 `~/.codex/`；桌面端继续由本地自动同步。":
-    "After saving, the cache is automatically synced to `~/.codex/models_cache.json`. To make `/model` pick up the latest models and descriptions immediately, you still need to restart the running Codex session. On the web, use the export button above to download a `models_cache.json` file and place it into the local `~/.codex/` folder manually; desktop continues to sync locally automatically.",
   当前环境不支持浏览器导出:
     "The current runtime does not support browser export",
   "当前环境不支持导出 Codex 缓存":
@@ -689,8 +685,11 @@ export const EN_MESSAGES: MessageCatalog = {
   "中 (medium)": "Medium (medium)",
   "高 (high)": "High (high)",
   "极高 (xhigh)": "Very high (xhigh)",
+  "最大 (max)": "Maximum (max)",
   "会覆盖请求里的 reasoning effort。":
     "Overrides the reasoning effort inside the request.",
+  "会覆盖请求里的 reasoning effort。Ultra 由 Codex 客户端负责编排，网关覆盖最多设置为 max。":
+    "Overrides the request reasoning effort. Ultra is orchestrated by the Codex client; gateway overrides are limited to max.",
   "Fast 会映射为上游 priority；未设置时跟随请求。":
     "Fast maps to upstream priority; otherwise it follows the request.",
   平台密钥已生成: "API key generated",
@@ -1044,8 +1043,6 @@ export const EN_MESSAGES: MessageCatalog = {
   账号已禁用: "Account disabled",
   账号已启用: "Account enabled",
   账号已删除: "Account deleted",
-  "确定要删除选中的 {count} 个模型吗？如果后续执行远端刷新，远端模型可能会再次并入本地目录。":
-    "Delete the selected {count} models? A later remote refresh may merge remote models back into the local catalog.",
   "批量删除完成：成功{success}个，失败{failed}个":
     "Bulk delete finished: {success} succeeded, {failed} failed",
   账号用量已刷新: "Account usage refreshed",
@@ -1545,28 +1542,13 @@ export const EN_MESSAGES: MessageCatalog = {
   原始路径: "Original path",
   模型目录: "Model catalog",
   模型管理: "Model management",
-  "这里维护本地结构化模型目录。默认绑定模型会优先展示 supportedInApi=true 的模型，而 Codex CLI 仍会拿到完整目录。":
-    "Maintain the local structured model catalog here. Default model binding prefers models with supportedInApi=true, while Codex CLI still receives the full catalog.",
-  "完整目录会同步到 Codex CLI": "The full catalog syncs to Codex CLI",
   "默认绑定优先展示 API 可用模型":
     "Default bindings prioritize models available through the API",
-  远端刷新可与本地覆写共存: "Remote refresh can coexist with local overrides",
   模型目录明细: "Catalog details",
-  "按 slug、显示名称或描述快速定位，并结合来源与覆写状态查看当前目录。":
-    "Quickly locate entries by slug, display name, or description, and review the current catalog together with source and override status.",
-  远端并入: "Merge remote",
-  清理远端旧模型: "Prune stale remote models",
-  远端旧模型已清理: "Stale remote models pruned",
-  清理远端旧模型失败: "Failed to prune stale remote models",
-  "远端旧模型已清理，但同步 Codex 模型缓存失败":
-    "Stale remote models were pruned, but syncing the Codex model cache failed",
-  "仅删除未本地覆写且不再出现在远端目录中的远端模型，不会删除自定义模型。":
-    "Only deletes remote models that have no local override and no longer appear in the remote catalog. Custom models are not deleted.",
   新增自定义模型: "Add custom model",
   模型总数: "Total models",
   "API 可用": "API available",
   自定义模型: "Custom models",
-  本地覆写: "Local overrides",
   当前筛选: "Current filter",
   "共 {count} 条": "{count} items",
   "搜索 slug、显示名称或描述": "Search slug, display name, or description",
@@ -1578,12 +1560,10 @@ export const EN_MESSAGES: MessageCatalog = {
     "The service is disconnected, so the model catalog cannot be loaded right now.",
   "没有匹配的模型。你可以调整筛选条件，或直接新增一个自定义模型。":
     "No models match the current filters. Adjust the filters or add a custom model directly.",
-  远端: "Remote",
   可见性: "Visibility",
   推理等级: "Reasoning level",
   更新时间: "Updated at",
   未填写描述: "No description provided",
-  已覆写: "Overridden",
   隐藏: "Hidden",
   未配置: "Not configured",
   未同步: "Not synced",
@@ -1591,8 +1571,6 @@ export const EN_MESSAGES: MessageCatalog = {
   编辑模型: "Edit model",
   删除模型: "Delete model",
   "删除中...": "Deleting...",
-  "确定要删除模型 {slug} 吗？如果后续执行远端刷新，远端模型可能会再次并入本地目录。":
-    "Delete model {slug}? If you run a remote refresh later, the remote model may be merged back into the local catalog.",
   "会影响运行时配置；修改后请观察请求链路是否稳定。":
     "This affects runtime configuration. After changing it, monitor whether the request path remains stable.",
   "上游 Originator": "Upstream Originator",
@@ -1647,8 +1625,8 @@ export const EN_MESSAGES: MessageCatalog = {
   "Cron 表达式需要 5 段，或带秒的 6 段":
     "Cron expressions must have 5 fields, or 6 fields when including seconds",
   额度保护: "Quota protection",
-  "低于保留百分比的账号会从网关路由和远端模型刷新候选中跳过。":
-    "Accounts below the reserved percentage are skipped by gateway routing and remote model refresh candidate selection.",
+  "低于保留百分比的账号会从网关路由候选中跳过。":
+    "Accounts below the reserved percentage are skipped by gateway routing.",
   "5 小时窗口保留 (%)": "5-hour window reserve (%)",
   "周窗口保留 (%)": "Weekly window reserve (%)",
   全部低额度时兜底: "Fallback when all quotas are low",

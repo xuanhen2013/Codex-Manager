@@ -14,6 +14,7 @@ mod http;
 mod lifecycle;
 mod logging;
 mod model_groups;
+mod models_v2;
 mod plugin;
 mod quota;
 mod requestlog;
@@ -37,18 +38,14 @@ pub(crate) use account::status as account_status;
 pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;
 pub(crate) use aggregate_api::{
-    create_aggregate_api, delete_aggregate_api, delete_aggregate_api_supplier_model,
-    discover_aggregate_api_models, import_aggregate_api_supplier_models,
-    list_aggregate_api_supplier_models, list_aggregate_apis, read_aggregate_api_secret,
-    refresh_aggregate_api_balance, save_aggregate_api_supplier_model,
-    test_aggregate_api_connection, update_aggregate_api,
+    create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
+    refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api,
 };
 pub(crate) use apikey::create as apikey_create;
 pub(crate) use apikey::delete as apikey_delete;
 pub(crate) use apikey::disable as apikey_disable;
 pub(crate) use apikey::enable as apikey_enable;
 pub(crate) use apikey::list as apikey_list;
-pub(crate) use apikey::models as apikey_models;
 pub(crate) use apikey::profile as apikey_profile;
 pub(crate) use apikey::read_secret as apikey_read_secret;
 pub(crate) use apikey::update_model as apikey_update_model;
@@ -138,9 +135,9 @@ pub use auth::{
     bootstrap_app_admin, build_web_access_session_token, change_app_user_password, create_app_user,
     current_web_access_password_hash, current_web_auth_mode, delete_app_user, distribution_enabled,
     list_api_key_ids_for_user, list_api_key_owners, list_app_users, login_app_user,
-    logout_app_user_session, resolve_app_user_session, set_api_key_owner, set_distribution_enabled,
-    set_web_access_password, set_web_auth_mode, update_app_user, update_app_user_profile,
-    verify_web_access_password, wallet_charge_for_request, wallet_precheck_for_api_key,
+    logout_app_user_session, record_request_charge_v2, resolve_app_user_session, set_api_key_owner,
+    set_distribution_enabled, set_web_access_password, set_web_auth_mode, update_app_user,
+    update_app_user_profile, verify_web_access_password, wallet_precheck_for_api_key,
     wallet_set_available_credit, wallet_top_up, web_access_auth_status_value,
     web_access_password_configured, web_auth_status_value, ApiKeyOwnerResult, AppLoginResult,
     AppSessionResult, AppSessionUserResult, AppUserCreateInput, AppUserPublicResult,

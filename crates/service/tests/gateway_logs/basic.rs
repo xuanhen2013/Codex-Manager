@@ -206,6 +206,20 @@ fn gateway_reports_wallet_quota_exhaustion_in_chinese() {
             "usr_wallet_quota_exhausted",
         )
         .expect("ensure zero wallet");
+    storage
+        .replace_user_model_groups_for_group(
+            "mg_default",
+            &[UserModelGroup {
+                user_id: "usr_wallet_quota_exhausted".to_string(),
+                group_id: "mg_default".to_string(),
+                status: "active".to_string(),
+                expires_at: None,
+                created_at: now,
+                updated_at: now,
+            }],
+        )
+        .expect("assign default model group");
+    seed_model_catalog_models(&storage, &["gpt-5.3-codex"]);
 
     let server = TestServer::start();
     let req_body = r#"{"model":"gpt-5.3-codex","input":"hello"}"#;
@@ -295,8 +309,8 @@ fn gateway_reports_platform_model_route_errors() {
     server.join();
     assert_eq!(status, 503, "response body: {body}");
     assert!(
-        body.contains("model_unavailable"),
-        "gateway should report platform model without enabled mappings, got {body}"
+        body.contains("no_available_account"),
+        "gateway should report a routed model without available account candidates, got {body}"
     );
 }
 
@@ -617,6 +631,14 @@ fn gateway_aggregate_api_model_override_rewrites_minimax_responses_request() {
     storage
         .upsert_aggregate_api_secret(aggregate_id, "upstream-secret")
         .expect("insert aggregate secret");
+    seed_model_catalog_route(
+        &storage,
+        "gpt-5.4",
+        "aggregate_api",
+        aggregate_id,
+        "MiniMax-M3",
+        10,
+    );
     storage
         .upsert_model_source_model(&ModelSourceModel {
             source_kind: "aggregate_api".to_string(),
@@ -719,6 +741,16 @@ fn gateway_aggregate_api_model_override_rewrites_minimax_responses_request() {
             .and_then(serde_json::Value::as_str),
         Some("hello")
     );
+    assert_eq!(
+        request_body
+            .get("stream")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    assert!(request_body.get("instructions").is_none());
+    assert!(request_body.get("store").is_none());
+    assert!(request_body.get("tool_choice").is_none());
+    assert!(request_body.get("include").is_none());
 
     let log = storage
         .list_request_logs(Some("key:=gk_minimax_model_override"), 10)
@@ -728,6 +760,241 @@ fn gateway_aggregate_api_model_override_rewrites_minimax_responses_request() {
         .expect("request log");
     assert_eq!(log.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(log.upstream_model.as_deref(), Some("MiniMax-M3"));
+}
+
+#[test]
+fn gateway_aggregate_codex_failover_to_minimax_isolates_candidate_request_bodies() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-aggregate-codex-minimax-failover");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let retryable_error = serde_json::json!({
+        "error": {
+            "message": "temporary upstream failure",
+            "type": "server_error"
+        }
+    });
+    let retryable_error =
+        serde_json::to_string(&retryable_error).expect("serialize retryable response");
+    let (codex_addr, codex_rx, codex_join) = start_mock_upstream_sequence(vec![
+        (500, retryable_error.clone()),
+        (500, retryable_error.clone()),
+        (500, retryable_error.clone()),
+        (500, retryable_error),
+    ]);
+
+    let success_response = serde_json::json!({
+        "id": "resp_aggregate_failover_minimax",
+        "model": "MiniMax-M3",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "output_text", "text": "ok" }]
+        }],
+        "usage": { "input_tokens": 2, "output_tokens": 1, "total_tokens": 3 }
+    });
+    let (minimax_addr, minimax_rx, minimax_join) = start_mock_upstream_once(
+        &serde_json::to_string(&success_response).expect("serialize success response"),
+    );
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init schema");
+    let now = now_ts();
+    let codex_id = "agg_failover_codex";
+    let minimax_id = "agg_failover_minimax";
+    seed_model_catalog_models(&storage, &["gpt-5.4", "MiniMax-M3"]);
+
+    let codex_candidate = AggregateApi {
+        id: codex_id.to_string(),
+        provider_type: "codex".to_string(),
+        supplier_name: Some("OpenAI Codex".to_string()),
+        sort: 10,
+        url: format!("http://{codex_addr}/backend-api/codex"),
+        auth_type: "apikey".to_string(),
+        auth_params_json: None,
+        action: Some("/responses".to_string()),
+        model_override: Some("gpt-5.4".to_string()),
+        status: "active".to_string(),
+        created_at: now,
+        updated_at: now,
+        last_test_at: None,
+        last_test_status: None,
+        last_test_error: None,
+        balance_query_enabled: false,
+        balance_query_template: None,
+        balance_query_base_url: None,
+        balance_query_user_id: None,
+        balance_query_config_json: None,
+        last_balance_at: None,
+        last_balance_status: None,
+        last_balance_error: None,
+        last_balance_json: None,
+    };
+    storage
+        .insert_aggregate_api(&codex_candidate)
+        .expect("insert Codex aggregate API");
+
+    let mut minimax_candidate = codex_candidate.clone();
+    minimax_candidate.id = minimax_id.to_string();
+    minimax_candidate.supplier_name = Some("MiniMax".to_string());
+    minimax_candidate.sort = 20;
+    minimax_candidate.url = format!("http://{minimax_addr}/v1");
+    minimax_candidate.action = None;
+    minimax_candidate.model_override = Some("MiniMax-M3".to_string());
+    storage
+        .insert_aggregate_api(&minimax_candidate)
+        .expect("insert MiniMax aggregate API");
+
+    for aggregate_id in [codex_id, minimax_id] {
+        storage
+            .upsert_aggregate_api_secret(aggregate_id, "upstream-secret")
+            .expect("insert aggregate secret");
+    }
+    seed_model_catalog_route(
+        &storage,
+        "gpt-5.4",
+        "aggregate_api",
+        codex_id,
+        "gpt-5.4",
+        20,
+    );
+    seed_model_catalog_route(
+        &storage,
+        "gpt-5.4",
+        "aggregate_api",
+        minimax_id,
+        "MiniMax-M3",
+        10,
+    );
+
+    let platform_key = "pk_aggregate_codex_minimax_failover";
+    storage
+        .insert_api_key(&ApiKey {
+            id: "gk_aggregate_codex_minimax_failover".to_string(),
+            name: Some("aggregate-codex-minimax-failover".to_string()),
+            model_slug: None,
+            reasoning_effort: None,
+            service_tier: None,
+            rotation_strategy: "aggregate_api_rotation".to_string(),
+            aggregate_api_id: Some(codex_id.to_string()),
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({
+        "model": "gpt-5.4",
+        "input": [{
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "hello" }]
+        }],
+        "stream": false
+    });
+    let request = serde_json::to_string(&request).expect("serialize request");
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &request,
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 200, "gateway response: {response_body}");
+
+    let mut codex_bodies = Vec::new();
+    for attempt in 0..4 {
+        let captured = codex_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap_or_else(|_| panic!("receive Codex upstream request attempt {attempt}"));
+        assert_eq!(captured.path, "/backend-api/codex/responses");
+        let body: serde_json::Value =
+            serde_json::from_slice(&decode_upstream_request_body(&captured))
+                .expect("parse Codex upstream request body");
+        codex_bodies.push(body);
+    }
+    codex_join.join().expect("join Codex upstream");
+
+    let first_codex_body = codex_bodies.first().expect("first Codex request body");
+    assert!(
+        codex_bodies.iter().all(|body| body == first_codex_body),
+        "Codex retries must reuse the same candidate-scoped request body"
+    );
+    assert_eq!(
+        first_codex_body
+            .get("instructions")
+            .and_then(serde_json::Value::as_str),
+        Some("Follow the user's instructions.")
+    );
+    assert_eq!(
+        first_codex_body
+            .get("stream")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        first_codex_body
+            .get("store")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        first_codex_body
+            .get("tool_choice")
+            .and_then(serde_json::Value::as_str),
+        Some("auto")
+    );
+    assert!(first_codex_body
+        .get("include")
+        .is_some_and(serde_json::Value::is_array));
+    assert!(first_codex_body
+        .get("input")
+        .is_some_and(serde_json::Value::is_array));
+
+    let minimax_request = minimax_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive MiniMax upstream request");
+    minimax_join.join().expect("join MiniMax upstream");
+    assert_eq!(minimax_request.path, "/v1/responses");
+    let minimax_body: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&minimax_request))
+            .expect("parse MiniMax upstream request body");
+    assert_eq!(
+        minimax_body
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some("MiniMax-M3")
+    );
+    assert_eq!(
+        minimax_body
+            .get("input")
+            .and_then(serde_json::Value::as_str),
+        Some("hello")
+    );
+    assert_eq!(
+        minimax_body
+            .get("stream")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    for codex_only_field in ["instructions", "store", "tool_choice", "include"] {
+        assert!(
+            minimax_body.get(codex_only_field).is_none(),
+            "MiniMax failover body inherited Codex-only field {codex_only_field}: {minimax_body}"
+        );
+    }
 }
 
 #[test]

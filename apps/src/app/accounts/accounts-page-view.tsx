@@ -87,7 +87,6 @@ import {
   formatAccountExportModeLabel,
   formatAccountPlanLabel,
   formatAccountPlanValueLabel,
-  fitLongTextClassName,
   formatPlanFilterLabel,
   formatStatusFilterLabel,
   getAccountStatusAction,
@@ -143,7 +142,6 @@ export interface AccountsPageViewProps {
   tagsDraft: string;
   noteDraft: string;
   sortDraft: string;
-  modelWhitelistDraft: string;
   quotaPrimaryDraft: string;
   quotaSecondaryDraft: string;
   isRefreshingAllAccounts: boolean;
@@ -173,7 +171,6 @@ export interface AccountsPageViewProps {
   setTagsDraft: Dispatch<SetStateAction<string>>;
   setNoteDraft: Dispatch<SetStateAction<string>>;
   setSortDraft: Dispatch<SetStateAction<string>>;
-  setModelWhitelistDraft: Dispatch<SetStateAction<string>>;
   setQuotaPrimaryDraft: Dispatch<SetStateAction<string>>;
   setQuotaSecondaryDraft: Dispatch<SetStateAction<string>>;
   setPage: Dispatch<SetStateAction<number>>;
@@ -252,7 +249,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     tagsDraft,
     noteDraft,
     sortDraft,
-    modelWhitelistDraft,
     quotaPrimaryDraft,
     quotaSecondaryDraft,
     isRefreshingAllAccounts,
@@ -282,7 +278,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     setTagsDraft,
     setNoteDraft,
     setSortDraft,
-    setModelWhitelistDraft,
     setQuotaPrimaryDraft,
     setQuotaSecondaryDraft,
     setPage,
@@ -833,14 +828,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   const quotaItems = buildQuotaSummaryItems(account, t);
                   const statusAction = getAccountStatusAction(account, t);
                   const StatusActionIcon = statusAction.icon;
-                  const modelPoolText = account.modelSlugs.length
-                    ? account.modelSlugs.slice(0, 2).join(", ")
-                    : t("全部 API 模型");
-                  const modelPoolDisplayText = `${t("模型池")}: ${modelPoolText}${
-                    account.modelSlugs.length > 2
-                      ? ` +${account.modelSlugs.length - 2}`
-                      : ""
-                  }`;
                   const isRefreshingCurrentAccount =
                     isRefreshingAccountId === account.id;
                   const isRefreshingCurrentRt =
@@ -868,16 +855,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       <TableCell>
                         <QuotaOverviewCell items={quotaItems} />
                         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-                          <span
-                            className={fitLongTextClassName(
-                              modelPoolDisplayText,
-                              "max-w-full rounded-full border border-border/50 bg-background/40 px-2 py-0.5 break-all [overflow-wrap:anywhere]",
-                              "text-[10px]",
-                            )}
-                            title={modelPoolDisplayText}
-                          >
-                            {modelPoolDisplayText}
-                          </span>
                           {account.quotaCapacityPrimaryWindowTokens ||
                           account.quotaCapacitySecondaryWindowTokens ? (
                             <span className="max-w-full rounded-full border border-border/50 bg-background/40 px-2 py-0.5 break-words [overflow-wrap:anywhere]">
@@ -1254,21 +1231,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 <span>{t("值越小越靠前")}</span>
                 <span>{t("仅修改当前账号")}</span>
               </div>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="account-model-whitelist-input">
-                {t("额度模型白名单")}
-              </Label>
-              <Input
-                id="account-model-whitelist-input"
-                value={modelWhitelistDraft}
-                disabled={Boolean(isUpdatingProfileAccountId)}
-                onChange={(event) => setModelWhitelistDraft(event.target.value)}
-                placeholder="gpt-5.4, gpt-5.4-mini"
-              />
-              <p className="text-[11px] leading-4 text-muted-foreground">
-                {t("仅用于额度池统计归属；留空表示该账号对全部 API 可用模型生效。")}
-              </p>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">

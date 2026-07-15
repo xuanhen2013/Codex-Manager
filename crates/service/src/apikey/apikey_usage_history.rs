@@ -34,13 +34,12 @@ pub(crate) fn read_api_key_usage_history(
         .summarize_request_token_stats_daily_for_key_boundaries(key_id, &day_boundaries_ts)
         .map_err(|err| format!("summarize api key daily usage failed: {err}"))?;
     let daily_usage = fill_daily_usage(&day_boundaries_ts, raw_daily_usage);
-    let usage = daily_usage.iter().fold(
-        ApiKeyUsageHistoryUsage::default(),
-        |mut total, point| {
+    let usage = daily_usage
+        .iter()
+        .fold(ApiKeyUsageHistoryUsage::default(), |mut total, point| {
             add_usage(&mut total, &point.usage);
             total
-        },
-    );
+        });
 
     Ok(ApiKeyUsageHistoryResult {
         key_id: key_id.to_string(),
@@ -176,13 +175,13 @@ mod tests {
         assert_eq!(daily_usage[0].usage.total_tokens, 0);
         assert_eq!(daily_usage[1].usage.total_tokens, 120);
         assert_eq!(daily_usage[2].usage.total_tokens, 0);
-        let total = daily_usage.iter().fold(
-            ApiKeyUsageHistoryUsage::default(),
-            |mut total, point| {
-                add_usage(&mut total, &point.usage);
-                total
-            },
-        );
+        let total =
+            daily_usage
+                .iter()
+                .fold(ApiKeyUsageHistoryUsage::default(), |mut total, point| {
+                    add_usage(&mut total, &point.usage);
+                    total
+                });
         assert_eq!(total.input_tokens, 100);
         assert_eq!(total.total_tokens, 120);
         assert_eq!(total.request_count, 1);

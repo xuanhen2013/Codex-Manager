@@ -1,7 +1,8 @@
 use codexmanager_core::storage::{
     now_ts, Account, AggregateApi, ApiKey, ApiKeyOwner, AppUser, AppWalletLedgerEntry, Event,
-    ModelCatalogModelRecord, ModelGroup, ModelSourceMapping, ModelSourceModel, RequestLog,
-    RequestTokenStat, Storage, Token, UsageSnapshotRecord, UserModelGroup,
+    ManagedModelV2Upsert, ModelCatalogModelRecord, ModelGroup, ModelRouteV2, ModelSourceMapping,
+    ModelSourceModel, RequestLog, RequestTokenStat, Storage, Token, UsageSnapshotRecord,
+    UserModelGroup,
 };
 
 /// 函数 `storage_can_insert_account_and_token`
@@ -596,6 +597,36 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             updated_at: now,
         })
         .expect("upsert non-aggregate source model");
+    let mut managed_model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("get managed model")
+        .expect("seeded managed model");
+    managed_model.routes = vec![
+        ModelRouteV2 {
+            id: String::new(),
+            source_kind: "aggregate_api".to_string(),
+            source_id: "agg-routing-delete".to_string(),
+            upstream_model: "gpt-platform".to_string(),
+            enabled: true,
+            priority: 10,
+            weight: 1,
+        },
+        ModelRouteV2 {
+            id: String::new(),
+            source_kind: "account_pool".to_string(),
+            source_id: "default".to_string(),
+            upstream_model: "gpt-5.4-mini".to_string(),
+            enabled: true,
+            priority: 0,
+            weight: 1,
+        },
+    ];
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: None,
+            model: managed_model,
+        })
+        .expect("upsert managed model routes");
 
     storage
         .delete_aggregate_api("agg-routing-delete")
@@ -605,18 +636,36 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
         .find_aggregate_api_by_id("agg-routing-delete")
         .expect("find deleted aggregate api")
         .is_none());
-    assert!(storage
-        .list_model_source_models(Some("aggregate_api"), Some("agg-routing-delete"))
-        .expect("list aggregate source models")
-        .is_empty());
-    assert!(storage
-        .list_model_source_mappings(Some("gpt-platform"))
-        .expect("list mappings")
-        .is_empty());
-    assert!(storage
-        .list_model_source_mapping_preferences("aggregate_api", "agg-routing-delete")
-        .expect("list aggregate preferences")
-        .is_empty());
+    assert_eq!(
+        storage
+            .list_model_source_models(Some("aggregate_api"), Some("agg-routing-delete"))
+            .expect("list aggregate source models")
+            .len(),
+        1,
+        "legacy model source rows are read-only during V2 cutover"
+    );
+    assert_eq!(
+        storage
+            .list_model_source_mappings(Some("gpt-platform"))
+            .expect("list mappings")
+            .len(),
+        1,
+        "legacy model mappings are read-only during V2 cutover"
+    );
+    assert_eq!(
+        storage
+            .list_model_source_mapping_preferences("aggregate_api", "agg-routing-delete")
+            .expect("list aggregate preferences")
+            .len(),
+        1,
+        "legacy model preferences are read-only during V2 cutover"
+    );
+    let managed_model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("get managed model after aggregate deletion")
+        .expect("managed model remains");
+    assert_eq!(managed_model.routes.len(), 1);
+    assert_eq!(managed_model.routes[0].source_kind, "account_pool");
     assert_eq!(
         storage
             .list_model_source_models(Some("openai_account"), Some("agg-routing-delete"))
@@ -626,7 +675,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
     );
 }
 #[test]
-fn delete_account_removes_openai_model_source_routes() {
+fn delete_account_preserves_legacy_model_source_routes() {
     let mut storage = Storage::open_in_memory().expect("open in memory");
     storage.init().expect("init schema");
     let now = now_ts();
@@ -678,14 +727,22 @@ fn delete_account_removes_openai_model_source_routes() {
         .delete_account("acc-routing-delete")
         .expect("delete account");
 
-    assert!(storage
-        .list_model_source_models(Some("openai_account"), Some("acc-routing-delete"))
-        .expect("list source models")
-        .is_empty());
-    assert!(storage
-        .list_model_source_mappings(Some("gpt-platform"))
-        .expect("list mappings")
-        .is_empty());
+    assert_eq!(
+        storage
+            .list_model_source_models(Some("openai_account"), Some("acc-routing-delete"))
+            .expect("list source models")
+            .len(),
+        1,
+        "legacy model source rows are read-only during V2 cutover"
+    );
+    assert_eq!(
+        storage
+            .list_model_source_mappings(Some("gpt-platform"))
+            .expect("list mappings")
+            .len(),
+        1,
+        "legacy model mappings are read-only during V2 cutover"
+    );
 }
 
 /// 函数 `token_upsert_keeps_refresh_schedule_columns`

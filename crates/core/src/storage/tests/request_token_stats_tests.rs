@@ -1653,10 +1653,7 @@ fn api_key_daily_usage_combines_hourly_and_raw_stats_with_exclusive_end_boundary
         .expect("roll up first hour");
 
     let daily = storage
-        .summarize_request_token_stats_daily_for_key_boundaries(
-            " key-history ",
-            &[0, 86_400],
-        )
+        .summarize_request_token_stats_daily_for_key_boundaries(" key-history ", &[0, 86_400])
         .expect("summarize api key daily usage");
     assert_eq!(daily.len(), 1);
     assert_eq!(daily[0].day_start_ts, 0);
@@ -1676,7 +1673,10 @@ fn api_key_daily_usage_combines_hourly_and_raw_stats_with_exclusive_end_boundary
         )
         .expect("summarize variable day boundaries");
     assert_eq!(variable_days.len(), 2);
-    assert_eq!(variable_days[1].day_end_ts - variable_days[1].day_start_ts, 82_800);
+    assert_eq!(
+        variable_days[1].day_end_ts - variable_days[1].day_start_ts,
+        82_800
+    );
     assert_eq!(variable_days[1].usage.total_tokens, 999);
 
     assert!(storage

@@ -9,8 +9,6 @@ import {
   AggregateApiBalanceSnapshot,
   AggregateApiCreateResult,
   AggregateApiSecretResult,
-  AggregateApiSupplierModel,
-  AggregateApiSupplierModelImportResult,
   AggregateApiTestResult,
   ApiKey,
   ApiKeyCreateResult,
@@ -23,11 +21,6 @@ import {
   EnvOverrideCatalogItem,
   InstalledPluginSummary,
   LoginStartResult,
-  ManagedModelCatalog,
-  ManagedModelInfo,
-  ManagedModelRouting,
-  ManagedModelSourceMapping,
-  ManagedModelSourceModel,
   ModelCatalog,
   ModelInfo,
   ModelReasoningLevel,
@@ -460,7 +453,6 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     ),
     note: asString(source.note) || null,
     tags: asStringArray(source.tags),
-    modelSlugs: asStringArray(source.modelSlugs ?? source.model_slugs),
     quotaCapacityPrimaryWindowTokens: toNullableNumber(
       source.quotaCapacityPrimaryWindowTokens ??
         source.quota_capacity_primary_window_tokens
@@ -679,19 +671,6 @@ function normalizeModelInfo(payload: unknown): ModelInfo | null {
   };
 }
 
-export function normalizeManagedModelInfo(payload: unknown): ManagedModelInfo | null {
-  const model = normalizeModelInfo(payload);
-  if (!model) return null;
-  const source = asObject(payload);
-  return {
-    ...model,
-    sourceKind: asString(source.source_kind ?? source.sourceKind) || "remote",
-    userEdited: asBoolean(source.user_edited ?? source.userEdited, false),
-    sortIndex: asInteger(source.sort_index ?? source.sortIndex, 0, -1),
-    updatedAt: asInteger(source.updated_at ?? source.updatedAt, 0, 0),
-  };
-}
-
 /**
  * 函数 `normalizeModelCatalog`
  *
@@ -713,73 +692,6 @@ export function normalizeModelCatalog(payload: unknown): ModelCatalog {
     models: items
       .map((item) => normalizeModelInfo(item))
       .filter((item): item is ModelInfo => Boolean(item)),
-  };
-}
-
-export function normalizeManagedModelCatalog(payload: unknown): ManagedModelCatalog {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return {
-    ...source,
-    items: items
-      .map((item) => normalizeManagedModelInfo(item))
-      .filter((item): item is ManagedModelInfo => Boolean(item)),
-  };
-}
-
-function normalizeManagedModelSourceModel(payload: unknown): ManagedModelSourceModel | null {
-  const source = asObject(payload);
-  const sourceKind = asString(source.sourceKind ?? source.source_kind);
-  const sourceId = asString(source.sourceId ?? source.source_id);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!sourceKind || !sourceId || !upstreamModel) return null;
-  return {
-    sourceKind,
-    sourceId,
-    upstreamModel,
-    displayName: asString(source.displayName ?? source.display_name) || null,
-    status: asString(source.status) || "available",
-    discoveryKind: asString(source.discoveryKind ?? source.discovery_kind) || "synced",
-    lastSyncedAt: toNullableNumber(source.lastSyncedAt ?? source.last_synced_at),
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
-}
-
-function normalizeManagedModelSourceMapping(payload: unknown): ManagedModelSourceMapping | null {
-  const source = asObject(payload);
-  const id = asString(source.id);
-  const platformModelSlug = asString(
-    source.platformModelSlug ?? source.platform_model_slug,
-  );
-  const sourceKind = asString(source.sourceKind ?? source.source_kind);
-  const sourceId = asString(source.sourceId ?? source.source_id);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!id || !platformModelSlug || !sourceKind || !sourceId || !upstreamModel) return null;
-  return {
-    id,
-    platformModelSlug,
-    sourceKind,
-    sourceId,
-    upstreamModel,
-    enabled: asBoolean(source.enabled, true),
-    priority: asInteger(source.priority, 0, -100000),
-    weight: asInteger(source.weight, 1, 1),
-    billingModelSlug: asString(source.billingModelSlug ?? source.billing_model_slug) || null,
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
-}
-
-export function normalizeManagedModelRouting(payload: unknown): ManagedModelRouting {
-  const source = asObject(payload);
-  return {
-    sourceModels: asArray(source.sourceModels ?? source.source_models)
-      .map((item) => normalizeManagedModelSourceModel(item))
-      .filter((item): item is ManagedModelSourceModel => Boolean(item)),
-    mappings: asArray(source.mappings)
-      .map((item) => normalizeManagedModelSourceMapping(item))
-      .filter((item): item is ManagedModelSourceMapping => Boolean(item)),
   };
 }
 
@@ -901,8 +813,6 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
       typeof source.action === "string"
         ? source.action
         : asString(source.action) || null,
-    modelOverride:
-      asString(source.modelOverride ?? source.model_override) || null,
     status: asString(source.status) || "active",
     createdAt: toNullableNumber(source.createdAt ?? source.created_at),
     updatedAt: toNullableNumber(source.updatedAt ?? source.updated_at),
@@ -1047,47 +957,6 @@ export function normalizeAggregateApiBalanceRefreshResult(
     message: asString(source.message) || null,
     queriedAt: asInteger(source.queriedAt ?? source.queried_at, 0, 0),
     latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
-  };
-}
-
-export function normalizeAggregateApiSupplierModel(
-  payload: unknown
-): AggregateApiSupplierModel | null {
-  const source = asObject(payload);
-  const supplierKey = asString(source.supplierKey ?? source.supplier_key);
-  const providerType = asString(source.providerType ?? source.provider_type);
-  const upstreamModel = asString(source.upstreamModel ?? source.upstream_model);
-  if (!supplierKey || !providerType || !upstreamModel) return null;
-  return {
-    supplierKey,
-    providerType,
-    upstreamModel,
-    displayName: asString(source.displayName ?? source.display_name) || null,
-    status: asString(source.status) || "available",
-    createdAt: asInteger(source.createdAt ?? source.created_at, 0, 0),
-    updatedAt: asInteger(source.updatedAt ?? source.updated_at, 0, 0),
-  };
-}
-
-export function normalizeAggregateApiSupplierModelList(
-  payload: unknown
-): AggregateApiSupplierModel[] {
-  const source = asObject(payload);
-  const items = asArray(source.items ?? payload);
-  return items
-    .map((item) => normalizeAggregateApiSupplierModel(item))
-    .filter((item): item is AggregateApiSupplierModel => Boolean(item));
-}
-
-export function normalizeAggregateApiSupplierModelImportResult(
-  payload: unknown
-): AggregateApiSupplierModelImportResult {
-  const source = asObject(payload);
-  return {
-    imported: asInteger(source.imported, 0, 0),
-    items: asArray(source.items)
-      .map((item) => normalizeManagedModelSourceModel(item))
-      .filter((item): item is ManagedModelSourceModel => Boolean(item)),
   };
 }
 
@@ -1858,7 +1727,6 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     freeAccountMaxModelOptions: asArray(source.freeAccountMaxModelOptions).map((item) =>
       asString(item)
     ),
-    modelCatalogAutoRemoteFetch: asBoolean(source.modelCatalogAutoRemoteFetch, true),
     modelForwardRules: asString(source.modelForwardRules ?? source.model_forward_rules),
     compactModelForwardRules: asString(
       source.compactModelForwardRules ?? source.compact_model_forward_rules

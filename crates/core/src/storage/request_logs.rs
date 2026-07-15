@@ -28,11 +28,20 @@ fn empty_optional_range(start_ts: Option<i64>, end_ts: Option<i64>) -> bool {
 }
 
 fn clear_request_logs_sql() -> &'static str {
-    "DELETE FROM request_logs"
+    "DELETE FROM request_logs
+     WHERE NOT EXISTS (
+       SELECT 1 FROM request_charge_snapshots snapshots
+       WHERE snapshots.request_log_id=request_logs.id
+     )"
 }
 
 fn prune_request_logs_before_sql() -> &'static str {
-    "DELETE FROM request_logs WHERE created_at < ?1"
+    "DELETE FROM request_logs
+     WHERE created_at < ?1
+       AND NOT EXISTS (
+         SELECT 1 FROM request_charge_snapshots snapshots
+         WHERE snapshots.request_log_id=request_logs.id
+       )"
 }
 
 impl Storage {
@@ -559,7 +568,14 @@ impl Storage {
     pub fn clear_request_logs(&self) -> Result<()> {
         // 中文注释：先把状态计数写入 hourly rollup，再移除可浏览请求明细，避免清日志后仪表盘成功率丢失。
         let rolled_up = self.rollup_all_request_token_stats()?;
-        let deleted_logs = self.conn.execute(clear_request_logs_sql(), [])?;
+        // Migration 062 runs before the V2 charge snapshot table is created. Keep that
+        // fresh/legacy migration path valid while preserving immutable billed logs once
+        // the V2 schema exists.
+        let deleted_logs = if self.has_table("request_charge_snapshots")? {
+            self.conn.execute(clear_request_logs_sql(), [])?
+        } else {
+            self.conn.execute("DELETE FROM request_logs", [])?
+        };
         if rolled_up.saturating_add(deleted_logs) > 0 {
             let _ = self
                 .conn
@@ -573,8 +589,15 @@ impl Storage {
             return Ok(0);
         }
         self.rollup_request_token_stats_before(cutoff_ts)?;
-        self.conn
-            .execute(prune_request_logs_before_sql(), [cutoff_ts])
+        if self.has_table("request_charge_snapshots")? {
+            self.conn
+                .execute(prune_request_logs_before_sql(), [cutoff_ts])
+        } else {
+            self.conn.execute(
+                "DELETE FROM request_logs WHERE created_at < ?1",
+                [cutoff_ts],
+            )
+        }
     }
 
     pub fn prune_request_logs_by_retention(&self, now: i64) -> Result<usize> {

@@ -4,8 +4,10 @@ use serde_json::{Map, Value};
 use crate::gateway::runtime_config;
 
 const INSTALLATION_ID_KEY: &str = "x-codex-installation-id";
-const DEFAULT_CODEX_COMPAT_INSTRUCTIONS: &str =
-    "You are Codex, a helpful AI assistant. Follow the user's instructions.";
+// The Codex Responses backend requires non-empty instructions. Keep this
+// transport fallback deliberately neutral: it must not assign a persona or
+// replace any non-empty client-provided instructions.
+const MINIMAL_CODEX_COMPAT_INSTRUCTIONS: &str = "Follow the user's instructions.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct OfficialResponsesHttpRequest {
@@ -85,7 +87,7 @@ fn ensure_non_empty_instructions(path: &str, obj: &mut Map<String, Value>) -> bo
     }
     obj.insert(
         "instructions".to_string(),
-        Value::String(DEFAULT_CODEX_COMPAT_INSTRUCTIONS.to_string()),
+        Value::String(MINIMAL_CODEX_COMPAT_INSTRUCTIONS.to_string()),
     );
     true
 }
@@ -153,10 +155,7 @@ fn ensure_input_list(path: &str, obj: &mut Map<String, Value>) -> bool {
 
 fn extract_instruction_text_from_content(content: &Value) -> Option<String> {
     match content {
-        Value::String(text) => {
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
+        Value::String(text) => (!text.trim().is_empty()).then(|| text.to_string()),
         Value::Array(parts) => {
             let texts = parts
                 .iter()
@@ -166,8 +165,8 @@ fn extract_instruction_text_from_content(content: &Value) -> Option<String> {
                     if !matches!(kind, "input_text" | "output_text" | "text") {
                         return None;
                     }
-                    let text = obj.get("text").and_then(Value::as_str)?.trim();
-                    (!text.is_empty()).then(|| text.to_string())
+                    let text = obj.get("text").and_then(Value::as_str)?;
+                    (!text.trim().is_empty()).then(|| text.to_string())
                 })
                 .collect::<Vec<_>>();
             (!texts.is_empty()).then(|| texts.join("\n\n"))
@@ -673,7 +672,7 @@ pub(crate) fn apply_codex_http_request_rules(
     if promote_leading_instruction_messages_to_instructions(path, obj) {
         result.changed = true;
     }
-    if use_codex_compat_rewrite && ensure_non_empty_instructions(path, obj) {
+    if ensure_non_empty_instructions(path, obj) {
         result.changed = true;
     }
     if normalize_compact_instructions(path, obj) {
