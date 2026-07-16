@@ -112,9 +112,9 @@
 
 <a href="https://www.star-history.com/?repos=qxcnm%2FCodex-Manager&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=qxcnm/Codex-Manager&type=date&theme=dark&legend=top-left&sealed_token=0lErj7wVj9-gpjzcdjv0ooUVJdk9ZDzh3RnghqICOisoBoKFFJywLC0KaEX6ofwqT7Ep_0shgOjIm_T3OF-QiKoeF1ZwJYza7oaH4Ie0V_FXGOj55-EKpUluUlL5wjepRIAfJaCR2O2gVkUuyVUSZc1UOEv3LGd7N8UgExTPgz5byVvyruurF_wNUEXB" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=qxcnm/Codex-Manager&type=date&legend=top-left&sealed_token=0lErj7wVj9-gpjzcdjv0ooUVJdk9ZDzh3RnghqICOisoBoKFFJywLC0KaEX6ofwqT7Ep_0shgOjIm_T3OF-QiKoeF1ZwJYza7oaH4Ie0V_FXGOj55-EKpUluUlL5wjepRIAfJaCR2O2gVkUuyVUSZc1UOEv3LGd7N8UgExTPgz5byVvyruurF_wNUEXB" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=qxcnm/Codex-Manager&type=date&legend=top-left&sealed_token=0lErj7wVj9-gpjzcdjv0ooUVJdk9ZDzh3RnghqICOisoBoKFFJywLC0KaEX6ofwqT7Ep_0shgOjIm_T3OF-QiKoeF1ZwJYza7oaH4Ie0V_FXGOj55-EKpUluUlL5wjepRIAfJaCR2O2gVkUuyVUSZc1UOEv3LGd7N8UgExTPgz5byVvyruurF_wNUEXB" />
  </picture>
 </a>
 
