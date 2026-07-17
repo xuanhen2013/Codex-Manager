@@ -449,7 +449,7 @@ Expected: `aarch64-apple-darwin` 已安装。
 Run:
 
 ```bash
-./scripts/rebuild-macos.sh --bundles "dmg" --target aarch64-apple-darwin --clean-dist
+bash scripts/rebuild-macos.sh --bundles "dmg" --target aarch64-apple-darwin --clean-dist
 ```
 
 Expected: 命令成功，生成 arm64 `.app` 和 `.dmg`。
