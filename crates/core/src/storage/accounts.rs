@@ -1189,6 +1189,22 @@ impl Storage {
         tx.execute(delete_usage_snapshots_for_account_sql(), [account_id])?;
         tx.execute(delete_events_for_account_sql(), [account_id])?;
         tx.execute(delete_conversation_bindings_for_account_sql(), [account_id])?;
+        tx.execute(
+            "DELETE FROM account_proxy_settings WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM account_proxy_url_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_speed_tests WHERE account_id = ?1",
+            [account_id],
+        )?;
+        tx.execute(
+            "DELETE FROM proxy_diagnostics_history WHERE account_id = ?1",
+            [account_id],
+        )?;
         tx.execute(delete_account_by_id_sql(), [account_id])?;
         tx.commit()?;
         Ok(())

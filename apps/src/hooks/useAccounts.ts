@@ -28,6 +28,15 @@ type AccountExportPayload = Parameters<typeof accountClient.export>[0];
 type ExportResult = Awaited<ReturnType<typeof accountClient.export>>;
 type WarmupPayload = Parameters<typeof accountClient.warmup>[0];
 type WarmupResult = Awaited<ReturnType<typeof accountClient.warmup>>;
+type AccountProxySettings = Awaited<
+  ReturnType<typeof accountClient.getProxySettings>
+>;
+type AccountProxySetPayload = Parameters<
+  typeof accountClient.setProxySettings
+>[0];
+type AccountProxyTestPayload = Parameters<
+  typeof accountClient.testProxySettings
+>[0];
 type RefreshAllRtResult = Awaited<
   ReturnType<typeof accountClient.refreshAllChatgptAuthTokens>
 >;
@@ -921,6 +930,65 @@ export function useAccounts() {
     },
   });
 
+  const getAccountProxySettings = async (
+    accountId: string,
+  ): Promise<AccountProxySettings> => {
+    if (!ensureServiceReady("读取账号代理")) {
+      throw new Error(t("服务未连接，暂时无法读取账号代理"));
+    }
+    const targetAccountId = accountId.trim();
+    if (!targetAccountId) {
+      throw new Error(t("未找到当前账号，请刷新后重试"));
+    }
+    return accountClient.getProxySettings(targetAccountId);
+  };
+
+  const setAccountProxyMutation = useMutation({
+    mutationFn: (params: AccountProxySetPayload) =>
+      accountClient.setProxySettings(params),
+    onSuccess: async (settings) => {
+      await invalidateAccountData();
+      toast.success(
+        settings.enabled ? t("账号代理已保存") : t("账号代理已关闭"),
+      );
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("保存账号代理失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const clearAccountProxyMutation = useMutation({
+    mutationFn: (accountId: string) =>
+      accountClient.clearProxySettings(accountId),
+    onSuccess: async () => {
+      await invalidateAccountData();
+      toast.success(t("账号代理已清除"));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("清除账号代理失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const testAccountProxyMutation = useMutation({
+    mutationFn: (params: AccountProxyTestPayload) =>
+      accountClient.testProxySettings(params),
+    onSuccess: async (settings) => {
+      await invalidateAccountData();
+      if (settings.status === "ok") {
+        toast.success(t("账号代理测试通过"));
+        return;
+      }
+      toast.warning(
+        settings.lastError
+          ? `${t("账号代理测试未通过")}: ${settings.lastError}`
+          : t("账号代理测试未通过"),
+      );
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("测试账号代理失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
   return {
     accounts,
     planTypes,
@@ -1005,6 +1073,19 @@ export function useAccounts() {
       if (!ensureServiceReady("取消优先账号")) return;
       clearPreferredMutation.mutate(accountId);
     },
+    getAccountProxySettings,
+    setAccountProxySettings: async (params: AccountProxySetPayload) => {
+      if (!ensureServiceReady("保存账号代理")) return;
+      return await setAccountProxyMutation.mutateAsync(params);
+    },
+    clearAccountProxySettings: async (accountId: string) => {
+      if (!ensureServiceReady("清除账号代理")) return;
+      return await clearAccountProxyMutation.mutateAsync(accountId);
+    },
+    testAccountProxySettings: async (params: AccountProxyTestPayload) => {
+      if (!ensureServiceReady("测试账号代理")) return;
+      return await testAccountProxyMutation.mutateAsync(params);
+    },
     updateAccountSort: async (accountId: string, sort: number) => {
       if (!ensureServiceReady("更新账号顺序")) return;
       await updateAccountSortMutation.mutateAsync({ accountId, sort });
@@ -1053,6 +1134,9 @@ export function useAccounts() {
     isCleaningAccountsByStatus: deleteByStatusesMutation.isPending,
     isUpdatingPreferred:
       setPreferredMutation.isPending || clearPreferredMutation.isPending,
+    isSavingAccountProxy: setAccountProxyMutation.isPending,
+    isClearingAccountProxy: clearAccountProxyMutation.isPending,
+    isTestingAccountProxy: testAccountProxyMutation.isPending,
     isUpdatingSortAccountId:
       updateAccountSortMutation.isPending &&
       updateAccountSortMutation.variables &&
