@@ -5,9 +5,19 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-19
+
+### Changed
+
+- Combined today's total, cached-input, and reasoning-output usage in the administrator dashboard metric card.
+- Bumped the release version to `0.4.2` and synchronized workspace, frontend package, Tauri desktop metadata, and lockfiles.
+
 ### Fixed
 
+- Fixed cleared request logs reappearing by hiding billed entries from operational log queries while preserving immutable usage and billing audit data.
+- Corrected Aggregate API Responses probes to send `input_text` content, retain upstream error details, and expose failed-test details in the UI.
 - Fixed `codexmanager-web` downgrading `/v1/responses` WebSocket handshakes to ordinary GET requests that returned 405. The Web gateway now tunnels WebSocket frames while preserving authentication and Codex headers, and managed/onboarding provider configs explicitly enable Responses WebSocket.
+- Replaced the README Star History remote chart embeds with repository-hosted images so the curves remain visible.
 
 ## [0.4.1] - 2026-07-14
 
@@ -355,7 +365,9 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ### Changed
 - The operation area of ​​the account management page is integrated into a single "Account Operation" drop-down menu, replacing the stack of multiple buttons on the right, making the interface more concise.
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.7...v0.3.8

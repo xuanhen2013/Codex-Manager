@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64",
  "rand 0.8.5",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-service"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "axum",
  "base64",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-start"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "codexmanager-service",
  "ctrlc",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "codexmanager-web"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "axum",
  "codexmanager-service",

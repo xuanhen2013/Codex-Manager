@@ -5,9 +5,19 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-19
+
+### Changed
+
+- 管理员仪表盘的用量指标卡合并展示今日总用量、缓存输入与推理输出用量。
+- 发布版本提升到 `0.4.2`，同步更新 workspace、前端包、Tauri 桌面端与锁文件。
+
 ### Fixed
 
+- 修复已清空的请求日志重新出现的问题；计费记录会从操作日志查询中隐藏，同时保留不可变的用量与账单审计数据。
+- 修正聚合 API 的 Responses 连通性探针，改为发送 `input_text` 内容，保留上游错误详情，并在界面中展示测试失败详情。
 - 修复 `codexmanager-web` 的 `/v1/responses` WebSocket 握手被降级为普通 GET 并返回 405 的问题；Web 网关现在会在保留鉴权与 Codex 请求头的同时双向转发 WebSocket 帧，自动接管和首次引导配置也会显式启用 Responses WebSocket。
+- 将 README 的 Star History 远程曲线嵌入替换为仓库内图片，避免曲线无法显示。
 
 ## [0.4.1] - 2026-07-14
 
@@ -355,7 +365,9 @@
 ### Changed
 - 账号管理页操作区整合为单一“账号操作”下拉菜单，替代右侧多按钮堆叠，界面更简洁。
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.7...v0.3.8
