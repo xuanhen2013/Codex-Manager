@@ -54,6 +54,9 @@ fn account(id: &str, sort: i64) -> Account {
 fn set_test_db(prefix: &str) -> (PathBuf, EnvGuard) {
     let dir = new_test_dir(prefix);
     let db_path = dir.join("codexmanager.db");
+    let storage = Storage::open(&db_path).expect("open test storage");
+    storage.init().expect("init test storage");
+    drop(storage);
     let guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
     (db_path, guard)
 }

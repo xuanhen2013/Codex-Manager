@@ -40,6 +40,15 @@ impl Drop for EnvGuard {
     }
 }
 
+fn set_test_db(dir: &Path) -> EnvGuard {
+    fs::create_dir_all(dir).expect("create test db dir");
+    let db_path = dir.join("codexmanager.db");
+    let storage = Storage::open(&db_path).expect("open test storage");
+    storage.init().expect("init test storage");
+    drop(storage);
+    EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref())
+}
+
 fn test_account(id: &str, status: &str) -> Account {
     Account {
         id: id.to_string(),
@@ -456,7 +465,9 @@ wire_api = "responses"
 
 #[test]
 fn experimental_gateway_config_overrides_login_tokens_and_stale_direct_marker() {
+    let _env_lock = crate::test_env_guard();
     let dir = temp_profile("experimental-gateway-detection");
+    let _db_guard = set_test_db(&dir);
     fs::create_dir_all(&dir).expect("mkdir profile");
     fs::write(
         dir.join(AUTH_FILE),
@@ -545,7 +556,9 @@ experimental_bearer_token = "other-key"
 
 #[test]
 fn write_profile_files_uses_internal_marker() {
+    let _env_lock = crate::test_env_guard();
     let dir = temp_profile("internal-marker");
+    let _db_guard = set_test_db(&dir);
     let state = ManagedState {
         profile_dir: profile_key(&dir),
         mode: CodexProfileMode::Gateway,
@@ -572,7 +585,9 @@ fn write_profile_files_uses_internal_marker() {
 
 #[test]
 fn legacy_marker_migrates_to_internal_marker() {
+    let _env_lock = crate::test_env_guard();
     let dir = temp_profile("legacy-marker");
+    let _db_guard = set_test_db(&dir);
     fs::create_dir_all(&dir).expect("mkdir profile");
     let marker = MarkerFile {
         writer: "codexmanager".to_string(),
@@ -600,7 +615,9 @@ fn legacy_marker_migrates_to_internal_marker() {
 
 #[test]
 fn legacy_history_backups_migrate_and_are_pruned() {
+    let _env_lock = crate::test_env_guard();
     let dir = temp_profile("legacy-history-backups");
+    let _db_guard = set_test_db(&dir);
     let legacy_root = dir.join(HISTORY_BACKUP_DIR);
     fs::create_dir_all(&legacy_root).expect("mkdir legacy root");
     for index in 0..5 {

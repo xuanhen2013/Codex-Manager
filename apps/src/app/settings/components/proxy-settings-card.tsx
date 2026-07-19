@@ -87,7 +87,7 @@ import {
   resolveProxyFlagDisplay,
 } from "@/lib/utils/proxy-geo";
 import { cn } from "@/lib/utils";
-import type { ProxyProfile, ProxyTestJobState } from "@/types";
+import type { ProxyProfile, ProxyTestJobState, SpeedSample } from "@/types";
 import { useI18n } from "@/lib/i18n/provider";
 import { ProxyFlag } from "@/components/accounts/account-proxy-cell";
 import { AccountProxyGeoStatusGrid } from "@/components/accounts/account-proxy-status-grid";
@@ -100,6 +100,9 @@ type ProxyFilter =
   | "healthy"
   | "failed"
   | "unchecked";
+
+type CloudflareDownloadPreset = "all" | "100kb" | "1mb" | "10mb" | "25mb";
+type CloudflareUploadPreset = CloudflareDownloadPreset | "50mb";
 
 const JOB_POLL_INTERVAL_MS = 750;
 
@@ -206,7 +209,7 @@ function formatMetric(
   return `${value.toFixed(digits)} ${suffix}`;
 }
 
-function getActiveSpeed(samples: any[] | undefined): number | null {
+function getActiveSpeed(samples: SpeedSample[] | undefined): number | null {
   if (!samples || samples.length === 0) return null;
   const maxPayload = Math.max(...samples.map((s) => s.payloadBytes || 0));
   if (maxPayload <= 0) return null;
@@ -321,8 +324,8 @@ export function ProxySettingsCard({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProxyProfile | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProxyProfile | null>(null);
-  const [cfDownloadPreset, setCfDownloadPreset] = useState<"all" | "100kb" | "1mb" | "10mb" | "25mb">("all");
-  const [cfUploadPreset, setCfUploadPreset] = useState<"all" | "100kb" | "1mb" | "10mb" | "25mb" | "50mb">("all");
+  const [cfDownloadPreset, setCfDownloadPreset] = useState<CloudflareDownloadPreset>("all");
+  const [cfUploadPreset, setCfUploadPreset] = useState<CloudflareUploadPreset>("all");
   const [activeJobs, setActiveJobs] = useState<Record<string, ProxyTestJobState>>({});
   const [selectedDetailProfile, setSelectedDetailProfile] = useState<ProxyProfile | null>(null);
 
@@ -677,7 +680,9 @@ export function ProxySettingsCard({
                           </div>
                           <Select
                             value={cfDownloadPreset}
-                            onValueChange={(value) => setCfDownloadPreset(value as any)}
+                            onValueChange={(value) =>
+                              setCfDownloadPreset(value as CloudflareDownloadPreset)
+                            }
                           >
                             <SelectTrigger id="cf-download-preset" className="w-full">
                               <SelectValue placeholder={t("Select preset...")} />
@@ -715,7 +720,9 @@ export function ProxySettingsCard({
                           </div>
                           <Select
                             value={cfUploadPreset}
-                            onValueChange={(value) => setCfUploadPreset(value as any)}
+                            onValueChange={(value) =>
+                              setCfUploadPreset(value as CloudflareUploadPreset)
+                            }
                           >
                             <SelectTrigger id="cf-upload-preset" className="w-full">
                               <SelectValue placeholder={t("Select preset...")} />

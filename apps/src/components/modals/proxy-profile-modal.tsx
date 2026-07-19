@@ -1,14 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus, Save } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -39,6 +38,13 @@ interface ProxyProfileModalProps {
   profile?: ProxyProfile | null;
 }
 
+interface ProxyProfileFormProps {
+  onOpenChange: (open: boolean) => void;
+  profile?: ProxyProfile | null;
+}
+
+type ProxyProtocol = "http" | "https" | "socks5";
+
 function parseTagsInput(value: string): string | null {
   const items = value
     .split(/[,\n]/)
@@ -62,40 +68,46 @@ function stringifyTags(tagsJson?: string | null): string {
   }
 }
 
+function resolveProxyProtocol(profile?: ProxyProfile | null): ProxyProtocol {
+  const scheme = profile?.scheme?.toLowerCase();
+  if (scheme === "https") return "https";
+  if (scheme?.startsWith("socks5")) return "socks5";
+  return "http";
+}
+
 export function ProxyProfileModal({
   open,
   onOpenChange,
   profile,
 }: ProxyProfileModalProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open ? (
+        <ProxyProfileForm
+          key={`${profile?.id ?? "new"}:${profile?.updatedAt ?? 0}`}
+          onOpenChange={onOpenChange}
+          profile={profile}
+        />
+      ) : null}
+    </Dialog>
+  );
+}
+
+function ProxyProfileForm({
+  onOpenChange,
+  profile,
+}: ProxyProfileFormProps) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const isEditing = Boolean(profile);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(() => profile?.name || "");
   const [proxyUrl, setProxyUrl] = useState("");
-  const [tags, setTags] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [notes, setNotes] = useState("");
-  const [protocol, setProtocol] = useState<"http" | "https" | "socks5">("http");
-
-  useEffect(() => {
-    if (!open) return;
-    setName(profile?.name || "");
-    setProxyUrl("");
-    setTags(stringifyTags(profile?.tagsJson));
-    setEnabled(profile?.enabled ?? true);
-    setNotes(profile?.notes || "");
-
-    let defaultProto: "http" | "https" | "socks5" = "http";
-    if (profile?.scheme) {
-      const scheme = profile.scheme.toLowerCase();
-      if (scheme === "https") {
-        defaultProto = "https";
-      } else if (scheme.startsWith("socks5")) {
-        defaultProto = "socks5";
-      }
-    }
-    setProtocol(defaultProto);
-  }, [open, profile]);
+  const [tags, setTags] = useState(() => stringifyTags(profile?.tagsJson));
+  const [enabled, setEnabled] = useState(() => profile?.enabled ?? true);
+  const [notes, setNotes] = useState(() => profile?.notes || "");
+  const [protocol, setProtocol] = useState<ProxyProtocol>(() =>
+    resolveProxyProtocol(profile),
+  );
 
   const actionLabel = useMemo(
     () => (isEditing ? t("保存更改") : t("添加代理")),
@@ -150,8 +162,7 @@ export function ProxyProfileModal({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[640px]">
+    <DialogContent className="glass-card max-h-[calc(100vh-2rem)] overflow-hidden p-0 sm:max-w-[640px]">
         <div className="flex max-h-[calc(100vh-2rem)] flex-col">
           <div className="border-b border-border/50 px-6 pt-6 pb-4">
             <DialogHeader>
@@ -196,7 +207,7 @@ export function ProxyProfileModal({
                 <Select
                   value={protocol}
                   disabled={saveMutation.isPending}
-                  onValueChange={(value) => setProtocol(value as any)}
+                  onValueChange={(value) => setProtocol(value as ProxyProtocol)}
                 >
                   <SelectTrigger className="w-[110px] rounded-xl bg-card/50">
                     <SelectValue />
@@ -272,7 +283,6 @@ export function ProxyProfileModal({
             </Button>
           </DialogFooter>
         </div>
-      </DialogContent>
-    </Dialog>
+    </DialogContent>
   );
 }

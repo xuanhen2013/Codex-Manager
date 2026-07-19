@@ -701,7 +701,7 @@ pub(in super::super) fn send_upstream_request_without_session_headers(
     is_stream: bool,
     auth_token: &str,
     account: &Account,
-) -> Result<GatewayUpstreamResponse, reqwest::Error> {
+) -> Result<GatewayUpstreamResponse, String> {
     send_upstream_request_with_compression_override(
         client,
         method,
