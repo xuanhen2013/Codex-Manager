@@ -100,6 +100,8 @@ interface MetricCardProps {
   sub: string;
   detail?: string;
   badge?: string;
+  titleClassName?: string;
+  valueClassName?: string;
 }
 
 type AdminUsageRangePreset = "7d" | "14d" | "30d" | "custom";
@@ -261,6 +263,8 @@ function MetricCard({
   sub,
   detail,
   badge,
+  titleClassName,
+  valueClassName,
 }: MetricCardProps) {
   return (
     <Card
@@ -270,7 +274,7 @@ function MetricCard({
       <CardContent className="flex min-h-[52px] items-center justify-between gap-2 px-3 py-2">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <CardTitle className="min-w-0 truncate text-xs font-semibold text-muted-foreground">
+            <CardTitle className={cn("min-w-0 truncate text-xs font-semibold text-muted-foreground", titleClassName)}>
               {title}
             </CardTitle>
             {badge ? (
@@ -284,7 +288,7 @@ function MetricCard({
             ) : null}
           </div>
           <div
-            className="mt-1 truncate font-mono text-xl font-semibold leading-none tracking-normal text-foreground tabular-nums"
+            className={cn("mt-1 truncate font-mono text-xl font-semibold leading-none tracking-normal text-foreground tabular-nums", valueClassName)}
             title={detail ? `${sub} · ${detail}` : sub}
           >
             {value}
@@ -916,10 +920,12 @@ function AdminDashboard() {
               badge={isDirectAccountMode ? t("账号直连模式下不可用") : t("可用")}
             />
             <MetricCard
-              title={t("今日用量")}
-              value={formatCompactTokenAmount(adminUsageSummary?.todayUsage.totalTokens ?? stats.todayTokens)}
+              title={t("今日/缓存/推理 用量")}
+              value={`${formatCompactTokenAmount(adminUsageSummary?.todayUsage.totalTokens ?? stats.todayTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.cachedInputTokens ?? stats.cachedTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.reasoningOutputTokens ?? stats.reasoningTokens)}`}
               icon={Zap}
               color="text-violet-500"
+              titleClassName="text-[11px]"
+              valueClassName="text-base"
               sub={`${t("缓存 / 推理")}: ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.cachedInputTokens ?? stats.cachedTokens)} / ${formatCompactTokenAmount(adminUsageSummary?.todayUsage.reasoningOutputTokens ?? stats.reasoningTokens)}`}
               detail={
                 adminUsageSummary

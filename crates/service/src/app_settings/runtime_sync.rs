@@ -10,6 +10,7 @@ use super::{
     APP_SETTING_GATEWAY_COMPACT_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
+    APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
     APP_SETTING_GATEWAY_THREAD_AWARE_ACCOUNT_DISTRIBUTION_ENABLED_KEY,
@@ -182,6 +183,11 @@ pub fn sync_runtime_settings_from_storage() {
         gateway::set_thread_aware_account_distribution_enabled(super::parse_bool_with_default(
             raw, true,
         ));
+    }
+    if !process_env_has_value("CODEXMANAGER_ENABLE_REQUEST_COMPRESSION") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY) {
+            gateway::set_request_compression_enabled(super::parse_bool_with_default(raw, true));
+        }
     }
     if !process_env_has_value("CODEXMANAGER_ORIGINATOR") {
         if let Some(originator) = settings.get(APP_SETTING_GATEWAY_ORIGINATOR_KEY) {

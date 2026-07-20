@@ -171,10 +171,9 @@ fn billing_rule_upsert_validates_user_and_api_key_with_exists_helpers() {
     let _lock = test_env_guard();
     let dir = new_test_dir("billing-rule-upsert");
     let db_path = dir.join("codexmanager.db");
-    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
-
     let storage = Storage::open(&db_path).expect("open storage");
     storage.init().expect("init storage");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
     let now = now_ts();
     storage
         .insert_app_user(&test_app_user("billing-user", "billing-user", now))
@@ -284,10 +283,9 @@ fn quota_capacity_updates_return_config_from_same_storage_handle() {
     let _lock = test_env_guard();
     let dir = new_test_dir("quota-capacity-update");
     let db_path = dir.join("codexmanager.db");
-    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
-
     let storage = Storage::open(&db_path).expect("open storage");
     storage.init().expect("init storage");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
     let now = now_ts();
     storage
         .insert_account(&account("acc-capacity", "active", now))

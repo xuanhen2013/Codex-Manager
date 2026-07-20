@@ -684,7 +684,7 @@ fn request_logs_filtered_summary_aggregates_counts_and_tokens() {
 }
 
 #[test]
-fn request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
+fn request_logs_summary_is_empty_after_logs_are_cleared() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
 
@@ -724,20 +724,20 @@ fn request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
     let summary = storage
         .summarize_request_logs_filtered(None, None, None, None)
         .expect("summarize unfiltered cleared usage");
-    assert_eq!(summary.count, 2);
-    assert_eq!(summary.success_count, 1);
-    assert_eq!(summary.error_count, 1);
-    assert_eq!(summary.total_tokens, 100);
-    assert_eq!(summary.estimated_cost_usd, 0.03);
+    assert_eq!(summary.count, 0);
+    assert_eq!(summary.success_count, 0);
+    assert_eq!(summary.error_count, 0);
+    assert_eq!(summary.total_tokens, 0);
+    assert_eq!(summary.estimated_cost_usd, 0.0);
 
     let hourly_summary = storage
         .summarize_request_logs_filtered(None, None, Some(0), Some(3_600))
         .expect("summarize hourly cleared usage");
-    assert_eq!(hourly_summary.count, 2);
-    assert_eq!(hourly_summary.success_count, 1);
-    assert_eq!(hourly_summary.error_count, 1);
-    assert_eq!(hourly_summary.total_tokens, 100);
-    assert_eq!(hourly_summary.estimated_cost_usd, 0.03);
+    assert_eq!(hourly_summary.count, 0);
+    assert_eq!(hourly_summary.success_count, 0);
+    assert_eq!(hourly_summary.error_count, 0);
+    assert_eq!(hourly_summary.total_tokens, 0);
+    assert_eq!(hourly_summary.estimated_cost_usd, 0.0);
 
     let filtered = storage
         .summarize_request_logs_filtered(None, Some("5xx"), None, None)
@@ -747,7 +747,7 @@ fn request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
 }
 
 #[test]
-fn keyed_request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
+fn keyed_request_logs_summary_is_empty_after_logs_are_cleared() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
 
@@ -791,8 +791,8 @@ fn keyed_request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
             &["gk-cleared-owned".to_string()],
         )
         .expect("summarize keyed cleared usage");
-    assert_eq!(summary.count, 1);
-    assert_eq!(summary.total_tokens, 30);
+    assert_eq!(summary.count, 0);
+    assert_eq!(summary.total_tokens, 0);
 
     let filtered = storage
         .summarize_request_logs_filtered_for_keys(
@@ -805,6 +805,116 @@ fn keyed_request_logs_unfiltered_summary_keeps_usage_after_logs_are_cleared() {
         .expect("summarize keyed filtered cleared logs");
     assert_eq!(filtered.count, 0);
     assert_eq!(filtered.total_tokens, 0);
+}
+
+#[test]
+fn clear_request_logs_hides_billed_rows_without_discarding_billing_audit_data() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    let request_log_id = storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-billed-clear".to_string()),
+            key_id: Some("gk-billed-clear".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 3_000,
+            ..Default::default()
+        })
+        .expect("insert billed request log");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id,
+            key_id: Some("gk-billed-clear".to_string()),
+            model: Some("gpt-5.4-mini".to_string()),
+            input_tokens: Some(12),
+            cached_input_tokens: Some(2),
+            output_tokens: Some(3),
+            total_tokens: Some(13),
+            reasoning_output_tokens: Some(1),
+            estimated_cost_usd: Some(0.01),
+            created_at: 3_000,
+            ..RequestTokenStat::default()
+        })
+        .expect("insert billed token stat");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO request_charge_snapshots(
+               request_log_id, model_id, model_slug, tier_min_input_tokens, usage_source,
+               input_tokens, cached_input_tokens, output_tokens,
+               input_microusd_per_1m, cached_input_microusd_per_1m,
+               output_microusd_per_1m, rate_multiplier_millis,
+               base_cost_microusd, charged_cost_microusd, currency, created_at
+             ) VALUES(
+               ?1, NULL, 'gpt-5.4-mini', 0, 'actual',
+               12, 2, 3, 100, 10, 200, 1000, 1, 1, 'USD', 3000
+             )",
+            [request_log_id],
+        )
+        .expect("insert charge snapshot");
+
+    storage.clear_request_logs().expect("clear billed logs");
+
+    assert_eq!(
+        storage
+            .count_request_logs(None, None, None, None)
+            .expect("count visible logs"),
+        0
+    );
+    assert!(storage
+        .list_request_logs(None, 10)
+        .expect("list visible logs")
+        .is_empty());
+    let visible_summary = storage
+        .summarize_request_logs_filtered(None, None, None, None)
+        .expect("summarize visible logs");
+    assert_eq!(visible_summary.count, 0);
+    assert_eq!(visible_summary.total_tokens, 0);
+
+    let cleared_at: Option<i64> = storage
+        .conn
+        .query_row(
+            "SELECT cleared_at FROM request_logs WHERE id = ?1",
+            [request_log_id],
+            |row| row.get(0),
+        )
+        .expect("read retained billed log");
+    assert!(cleared_at.is_some());
+    let snapshot_count: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM request_charge_snapshots WHERE request_log_id = ?1",
+            [request_log_id],
+            |row| row.get(0),
+        )
+        .expect("count retained charge snapshot");
+    assert_eq!(snapshot_count, 1);
+
+    let usage = storage
+        .summarize_request_logs_between(0, 3_600)
+        .expect("summarize retained usage");
+    assert_eq!(usage.input_tokens, 12);
+    assert_eq!(usage.cached_input_tokens, 2);
+    assert_eq!(usage.output_tokens, 3);
+    assert_eq!(usage.reasoning_output_tokens, 1);
+
+    storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-after-clear".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            status_code: Some(200),
+            created_at: 3_001,
+            ..Default::default()
+        })
+        .expect("insert log after clear");
+    let visible_logs = storage
+        .list_request_logs(None, 10)
+        .expect("list logs after clear");
+    assert_eq!(visible_logs.len(), 1);
+    assert_eq!(visible_logs[0].trace_id.as_deref(), Some("trc-after-clear"));
 }
 
 #[test]

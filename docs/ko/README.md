@@ -64,7 +64,7 @@ CodexManager를 후원해 주신 다음 스폰서께 감사드립니다.
       </a>
     </td>
     <td valign="top">
-      <strong>AI夏末 AIXiamo</strong> 의 프로젝트 후원에 감사드립니다! <strong>AIXiamo</strong> 는 Codex CLI, Claude Code, Gemini CLI 등 개발자 사용 장면을 대상으로 ChatGPT Pro 5x / 20x, ChatGPT Plus, Claude Max, Gemini Pro, Grok 등 AI 멤버십 개통과 사후 지원을 제공합니다. Alipay / WeChat Pay 결제, 자동 충전, 주문 조회, 튜토리얼 안내와 사후 지원을 지원합니다. AI 코딩, 코드 생성, 문서 처리, 고빈도 대화를 안정적으로 사용해야 하는 개발자에게 적합합니다. CodexManager 사용자는 Pro / Codex / Claude / Gemini 플랜 선택을 우선 상담할 수 있습니다. 서비스는 <a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager">공식 사이트</a>에서 확인할 수 있습니다.
+      <strong>AI夏末 AIXiamo</strong> 의 프로젝트 후원에 감사드립니다! 해외 결제 카드 없이 ChatGPT, Claude, Codex 등 AI 서비스를 충전하려는 중국 사용자에게 추천합니다. Alipay / WeChat Pay를 지원하며 정식 충전 대행과 사후 지원을 제공합니다. 서비스는 <a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager">공식 사이트</a>에서 확인할 수 있습니다.
     </td>
   </tr>
 

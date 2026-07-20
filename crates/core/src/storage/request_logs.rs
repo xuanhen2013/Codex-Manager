@@ -5,7 +5,7 @@ use super::request_log_filters::{
     account_join_clause, build_request_log_filters, token_stats_join_clause, RequestLogSqlFilters,
 };
 use super::{
-    RequestLog, RequestLogQuerySummary, RequestLogTodaySummary, RequestTokenStat, Storage,
+    now_ts, RequestLog, RequestLogQuerySummary, RequestLogTodaySummary, RequestTokenStat, Storage,
 };
 
 const DEFAULT_REQUEST_LOG_RETENTION_DAYS: i64 = 14;
@@ -29,16 +29,39 @@ fn empty_optional_range(start_ts: Option<i64>, end_ts: Option<i64>) -> bool {
 
 fn clear_request_logs_sql() -> &'static str {
     "DELETE FROM request_logs
-     WHERE NOT EXISTS (
+     WHERE cleared_at IS NULL
+       AND NOT EXISTS (
        SELECT 1 FROM request_charge_snapshots snapshots
        WHERE snapshots.request_log_id=request_logs.id
      )"
 }
 
+fn hide_billed_request_logs_sql() -> &'static str {
+    "UPDATE request_logs
+     SET cleared_at = ?1
+     WHERE cleared_at IS NULL
+       AND EXISTS (
+         SELECT 1 FROM request_charge_snapshots snapshots
+         WHERE snapshots.request_log_id=request_logs.id
+       )"
+}
+
 fn prune_request_logs_before_sql() -> &'static str {
     "DELETE FROM request_logs
-     WHERE created_at < ?1
+     WHERE cleared_at IS NULL
+       AND created_at < ?1
        AND NOT EXISTS (
+         SELECT 1 FROM request_charge_snapshots snapshots
+         WHERE snapshots.request_log_id=request_logs.id
+       )"
+}
+
+fn hide_billed_request_logs_before_sql() -> &'static str {
+    "UPDATE request_logs
+     SET cleared_at = ?2
+     WHERE cleared_at IS NULL
+       AND created_at < ?1
+       AND EXISTS (
          SELECT 1 FROM request_charge_snapshots snapshots
          WHERE snapshots.request_log_id=request_logs.id
        )"
@@ -485,9 +508,6 @@ impl Storage {
         if empty_optional_range(start_ts, end_ts) {
             return Ok(empty_request_log_query_summary());
         }
-        if should_summarize_request_logs_from_token_stats(query, status_filter) {
-            return self.summarize_request_token_stats_query_between(start_ts, end_ts);
-        }
         let filters =
             self.request_log_filters(query, status_filter, start_ts, end_ts, None, true)?;
         self.summarize_request_logs_with_filter(filters)
@@ -503,10 +523,6 @@ impl Storage {
     ) -> Result<RequestLogQuerySummary> {
         if empty_optional_range(start_ts, end_ts) {
             return Ok(empty_request_log_query_summary());
-        }
-        if should_summarize_request_logs_from_token_stats(query, status_filter) {
-            return self
-                .summarize_request_token_stats_query_for_keys_between(start_ts, end_ts, key_ids);
         }
         let Some(key_filter) = KeyIdSqlFilter::create(self, "r.key_id", key_ids)? else {
             return Ok(empty_request_log_query_summary());
@@ -571,12 +587,17 @@ impl Storage {
         // Migration 062 runs before the V2 charge snapshot table is created. Keep that
         // fresh/legacy migration path valid while preserving immutable billed logs once
         // the V2 schema exists.
-        let deleted_logs = if self.has_table("request_charge_snapshots")? {
-            self.conn.execute(clear_request_logs_sql(), [])?
+        let affected_logs = if self.has_table("request_charge_snapshots")? {
+            let cleared_at = now_ts();
+            let hidden_logs = self
+                .conn
+                .execute(hide_billed_request_logs_sql(), [cleared_at])?;
+            let deleted_logs = self.conn.execute(clear_request_logs_sql(), [])?;
+            hidden_logs.saturating_add(deleted_logs)
         } else {
             self.conn.execute("DELETE FROM request_logs", [])?
         };
-        if rolled_up.saturating_add(deleted_logs) > 0 {
+        if rolled_up.saturating_add(affected_logs) > 0 {
             let _ = self
                 .conn
                 .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
@@ -590,8 +611,13 @@ impl Storage {
         }
         self.rollup_request_token_stats_before(cutoff_ts)?;
         if self.has_table("request_charge_snapshots")? {
-            self.conn
-                .execute(prune_request_logs_before_sql(), [cutoff_ts])
+            let hidden_logs = self
+                .conn
+                .execute(hide_billed_request_logs_before_sql(), [cutoff_ts, now_ts()])?;
+            let deleted_logs = self
+                .conn
+                .execute(prune_request_logs_before_sql(), [cutoff_ts])?;
+            Ok(hidden_logs.saturating_add(deleted_logs))
         } else {
             self.conn.execute(
                 "DELETE FROM request_logs WHERE created_at < ?1",
@@ -691,11 +717,17 @@ impl Storage {
                 duration_ms INTEGER,
                 first_response_ms INTEGER,
                 error TEXT,
+                cleared_at INTEGER,
                 created_at INTEGER NOT NULL
             )",
             [],
         )?;
         self.ensure_request_logs_indexes()?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_request_log_visibility_column(&self) -> Result<()> {
+        self.ensure_column("request_logs", "cleared_at", "INTEGER")?;
         Ok(())
     }
 
@@ -1175,24 +1207,6 @@ fn normalize_request_log_limit(value: i64) -> i64 {
 /// 返回函数执行结果
 fn empty_request_log_query_summary() -> RequestLogQuerySummary {
     RequestLogQuerySummary::default()
-}
-
-fn should_summarize_request_logs_from_token_stats(
-    query: Option<&str>,
-    status_filter: Option<&str>,
-) -> bool {
-    let has_query = query.is_some_and(|value| !value.trim().is_empty());
-    if has_query {
-        return false;
-    }
-    matches!(
-        status_filter
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "" | "all"
-    )
 }
 
 #[cfg(test)]

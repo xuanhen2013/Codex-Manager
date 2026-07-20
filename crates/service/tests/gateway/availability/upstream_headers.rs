@@ -208,7 +208,7 @@ fn codex_header_profile_sets_required_headers_for_stream() {
         Some("turn-state")
     );
     assert!(find_header(&headers, "Conversation_id").is_none());
-    assert!(find_header(&headers, "session_id").is_none());
+    assert!(find_header(&headers, "session-id").is_none());
     assert!(find_header(&headers, "x-codex-window-id").is_none());
 }
 
@@ -328,11 +328,11 @@ fn codex_compact_header_profile_matches_remote_compact_shape() {
     );
     assert!(find_header(&headers, "Version").is_none());
     assert_eq!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("session-compact")
     );
     assert_eq!(
-        find_header(&headers, "thread_id").as_deref(),
+        find_header(&headers, "thread-id").as_deref(),
         Some("thread-compact")
     );
     assert!(find_header(&headers, "Cookie").is_none());
@@ -431,7 +431,7 @@ fn codex_compact_header_profile_omits_session_without_thread_anchor() {
         has_body: true,
     });
 
-    assert!(find_header(&headers, "session_id").is_none());
+    assert!(find_header(&headers, "session-id").is_none());
 }
 
 /// 函数 `codex_header_profile_uses_dynamic_originator_and_residency_requirement`
@@ -542,11 +542,11 @@ fn codex_header_profile_regenerates_session_on_failover() {
     });
 
     assert_ne!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("sticky-session")
     );
     assert_eq!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("fallback-session")
     );
     assert_eq!(
@@ -597,7 +597,7 @@ fn codex_header_profile_uses_fallback_session_when_incoming_missing() {
     });
 
     assert_eq!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("fallback-session")
     );
     assert_eq!(
@@ -731,7 +731,7 @@ fn codex_header_profile_can_disable_affinity_headers() {
     assert!(find_header(&headers, "x-codex-turn-state").is_none());
     assert!(find_header(&headers, "Conversation_id").is_none());
     assert_eq!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("sticky-session")
     );
     assert_eq!(
@@ -780,7 +780,7 @@ fn codex_header_profile_does_not_invent_client_request_id_on_failover() {
     });
 
     assert_ne!(
-        find_header(&headers, "session_id").as_deref(),
+        find_header(&headers, "session-id").as_deref(),
         Some("sticky-session")
     );
     assert_eq!(

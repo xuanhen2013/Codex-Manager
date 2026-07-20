@@ -82,7 +82,7 @@ fn serialize_models_response_outputs_codex_and_api_shapes() {
 }
 
 #[test]
-fn serialize_models_response_preserves_description_for_codex_clients() {
+fn serialize_models_response_preserves_description_for_codex_and_api_clients() {
     let items = ModelsResponse {
         models: vec![ModelInfo {
             slug: "gpt-5.3-codex".to_string(),

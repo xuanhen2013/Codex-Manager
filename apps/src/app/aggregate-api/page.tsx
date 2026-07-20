@@ -34,6 +34,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Table,
   TableBody,
   TableCell,
@@ -338,6 +343,7 @@ export default function AggregateApiPage() {
                     filteredApis.map((api) => {
                       const revealed = revealedSecrets[api.id];
                       const balance = parseBalanceSnapshot(api);
+                      const testError = String(api.lastTestError || "").trim();
                       return (
                         <TableRow key={api.id}>
                           <TableCell className="min-w-[240px]">
@@ -385,9 +391,23 @@ export default function AggregateApiPage() {
                           </TableCell>
                           <TableCell>
                             <div className="space-y-1">
-                              <Badge variant={api.lastTestStatus === "success" ? "default" : api.lastTestStatus === "failed" ? "destructive" : "secondary"}>
-                                {api.lastTestStatus === "success" ? t("已连通") : api.lastTestStatus === "failed" ? t("失败") : t("未测试")}
-                              </Badge>
+                              {api.lastTestStatus === "failed" && testError ? (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={<span />}
+                                    className="inline-flex cursor-help"
+                                  >
+                                    <Badge variant="destructive">{t("失败")}</Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent className="max-w-sm whitespace-pre-wrap break-words">
+                                    {testError}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <Badge variant={api.lastTestStatus === "success" ? "default" : api.lastTestStatus === "failed" ? "destructive" : "secondary"}>
+                                  {api.lastTestStatus === "success" ? t("已连通") : api.lastTestStatus === "failed" ? t("失败") : t("未测试")}
+                                </Badge>
+                              )}
                               <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={testingApiId === api.id || api.modelSlugs.length === 0} onClick={() => testMutation.mutate(api.id)}>
                                 {testingApiId === api.id ? t("测试中...") : t("测试 route")}
                               </Button>

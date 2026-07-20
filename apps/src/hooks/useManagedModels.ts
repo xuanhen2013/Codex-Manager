@@ -17,11 +17,14 @@ import { getAppErrorMessage } from "@/lib/api/transport";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
 import type {
+  ManagedModelBatchRouteAssignmentV2,
+  ManagedModelBatchRouteResultV2,
   ManagedModelImportPreviewV2Result,
   ManagedModelImportV2Params,
   ManagedModelListV2Result,
   ManagedModelV2Upsert,
   ModelCatalogV2Stats,
+  ModelRouteV2,
 } from "@/types/model-v2";
 
 export const MANAGED_MODELS_V2_QUERY_KEY = ["managed-models-v2"] as const;
@@ -39,6 +42,10 @@ type BatchDeleteManagedModelsResult = {
   deleted: string[];
   failed: Array<{ slug: string; reason: string }>;
 };
+
+function routeAssignmentKey(sourceKind: string, sourceId: string): string {
+  return `${sourceKind}\u0000${sourceId}`;
+}
 
 export function useManagedModels() {
   const queryClient = useQueryClient();
@@ -145,6 +152,109 @@ export function useManagedModels() {
     },
     onError: (error: unknown) => {
       toast.error(`${t("批量删除失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
+  const batchAssignRoutesMutation = useMutation({
+    mutationFn: async (
+      input: ManagedModelBatchRouteAssignmentV2,
+    ): Promise<ManagedModelBatchRouteResultV2> => {
+      const catalog =
+        queryClient.getQueryData<ManagedModelListV2Result>(
+          MANAGED_MODELS_V2_QUERY_KEY,
+        ) ?? query.data;
+      const normalizedSlugs = Array.from(
+        new Set(input.slugs.map((slug) => slug.trim()).filter(Boolean)),
+      );
+      const templates = input.routes.map((route) => ({
+        ...route,
+        sourceId:
+          route.sourceKind === "account_pool" ? "default" : route.sourceId.trim(),
+      }));
+      if (normalizedSlugs.length === 0 || templates.length === 0) {
+        throw new Error(t("请选择模型并至少配置一条路由"));
+      }
+
+      const updated: string[] = [];
+      const failed: Array<{ slug: string; reason: string }> = [];
+      for (const slug of normalizedSlugs) {
+        const model = catalog?.items.find((item) => item.slug === slug);
+        if (!model) {
+          failed.push({ slug, reason: t("模型不存在") });
+          continue;
+        }
+
+        const existingRoutes = new Map<string, ModelRouteV2>();
+        for (const route of model.routes) {
+          const key = routeAssignmentKey(route.sourceKind, route.sourceId);
+          if (!existingRoutes.has(key)) existingRoutes.set(key, route);
+        }
+        const assignmentKeys = new Set(
+          templates.map((route) =>
+            routeAssignmentKey(route.sourceKind, route.sourceId),
+          ),
+        );
+        const assignedRoutes: ModelRouteV2[] = templates.map((route) => {
+          const existing = existingRoutes.get(
+            routeAssignmentKey(route.sourceKind, route.sourceId),
+          );
+          return {
+            id: existing?.id || "",
+            sourceKind: route.sourceKind,
+            sourceId: route.sourceId,
+            upstreamModel: model.slug,
+            enabled: true,
+            priority: route.priority,
+            weight: route.weight,
+          };
+        });
+        const routes =
+          input.mode === "replace"
+            ? assignedRoutes
+            : [
+                ...model.routes.filter(
+                  (route) =>
+                    !assignmentKeys.has(
+                      routeAssignmentKey(route.sourceKind, route.sourceId),
+                    ),
+                ),
+                ...assignedRoutes,
+              ];
+
+        try {
+          await managedModelsV2Client.upsert({
+            previousSlug: model.slug,
+            model: { ...model, routes },
+          });
+          updated.push(slug);
+        } catch (error) {
+          failed.push({ slug, reason: getAppErrorMessage(error) });
+        }
+      }
+      return { updated, failed };
+    },
+    onSuccess: async (result) => {
+      await reloadCatalog();
+      await invalidateConsumers();
+      if (result.updated.length > 0 && result.failed.length === 0) {
+        toast.success(
+          t("已为 {count} 个模型分配路由", { count: result.updated.length }),
+        );
+      } else if (result.updated.length > 0) {
+        toast.warning(
+          t("批量分配完成：成功{success}个，失败{failed}个", {
+            success: result.updated.length,
+            failed: result.failed.length,
+          }),
+        );
+      } else if (result.failed.length > 0) {
+        toast.error(
+          `${t("批量分配路由失败")}: ${result.failed[0].slug} - ${result.failed[0].reason}`,
+        );
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("批量分配路由失败")}: ${getAppErrorMessage(error)}`);
     },
   });
 
@@ -263,6 +373,12 @@ export function useManagedModels() {
       }
       return batchDeleteMutation.mutateAsync(slugs);
     },
+    assignModelRoutes: async (input: ManagedModelBatchRouteAssignmentV2) => {
+      if (!ensureServiceReady("批量分配模型路由")) {
+        return null;
+      }
+      return batchAssignRoutesMutation.mutateAsync(input);
+    },
     previewImport: async (
       input: ManagedModelImportV2Params,
     ): Promise<ManagedModelImportPreviewV2Result | null> => {
@@ -283,6 +399,7 @@ export function useManagedModels() {
     isRefreshing: query.isRefetching,
     isSaving: saveMutation.isPending,
     isDeleting: deleteMutation.isPending || batchDeleteMutation.isPending,
+    isAssigningRoutes: batchAssignRoutesMutation.isPending,
     isImporting:
       previewImportMutation.isPending || commitImportMutation.isPending,
     isExporting: exportMutation.isPending,

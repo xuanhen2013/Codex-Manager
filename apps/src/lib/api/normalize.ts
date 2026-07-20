@@ -1,5 +1,7 @@
 "use client";
 
+import { normalizeAccountProxySummaryFields } from "./account-proxy-normalize";
+
 import {
   Account,
   AccountListResult,
@@ -469,6 +471,7 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     primaryRemainPercent: usageBuckets.primaryRemainPercent,
     secondaryRemainPercent: usageBuckets.secondaryRemainPercent,
     usage: usage ?? null,
+    ...normalizeAccountProxySummaryFields(source),
   };
 }
 

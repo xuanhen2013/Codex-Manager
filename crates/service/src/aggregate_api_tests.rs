@@ -393,6 +393,83 @@ fn codex_probe_uses_configured_model_without_model_discovery() {
 }
 
 #[test]
+fn codex_responses_probe_uses_valid_input_text_content() {
+    let server = Server::http("127.0.0.1:0").expect("start mock server");
+    let base_url = format!("http://{}", server.server_addr());
+    let (tx, rx) = mpsc::channel();
+    let join = thread::spawn(move || {
+        let mut request = server
+            .recv_timeout(Duration::from_secs(2))
+            .expect("receive responses request")
+            .expect("responses request present");
+        let mut body = String::new();
+        request
+            .as_reader()
+            .read_to_string(&mut body)
+            .expect("read request body");
+        tx.send((request.url().to_string(), body))
+            .expect("send responses request");
+        request
+            .respond(Response::from_string(r#"{"id":"resp_probe"}"#))
+            .expect("respond responses");
+    });
+
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "codex".to_string();
+    api.url = base_url;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("build client");
+
+    let status =
+        probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol").expect("probe succeeds");
+
+    assert_eq!(status, 200);
+    let captured = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("captured request");
+    join.join().expect("join mock server");
+    assert_eq!(captured.0, "/v1/responses");
+    let body: Value = serde_json::from_str(captured.1.as_str()).expect("parse body");
+    assert_eq!(body["model"], "gpt-5.6-sol");
+    assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+}
+
+#[test]
+fn codex_probe_failure_includes_upstream_error_detail() {
+    let server = Server::http("127.0.0.1:0").expect("start mock server");
+    let base_url = format!("http://{}", server.server_addr());
+    let join = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(2))
+            .expect("receive responses request")
+            .expect("responses request present");
+        request
+            .respond(
+                Response::from_string(r#"{"error":{"message":"invalid input content type"}}"#)
+                    .with_status_code(400),
+            )
+            .expect("respond with probe error");
+    });
+
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "codex".to_string();
+    api.url = base_url;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("build client");
+
+    let error = probe_codex_endpoint(&client, &api, "secret", "gpt-5.6-sol")
+        .expect_err("probe should fail");
+
+    join.join().expect("join mock server");
+    assert!(error.contains("http_status=400"));
+    assert!(error.contains("invalid input content type"));
+}
+
+#[test]
 fn minimax_codex_probe_uses_responses_string_input() {
     let server = Server::http("127.0.0.1:0").expect("start mock server");
     let base_url = format!("http://{}", server.server_addr());

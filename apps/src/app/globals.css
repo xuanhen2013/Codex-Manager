@@ -648,6 +648,14 @@
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 
+/* Promote header badges to their own compositing layer so text renders crisply
+   inside the backdrop-filter context on Windows (WebView2 / Chromium). */
+.glass-header [data-slot="badge"] {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
 [data-appearance='modern'] [data-slot="tooltip-content"] {
   color: var(--popover-foreground);
 }

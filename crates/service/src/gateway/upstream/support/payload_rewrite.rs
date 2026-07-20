@@ -11,7 +11,7 @@ use serde_json::Value;
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn body_has_encrypted_content_hint(body: &[u8]) -> bool {
+pub(in crate::gateway) fn body_has_encrypted_content_hint(body: &[u8]) -> bool {
     // Fast path: avoid JSON parsing unless we hit a recovery path.
     std::str::from_utf8(body)
         .ok()
@@ -29,6 +29,22 @@ pub(in super::super) fn body_has_encrypted_content_hint(body: &[u8]) -> bool {
 ///
 /// # 返回
 /// 返回函数执行结果
+fn item_requires_encrypted_content(value: &Value) -> bool {
+    let Value::Object(map) = value else {
+        return false;
+    };
+    if !map.contains_key("encrypted_content") {
+        return false;
+    }
+    map.get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|item_type| {
+            item_type.eq_ignore_ascii_case("reasoning")
+                || item_type.eq_ignore_ascii_case("encrypted_content")
+        })
+}
+
 fn strip_encrypted_content_value(value: &mut Value) -> bool {
     match value {
         Value::Object(map) => {
@@ -42,11 +58,16 @@ fn strip_encrypted_content_value(value: &mut Value) -> bool {
         }
         Value::Array(items) => {
             let mut changed = false;
-            for item in items.iter_mut() {
+            items.retain_mut(|item| {
+                if item_requires_encrypted_content(item) {
+                    changed = true;
+                    return false;
+                }
                 if strip_encrypted_content_value(item) {
                     changed = true;
                 }
-            }
+                true
+            });
             changed
         }
         _ => false,
@@ -64,10 +85,100 @@ fn strip_encrypted_content_value(value: &mut Value) -> bool {
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn strip_encrypted_content_from_body(body: &[u8]) -> Option<Vec<u8>> {
+pub(in crate::gateway) fn strip_encrypted_content_from_body(body: &[u8]) -> Option<Vec<u8>> {
     let mut value: Value = serde_json::from_slice(body).ok()?;
     if !strip_encrypted_content_value(&mut value) {
         return None;
     }
     serde_json::to_vec(&value).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_encrypted_content_from_body;
+    use serde_json::{json, Value};
+
+    fn contains_encrypted_content(value: &Value) -> bool {
+        match value {
+            Value::Object(map) => {
+                map.contains_key("encrypted_content")
+                    || map.values().any(contains_encrypted_content)
+            }
+            Value::Array(items) => items.iter().any(contains_encrypted_content),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn strip_encrypted_content_removes_items_that_require_the_field() {
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "encrypted_content": "legacy-root-secret",
+            "metadata": {
+                "encrypted_content": "metadata-secret",
+                "keep": "metadata",
+                "reasoning_envelope": {
+                    "type": "reasoning",
+                    "id": "metadata-reasoning",
+                    "summary": ["keep summary"],
+                    "encrypted_content": "metadata-reasoning-secret"
+                }
+            },
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "reasoning-secret"
+                },
+                {
+                    "type": "agent_message",
+                    "content": [
+                        { "type": "input_text", "text": "keep me" },
+                        {
+                            "type": "encrypted_content",
+                            "encrypted_content": "nested-secret"
+                        }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{ "type": "input_text", "text": "continue" }]
+                }
+            ]
+        });
+
+        let rewritten = strip_encrypted_content_from_body(
+            serde_json::to_vec(&body)
+                .expect("serialize body")
+                .as_slice(),
+        )
+        .expect("rewrite body");
+        let value: Value = serde_json::from_slice(&rewritten).expect("parse rewritten body");
+
+        assert!(!contains_encrypted_content(&value));
+        assert_eq!(
+            value["metadata"],
+            json!({
+                "keep": "metadata",
+                "reasoning_envelope": {
+                    "type": "reasoning",
+                    "id": "metadata-reasoning",
+                    "summary": ["keep summary"]
+                }
+            }),
+            "ordinary object properties must remain after their encrypted field is removed"
+        );
+
+        let input = value["input"].as_array().expect("input array");
+        assert_eq!(input.len(), 2, "reasoning item must be removed");
+        assert_eq!(input[0]["type"], "agent_message");
+        assert_eq!(
+            input[0]["content"],
+            json!([{ "type": "input_text", "text": "keep me" }]),
+            "encrypted content part must be removed without dropping normal text"
+        );
+        assert_eq!(input[1]["type"], "message");
+    }
 }

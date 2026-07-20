@@ -89,6 +89,10 @@ const GUIDE_CONFIG_LINES = [
     comment: "使用 Responses 协议",
     line: 'wire_api = "responses"',
   },
+  {
+    comment: "启用 Responses WebSocket",
+    line: "supports_websockets = true",
+  },
 ] as const;
 export function CodexCliOnboardingDialog({
   open,

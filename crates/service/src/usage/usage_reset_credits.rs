@@ -5,9 +5,14 @@ use codexmanager_core::rpc::types::{
 use codexmanager_core::storage::{Storage, Token};
 use rand::RngCore;
 
+use crate::account_proxy::{resolve_account_proxy_mode_from_storage, AccountProxyMode};
 use crate::storage_helpers::open_storage;
 use crate::usage_account_meta::{derive_account_meta, resolve_workspace_id_for_account};
-use crate::usage_http::{consume_usage_reset_credit, fetch_usage_reset_credits};
+use crate::usage_http::{
+    consume_usage_reset_credit, consume_usage_reset_credit_with_explicit_proxy,
+    fetch_usage_reset_credits, fetch_usage_reset_credits_with_explicit_proxy,
+    log_account_data_route,
+};
 use crate::usage_token_refresh::{refresh_and_persist_access_token, token_refresh_ahead_secs};
 
 const DEFAULT_USAGE_BASE_URL: &str = "https://chatgpt.com";
@@ -19,9 +24,22 @@ pub(crate) fn read_usage_reset_credits(
     let mut token = load_account_token(&storage, account_id)?;
     let workspace_id = resolve_workspace_id(&storage, &token);
     let base_url = usage_base_url();
+    let proxy_mode = resolve_account_proxy_mode_from_storage(&storage, account_id);
+    log_account_data_route(
+        "usage_reset_credits",
+        account_id,
+        &proxy_mode,
+        "rate_limit_reset_credits",
+        true,
+    );
 
     let payload = request_with_token_refresh(&storage, &mut token, |current| {
-        fetch_usage_reset_credits(&base_url, &current.access_token, workspace_id.as_deref())
+        fetch_reset_credits_for_proxy_mode(
+            &base_url,
+            &current.access_token,
+            workspace_id.as_deref(),
+            &proxy_mode,
+        )
     })?;
     normalize_reset_credits_payload(&payload)
 }
@@ -34,20 +52,33 @@ pub(crate) fn consume_usage_reset_credit_for_account(
     let workspace_id = resolve_workspace_id(&storage, &token);
     let base_url = usage_base_url();
     let redeem_request_id = create_redeem_request_id();
+    let proxy_mode = resolve_account_proxy_mode_from_storage(&storage, account_id);
+    log_account_data_route(
+        "usage_reset_credit_consume",
+        account_id,
+        &proxy_mode,
+        "rate_limit_reset_credits_consume",
+        true,
+    );
 
     request_with_token_refresh(&storage, &mut token, |current| {
-        consume_usage_reset_credit(
+        consume_reset_credit_for_proxy_mode(
             &base_url,
             &current.access_token,
             workspace_id.as_deref(),
             &redeem_request_id,
+            &proxy_mode,
         )
     })?;
 
     let usage_refresh_error = crate::usage_refresh::refresh_usage_for_account(account_id).err();
-    let reset_credits =
-        fetch_usage_reset_credits(&base_url, &token.access_token, workspace_id.as_deref())
-            .and_then(|payload| normalize_reset_credits_payload(&payload));
+    let reset_credits = fetch_reset_credits_for_proxy_mode(
+        &base_url,
+        &token.access_token,
+        workspace_id.as_deref(),
+        &proxy_mode,
+    )
+    .and_then(|payload| normalize_reset_credits_payload(&payload));
 
     let mut warnings = Vec::new();
     if let Some(err) = usage_refresh_error {
@@ -69,6 +100,45 @@ pub(crate) fn consume_usage_reset_credit_for_account(
             .all(|warning| !warning.starts_with("usage refresh failed")),
         warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
+}
+
+fn fetch_reset_credits_for_proxy_mode(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    proxy_mode: &AccountProxyMode,
+) -> Result<serde_json::Value, String> {
+    match proxy_mode {
+        AccountProxyMode::Disabled => fetch_usage_reset_credits(base_url, bearer, workspace_id),
+        AccountProxyMode::Explicit { proxy_url, .. } => {
+            fetch_usage_reset_credits_with_explicit_proxy(base_url, bearer, workspace_id, proxy_url)
+        }
+        AccountProxyMode::Invalid { error, .. } => Err(error.clone()),
+    }
+}
+
+fn consume_reset_credit_for_proxy_mode(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    redeem_request_id: &str,
+    proxy_mode: &AccountProxyMode,
+) -> Result<(), String> {
+    match proxy_mode {
+        AccountProxyMode::Disabled => {
+            consume_usage_reset_credit(base_url, bearer, workspace_id, redeem_request_id)
+        }
+        AccountProxyMode::Explicit { proxy_url, .. } => {
+            consume_usage_reset_credit_with_explicit_proxy(
+                base_url,
+                bearer,
+                workspace_id,
+                redeem_request_id,
+                proxy_url,
+            )
+        }
+        AccountProxyMode::Invalid { error, .. } => Err(error.clone()),
+    }
 }
 
 fn load_account_token(storage: &Storage, account_id: &str) -> Result<Token, String> {

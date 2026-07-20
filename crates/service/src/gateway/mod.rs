@@ -389,15 +389,18 @@ pub(crate) use request_log::write_request_log;
 use route_hint::{apply_route_strategy, apply_route_strategy_with_source};
 use route_quality::record_route_quality;
 pub(crate) use runtime_config::front_proxy_max_body_bytes;
+pub(crate) use runtime_config::invalidate_account_proxy_client_cache as invalidate_account_proxy_cache;
 pub(crate) use runtime_config::upstream_client;
 pub(crate) use runtime_config::{account_max_inflight_limit, set_account_max_inflight_limit};
-use runtime_config::{
+pub(crate) use runtime_config::{
     async_upstream_client_for_account, fresh_async_upstream_client_for_account,
     fresh_upstream_client_for_account, prepare_upstream_client_for_account,
+    upstream_client_for_account,
+};
+use runtime_config::{
     prepare_upstream_client_for_aggregate_api_candidate, request_gate_wait_timeout,
-    trace_body_preview_max_bytes, upstream_client_for_account,
-    upstream_client_for_aggregate_api_candidate, upstream_stream_timeout, upstream_total_timeout,
-    DEFAULT_GATEWAY_DEBUG,
+    trace_body_preview_max_bytes, upstream_client_for_aggregate_api_candidate,
+    upstream_stream_timeout, upstream_total_timeout, DEFAULT_GATEWAY_DEBUG,
 };
 pub(crate) use runtime_config::{
     set_thread_aware_account_distribution_enabled, thread_aware_account_distribution_enabled,

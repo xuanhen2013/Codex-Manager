@@ -252,6 +252,83 @@ fn retry_chatgpt_challenge_without_compression(
     }
 }
 
+fn should_retry_chatgpt_responses_bad_request(upstream_base: &str, url: &str, status: u16) -> bool {
+    status == 400
+        && super::super::config::is_chatgpt_backend_base(upstream_base)
+        && reqwest::Url::parse(url).ok().is_some_and(|url| {
+            url.path()
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+                .ends_with("/backend-api/codex/responses")
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retry_chatgpt_responses_bad_request_without_session_headers(
+    client: &reqwest::blocking::Client,
+    method: &reqwest::Method,
+    upstream_base: &str,
+    url: &str,
+    request_deadline: Option<Instant>,
+    request_ctx: UpstreamRequestContext<'_>,
+    incoming_headers: &super::super::super::IncomingHeaderSnapshot,
+    body: &Bytes,
+    is_stream: bool,
+    auth_token: &str,
+    account: &Account,
+    debug: bool,
+    status: reqwest::StatusCode,
+) -> Option<GatewayUpstreamResponse> {
+    if !should_retry_chatgpt_responses_bad_request(upstream_base, url, status.as_u16()) {
+        return None;
+    }
+    if debug {
+        log::warn!(
+            "event=gateway_chatgpt_responses_retry_without_session_headers path={} status={} account_id={} upstream_url={}",
+            request_ctx.request_path,
+            status.as_u16(),
+            account.id,
+            url
+        );
+    }
+    match super::transport::send_upstream_request_without_session_headers(
+        client,
+        method,
+        url,
+        request_deadline,
+        request_ctx,
+        incoming_headers,
+        body,
+        is_stream,
+        auth_token,
+        account,
+    ) {
+        Ok(response) if response.status().is_success() => Some(response),
+        Ok(response) => {
+            log::warn!(
+                "event=gateway_chatgpt_responses_retry_without_session_headers_failed path={} original_status={} retry_status={} account_id={} upstream_url={}",
+                request_ctx.request_path,
+                status.as_u16(),
+                response.status().as_u16(),
+                account.id,
+                url
+            );
+            None
+        }
+        Err(err) => {
+            log::warn!(
+                "event=gateway_chatgpt_responses_retry_without_session_headers_error path={} original_status={} account_id={} upstream_url={} err={}",
+                request_ctx.request_path,
+                status.as_u16(),
+                account.id,
+                url,
+                err
+            );
+            None
+        }
+    }
+}
+
 pub(in crate::gateway::upstream) enum PostRetryFlowDecision {
     Failover,
     Terminal { status_code: u16, message: String },
@@ -380,6 +457,29 @@ where
                     err
                 );
             }
+        }
+    }
+
+    if !strip_session_affinity {
+        if let Some(resp) = retry_chatgpt_responses_bad_request_without_session_headers(
+            client,
+            method,
+            upstream_base,
+            url,
+            request_deadline,
+            request_ctx,
+            incoming_headers,
+            body,
+            is_stream,
+            current_auth_token.as_str(),
+            account,
+            debug,
+            status,
+        ) {
+            upstream = resp;
+            status = upstream.status();
+            upstream_content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE);
+            upstream_cf_ray = first_header_value(upstream.headers(), "cf-ray");
         }
     }
 

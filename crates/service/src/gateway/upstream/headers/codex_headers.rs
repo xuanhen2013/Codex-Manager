@@ -5,6 +5,8 @@ const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER_NAME: &str =
     "x-responsesapi-include-timing-metrics";
 const X_CODEX_INFERENCE_CALL_ID_HEADER_NAME: &str = "x-codex-inference-call-id";
 const X_OAI_ATTESTATION_HEADER_NAME: &str = "x-oai-attestation";
+const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME: &str =
+    "x-openai-internal-codex-responses-lite";
 
 fn anchor_fingerprint_or_dash(value: Option<&str>) -> String {
     value
@@ -141,8 +143,13 @@ pub(crate) fn build_codex_upstream_headers(
             residency_requirement,
         ));
     }
-    if let Some(client_request_id) = resolve_client_request_id(input.incoming_client_request_id) {
-        headers.push(("x-client-request-id".to_string(), client_request_id));
+    let resolved_client_request_id = resolve_client_request_id(input.incoming_client_request_id);
+    if let Some(client_request_id) = resolved_client_request_id.as_deref() {
+        headers.push((
+            "x-client-request-id".to_string(),
+            client_request_id.to_string(),
+        ));
+        headers.push(("thread-id".to_string(), client_request_id.to_string()));
     }
     if let Some(subagent) = input
         .incoming_subagent
@@ -217,7 +224,7 @@ pub(crate) fn build_codex_upstream_headers(
         input.strip_session_affinity,
     );
     if let Some(session_id) = resolved_session_id.as_deref() {
-        headers.push(("session_id".to_string(), session_id.to_string()));
+        headers.push(("session-id".to_string(), session_id.to_string()));
     }
     if let Some(window_id) = resolve_window_id(
         input.incoming_window_id,
@@ -328,10 +335,10 @@ pub(crate) fn build_codex_compact_upstream_headers(
         input.strip_session_affinity,
     );
     if let Some(session_id) = resolved_session_id.clone() {
-        headers.push(("session_id".to_string(), session_id));
+        headers.push(("session-id".to_string(), session_id));
     }
     if let Some(thread_id) = normalize_non_empty(input.thread_id) {
-        headers.push(("thread_id".to_string(), thread_id.to_string()));
+        headers.push(("thread-id".to_string(), thread_id.to_string()));
     }
     if let Some(window_id) = resolve_window_id(
         input.incoming_window_id,
@@ -420,13 +427,18 @@ fn resolve_window_id(
 fn append_passthrough_codex_headers(
     headers: &mut Vec<(String, String)>,
     passthrough_headers: &[(String, String)],
-    enabled: bool,
+    _enabled: bool,
 ) {
-    // 中文注释：Codex wire shape 不接受额外透传头；这里保留参数只为兼容调用签名，
-    // 但实际行为是完全丢弃。
-    let _ = headers;
-    let _ = passthrough_headers;
-    let _ = enabled;
+    for (name, value) in passthrough_headers {
+        if !name.eq_ignore_ascii_case(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME)
+            || headers
+                .iter()
+                .any(|(existing, _)| existing.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
+        headers.push((name.clone(), value.clone()));
+    }
 }
 
 /// 函数 `resolve_client_request_id`

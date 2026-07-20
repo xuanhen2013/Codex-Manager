@@ -1268,12 +1268,29 @@ fn build_codex_probe_body(model: &str) -> serde_json::Value {
         "input": [{
             "role": "user",
             "content": [{
-                "type": "text",
+                "type": "input_text",
                 "text": "Who are you?"
             }]
         }],
         "stream": true
     })
+}
+
+fn probe_http_error(
+    probe: &str,
+    status_code: u16,
+    response: reqwest::blocking::Response,
+) -> String {
+    let detail = response.bytes().ok().and_then(|body| {
+        gateway::summarize_upstream_error_hint_from_body(status_code, body.as_ref()).or_else(|| {
+            let detail = short_error_body(String::from_utf8_lossy(body.as_ref()).as_ref());
+            (!detail.is_empty()).then_some(detail)
+        })
+    });
+    match detail {
+        Some(detail) => format!("{probe} probe http_status={status_code}; {detail}"),
+        None => format!("{probe} probe http_status={status_code}"),
+    }
 }
 
 fn is_minimax_aggregate_api(api: &AggregateApi) -> bool {
@@ -1393,7 +1410,7 @@ fn probe_codex_responses_endpoint(
 
     let status_code = response.status().as_u16() as i64;
     if !response.status().is_success() {
-        return Err(format!("codex probe http_status={status_code}"));
+        return Err(probe_http_error("codex", status_code as u16, response));
     }
     read_first_chunk(response)?;
     Ok(status_code)
@@ -1467,9 +1484,7 @@ fn probe_claude_endpoint(
         .map_err(|err| err.to_string())?;
     let status_code = response.status().as_u16() as i64;
     if !response.status().is_success() {
-        return Err(format!(
-            "claude probe http_status={status_code} model={model}"
-        ));
+        return Err(probe_http_error("claude", status_code as u16, response));
     }
     read_first_chunk(response)?;
     Ok(status_code)
@@ -1503,7 +1518,7 @@ fn probe_gemini_endpoint(
 
     let status_code = response.status().as_u16() as i64;
     if !response.status().is_success() {
-        return Err(format!("gemini probe http_status={status_code}"));
+        return Err(probe_http_error("gemini", status_code as u16, response));
     }
     read_first_chunk(response)?;
     Ok(status_code)

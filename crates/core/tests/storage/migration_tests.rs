@@ -407,6 +407,7 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         "106_account_manager_created_by_lookup_indexes",
         "107_plugin_tasks_list_order_indexes",
         "108_accounts_cleanup_status_lookup_index",
+        "116_request_logs_visibility",
     ] {
         let applied: i64 = storage
             .conn

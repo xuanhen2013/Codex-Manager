@@ -408,6 +408,78 @@ test("编辑器不依赖后续动画帧即可载入目标模型", async ({ page 
   await expect(page.getByRole("combobox", { name: "可见性" })).toBeVisible();
 });
 
+test("模型目录支持中文展示并为多个模型批量分配路由", async ({ page }) => {
+  const state = await installMockRuntime(page);
+
+  await page.goto("/models/");
+  await expect(
+    page.getByRole("main").getByRole("heading", { name: "模型管理" }),
+  ).toBeVisible();
+
+  await expect(page.getByText("内置模型", { exact: true })).toBeVisible();
+  await expect(page.getByText("自定义模型", { exact: true })).toBeVisible();
+  await expect(page.getByText("价格缺失", { exact: true })).toBeVisible();
+  await expect(page.getByText("路由缺失", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("最新的前沿智能体编程模型。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Latest frontier agentic coding model.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "来源" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "指令" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "路由" })).toBeVisible();
+  await expect(
+    page.getByText("请先勾选一个或多个模型，再使用批量分配路由。"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "批量分配路由 (0)" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "批量分配路由 (0)" }),
+  ).toBeDisabled();
+
+  await page.getByLabel("选择模型 gpt-5.6-sol").click();
+  await page.getByLabel("选择模型 gpt-5.6-terra").click();
+  const batchRoutesButton = page.getByRole("button", {
+    name: "批量分配路由 (2)",
+  });
+  await expect(batchRoutesButton).toBeEnabled();
+  await batchRoutesButton.click();
+
+  const dialog = page.getByRole("dialog", { name: "批量分配模型路由" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("gpt-5.6-sol", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("gpt-5.6-terra", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "添加聚合路由" }).click();
+  await dialog.locator("#batch-route-source-1").click();
+  await page.getByRole("option", { name: "Aggregate Test" }).click();
+  await dialog.getByRole("button", { name: "应用到 2 个模型" }).click();
+
+  await expect(dialog).toHaveCount(0);
+  expect(state.upserts).toHaveLength(2);
+  for (const upsert of state.upserts) {
+    const model = upsert.model as JsonObject;
+    const slug = String(model.slug);
+    expect(model.routes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceKind: "account_pool",
+          sourceId: "default",
+          upstreamModel: slug,
+          enabled: true,
+        }),
+        expect.objectContaining({
+          sourceKind: "aggregate_api",
+          sourceId: "agg-1",
+          upstreamModel: slug,
+          enabled: true,
+        }),
+      ]),
+    );
+  }
+});
+
 test("模型目录 V2 完成本地管理、原子保存、导入和主动导出", async ({ page }) => {
   const state = await installMockRuntime(page);
 

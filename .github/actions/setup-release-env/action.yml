@@ -28,6 +28,10 @@ inputs:
     description: Optional Rust target triple.
     required: false
     default: ""
+  enable-rust:
+    description: Install Rust and configure Cargo-related caches.
+    required: false
+    default: "true"
   rust-cache-shared-key:
     description: Shared rust-cache key.
     required: false
@@ -105,20 +109,20 @@ runs:
           ${{ runner.os }}-pnpm-
 
     - name: Setup Rust
-      if: ${{ inputs.rust-target == '' }}
+      if: ${{ inputs.enable-rust == 'true' && inputs.rust-target == '' }}
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: ${{ inputs.rust-toolchain }}
 
     - name: Setup Rust target
-      if: ${{ inputs.rust-target != '' }}
+      if: ${{ inputs.enable-rust == 'true' && inputs.rust-target != '' }}
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: ${{ inputs.rust-toolchain }}
         targets: ${{ inputs.rust-target }}
 
     - name: Cache Rust dependencies
-      if: ${{ inputs.enable-rust-cache == 'true' }}
+      if: ${{ inputs.enable-rust == 'true' && inputs.enable-rust-cache == 'true' }}
       uses: Swatinem/rust-cache@v2
       with:
         shared-key: ${{ inputs.rust-cache-shared-key }}

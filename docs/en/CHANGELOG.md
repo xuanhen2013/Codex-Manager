@@ -5,6 +5,45 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-19
+
+### Added
+
+- Added account-level proxy management (#314): create reusable proxy profiles, assign one to an individual account, and use it for account requests, token refresh, and usage refresh flows.
+- Added proxy connectivity, latency, download, and upload tests with unified runtime status, egress IP, country/region, and speed results in both desktop and Web service modes.
+- Added multi-select bulk route assignment to the model catalog. Account-pool or Aggregate API routes can be added/updated across models or replace all existing routes, with each upstream model name derived from its model slug.
+
+### Changed
+
+- Shortened the AIXiamo sponsor copy to highlight ChatGPT, Claude, and Codex top-up assistance for users in China without an international bank card, together with after-sales support.
+- Tightened Codex gateway detection and now prefer the current provider gateway URL, avoiding false Codex classification for ordinary OpenAI-compatible endpoints while preserving compact, Gemini, and multi-candidate fallback behavior (#346).
+- Improved protocol compatibility for native Web Search, Image Generation, `/v1/models`, and Responses WebSocket traffic, including bounded decoding of zstd-encoded content (#363).
+- Bumped the release version to `0.4.3` and synchronized workspace, frontend package, Tauri desktop metadata, and lockfiles.
+
+### Fixed
+
+- The bulk route assignment entry is now always visible to administrators on the model management page; it stays disabled with clear guidance until models are selected, so the feature is no longer easy to miss.
+- Fixed candidate failover after some Responses 400 errors by dropping inapplicable session/thread headers on retry and preserving encrypted content containers correctly.
+- Fixed hosted image tool conflicts with Codex image-generation namespaces and narrowed legacy Responses path suppression to its intended scope.
+- Fixed the Windows tray context menu closing immediately, click-time refresh regressions, and stale menu labels after usage updates (#362).
+- Fixed blurry header badge text under Windows glass effects (#360) and white fills on the sidebar logo and selected navigation icons (#361).
+- Completed Simplified Chinese localization for model-catalog metrics, filters, headers, source, price/instruction/route states, and built-in model descriptions instead of mixing English into the Chinese UI.
+- Restored release validation after the merged features by fixing release compilation, frontend lint/effect issues, ambiguous end-to-end selectors, and Service parallel-test isolation.
+
+## [0.4.2] - 2026-07-19
+
+### Changed
+
+- Combined today's total, cached-input, and reasoning-output usage in the administrator dashboard metric card.
+- Bumped the release version to `0.4.2` and synchronized workspace, frontend package, Tauri desktop metadata, and lockfiles.
+
+### Fixed
+
+- Fixed cleared request logs reappearing by hiding billed entries from operational log queries while preserving immutable usage and billing audit data.
+- Corrected Aggregate API Responses probes to send `input_text` content, retain upstream error details, and expose failed-test details in the UI.
+- Fixed `codexmanager-web` downgrading `/v1/responses` WebSocket handshakes to ordinary GET requests that returned 405. The Web gateway now tunnels WebSocket frames while preserving authentication and Codex headers, and managed/onboarding provider configs explicitly enable Responses WebSocket.
+- Replaced the README Star History remote chart embeds with repository-hosted images so the curves remain visible.
+
 ## [0.4.1] - 2026-07-14
 
 ### Changed
@@ -351,7 +390,10 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ### Changed
 - The operation area of ​​the account management page is integrated into a single "Account Operation" drop-down menu, replacing the stack of multiple buttons on the right, making the interface more concise.
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/qxcnm/Codex-Manager/compare/v0.3.7...v0.3.8
