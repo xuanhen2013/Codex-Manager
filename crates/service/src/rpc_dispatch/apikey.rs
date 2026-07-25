@@ -2,7 +2,10 @@ use codexmanager_core::rpc::types::{
     ApiKeyListResult, ApiKeyUsageHistoryResult, ApiKeyUsageStatListResult, JsonRpcRequest,
     JsonRpcResponse,
 };
-use codexmanager_core::storage::{ManagedModelV2, ManagedModelV2Upsert, ModelCatalogV2Stats};
+use codexmanager_core::storage::{
+    ManagedModelBatchStateV2Update, ManagedModelStateV2Update, ManagedModelV2,
+    ManagedModelV2Upsert, ModelCatalogV2Stats,
+};
 
 use crate::RpcActor;
 use crate::{
@@ -162,6 +165,11 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             } else {
                 None
             };
+            let account_group_filter = if actor.is_admin() {
+                super::string_param(req, "accountGroupFilter")
+            } else {
+                None
+            };
             let quota_limit_tokens = super::i64_param(req, "quotaLimitTokens");
             let custom_key = super::string_param(req, "customKey");
             let created = apikey_create::create_api_key(
@@ -175,6 +183,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 rotation_strategy,
                 aggregate_api_id,
                 account_plan_filter,
+                account_group_filter,
                 quota_limit_tokens,
                 custom_key,
             )
@@ -186,7 +195,11 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     .user_id
                     .as_deref()
                     .ok_or_else(|| "permission_denied: apikey requires user session".to_string())?;
-                crate::set_api_key_owner(&result.id, "user", Some(user_id), None)?;
+                if let Err(err) = crate::set_api_key_owner(&result.id, "user", Some(user_id), None)
+                {
+                    let _ = apikey_delete::delete_api_key(&result.id);
+                    return Err(err);
+                }
                 Ok(result)
             });
             super::value_or_error(created)
@@ -228,6 +241,44 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                             .map_err(|err| format!("parse managed model V2 payload failed: {err}"))
                     });
                 super::value_or_error(params.and_then(crate::models_v2::upsert))
+            }
+        }
+        "apikey/managedModelUpdateStateV2" => {
+            if !actor.is_admin() {
+                super::value_or_error::<ManagedModelV2>(Err(super::permission_denied(
+                    "apikey/managedModelUpdateStateV2",
+                )))
+            } else {
+                let params = req
+                    .params
+                    .clone()
+                    .ok_or_else(|| "missing managed model V2 state payload".to_string())
+                    .and_then(|value| {
+                        serde_json::from_value::<ManagedModelStateV2Update>(value).map_err(|err| {
+                            format!("parse managed model V2 state payload failed: {err}")
+                        })
+                    });
+                super::value_or_error(params.and_then(crate::models_v2::update_state))
+            }
+        }
+        "apikey/managedModelBatchUpdateStateV2" => {
+            if !actor.is_admin() {
+                super::value_or_error::<Vec<ManagedModelV2>>(Err(super::permission_denied(
+                    "apikey/managedModelBatchUpdateStateV2",
+                )))
+            } else {
+                let params = req
+                    .params
+                    .clone()
+                    .ok_or_else(|| "missing managed model V2 batch state payload".to_string())
+                    .and_then(|value| {
+                        serde_json::from_value::<ManagedModelBatchStateV2Update>(value).map_err(
+                            |err| {
+                                format!("parse managed model V2 batch state payload failed: {err}")
+                            },
+                        )
+                    });
+                super::value_or_error(params.and_then(crate::models_v2::batch_update_state))
             }
         }
         "apikey/managedModelDeleteV2" => {
@@ -299,12 +350,8 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
         }
         "apikey/updateModel" => {
             let key_id = super::str_param(req, "id").unwrap_or("");
-            let has_name = req
-                .params
-                .as_ref()
-                .and_then(|value| value.as_object())
-                .map(|params| params.contains_key("name"))
-                .unwrap_or(false);
+            let params = req.params.as_ref().and_then(|value| value.as_object());
+            let has_name = params.is_some_and(|params| params.contains_key("name"));
             let name = super::string_param(req, "name");
             let model_slug = super::string_param(req, "modelSlug");
             let reasoning_effort = super::string_param(req, "reasoningEffort");
@@ -315,12 +362,22 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             let rotation_strategy = super::string_param(req, "rotationStrategy");
             let aggregate_api_id = super::string_param(req, "aggregateApiId");
             let account_plan_filter = super::string_param(req, "accountPlanFilter");
-            let has_quota_limit_tokens = req
-                .params
-                .as_ref()
-                .and_then(|value| value.as_object())
-                .map(|params| params.contains_key("quotaLimitTokens"))
-                .unwrap_or(false);
+            let account_group_filter = super::string_param(req, "accountGroupFilter");
+            let has_quota_limit_tokens =
+                params.is_some_and(|params| params.contains_key("quotaLimitTokens"));
+            let update_model_config = params.is_some_and(|params| {
+                params.contains_key("modelSlug")
+                    || params.contains_key("reasoningEffort")
+                    || params.contains_key("serviceTier")
+            });
+            let update_routing_config = actor.is_admin()
+                && params.is_some_and(|params| {
+                    params.contains_key("rotationStrategy")
+                        || params.contains_key("aggregateApiId")
+                        || params.contains_key("accountPlanFilter")
+                });
+            let update_account_group_filter = actor.is_admin()
+                && params.is_some_and(|params| params.contains_key("accountGroupFilter"));
             let quota_limit_tokens = super::i64_param(req, "quotaLimitTokens");
             super::ok_or_error(ensure_api_key_access(actor, key_id).and_then(|_| {
                 apikey_update_model::update_api_key_model(
@@ -356,6 +413,14 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     } else {
                         None
                     },
+                    if actor.is_admin() {
+                        account_group_filter
+                    } else {
+                        None
+                    },
+                    update_model_config,
+                    update_routing_config,
+                    update_account_group_filter,
                     has_quota_limit_tokens,
                     quota_limit_tokens,
                 )

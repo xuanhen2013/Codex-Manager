@@ -4,6 +4,7 @@ fn request_ctx(path: &'static str, protocol_type: &'static str) -> UpstreamReque
     UpstreamRequestContext {
         request_path: path,
         protocol_type,
+        is_fedramp: false,
     }
 }
 

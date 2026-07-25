@@ -46,6 +46,7 @@ fn resolve_user_agent_header(
 
 pub(crate) struct CodexUpstreamHeaderInput<'a> {
     pub(crate) auth_token: &'a str,
+    pub(crate) is_fedramp: bool,
     pub(crate) chatgpt_account_id: Option<&'a str>,
     pub(crate) incoming_user_agent: Option<&'a str>,
     pub(crate) incoming_originator: Option<&'a str>,
@@ -70,6 +71,7 @@ pub(crate) struct CodexUpstreamHeaderInput<'a> {
 
 pub(crate) struct CodexCompactUpstreamHeaderInput<'a> {
     pub(crate) auth_token: &'a str,
+    pub(crate) is_fedramp: bool,
     pub(crate) chatgpt_account_id: Option<&'a str>,
     pub(crate) installation_id: Option<&'a str>,
     pub(crate) incoming_user_agent: Option<&'a str>,
@@ -122,8 +124,11 @@ pub(crate) fn build_codex_upstream_headers(
     let mut headers = Vec::with_capacity(16);
     headers.push((
         "Authorization".to_string(),
-        format!("Bearer {}", input.auth_token),
+        crate::agent_identity::format_upstream_authorization(input.auth_token),
     ));
+    if input.is_fedramp {
+        headers.push(("x-openai-fedramp".to_string(), "true".to_string()));
+    }
     if let Some(account_id) = input
         .chatgpt_account_id
         .map(str::trim)
@@ -271,8 +276,11 @@ pub(crate) fn build_codex_compact_upstream_headers(
     let mut headers = Vec::with_capacity(13);
     headers.push((
         "Authorization".to_string(),
-        format!("Bearer {}", input.auth_token),
+        crate::agent_identity::format_upstream_authorization(input.auth_token),
     ));
+    if input.is_fedramp {
+        headers.push(("x-openai-fedramp".to_string(), "true".to_string()));
+    }
     if let Some(account_id) = input
         .chatgpt_account_id
         .map(str::trim)
@@ -431,6 +439,7 @@ fn append_passthrough_codex_headers(
 ) {
     for (name, value) in passthrough_headers {
         if !name.eq_ignore_ascii_case(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME)
+            || crate::gateway::runtime_config::codex_image_generation_auto_inject_tool_enabled()
             || headers
                 .iter()
                 .any(|(existing, _)| existing.eq_ignore_ascii_case(name))

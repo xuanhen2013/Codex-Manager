@@ -12,9 +12,13 @@ import { KO_MODEL_CATALOG_MESSAGES } from "./sections/ko-model-catalog";
 import { KO_MODEL_GROUPS_MESSAGES } from "./sections/ko-model-groups";
 import { KO_MODELS_MESSAGES } from "./sections/ko-models";
 import { KO_PLATFORM_MODE_MESSAGES } from "./sections/ko-platform-mode";
+import { KO_PROJECTS_MESSAGES } from "./sections/ko-projects";
 import { KO_RUNTIME_UI_MESSAGES } from "./sections/ko-runtime-ui";
+import { KO_SKILLS_MESSAGES } from "./sections/ko-skills";
 
 export const KO_MESSAGES: MessageCatalog = {
+  ...KO_PROJECTS_MESSAGES,
+  ...KO_SKILLS_MESSAGES,
   仪表盘: "대시보드",
   概览: "개요",
   平台接入: "플랫폼 연결",
@@ -24,6 +28,15 @@ export const KO_MESSAGES: MessageCatalog = {
   "下载预设": "다운로드 프리셋",
   "上传预设": "업로드 프리셋",
   "默认（所有大小）": "기본값 (모든 크기)",
+  "100 kB（很小）": "100 kB (매우 작음)",
+  "1 MB（快速）": "1 MB (빠름)",
+  "10 MB（标准）": "10 MB (표준)",
+  "25 MB（完整）": "25 MB (전체)",
+  "50 MB（完整）": "50 MB (전체)",
+  "选择预设": "프리셋 선택",
+  "HTTP 代理": "HTTP 프록시",
+  "HTTPS 代理": "HTTPS 프록시",
+  "SOCKS5 代理": "SOCKS5 프록시",
   "Download determines how fast your network connection can get data from the test network. This is important when downloading large files such as updates for applications or streaming video services. Download speed is tested by downloading files of various sizes. The number reported represents the 90th percentile of download measurements and not the absolute maximum. Scroll down to view details.": "다운로드 속도는 네트워크 연결이 테스트 네트워크에서 데이터를 얼마나 빨리 가져올 수 있는지를 결정합니다. 이는 애플리케이션 업데이트나 스트리밍 비디오 서비스와 같은 대용량 파일을 다운로드할 때 중요합니다. 다운로드 속도는 다양한 크기의 파일을 다운로드하여 테스트합니다. 보고된 수치는 절대적인 최대값이 아니라 다운로드 측정값의 90번째 백분위수를 나타냅니다.",
   "展开高级设置": "고급 설정 펼치기",
   "未配置上传测试接口。请在系统设置或环境变量中设置 CODEXMANAGER_PROXY_TEST_UPLOAD_URL。":
@@ -172,12 +185,30 @@ export const KO_MESSAGES: MessageCatalog = {
   "接入配置 · 请求观测": "연결 설정 · 요청 관측",
   收起侧边栏: "사이드바 접기",
   展开侧边栏: "사이드바 펼치기",
+  "关于 CodexManager": "CodexManager 정보",
+  "查看软件名称、功能简介和当前版本信息":
+    "앱 이름, 기능 요약, 현재 버전 정보를 확인합니다.",
+  "CodexManager 用于统一管理 Codex CLI 账号、本地网关、平台密钥、请求日志和用量统计，让 Codex 接入与运维更集中可控。":
+    "CodexManager는 Codex CLI 계정, 로컬 게이트웨이, 플랫폼 키, 요청 로그, 사용량 통계를 통합 관리하여 Codex 연결과 운영을 더 집중적이고 제어 가능하게 합니다.",
   基础设置: "기본 설정",
   自动检查更新: "자동 업데이트 확인",
+  "启动完成后在后台检查更新，并每 7 小时检查一次":
+    "시작이 완료되면 백그라운드에서 업데이트를 확인하고 이후 7시간마다 확인합니다.",
+  "检测到新版本，是否现在更新？":
+    "새 버전이 있습니다. 지금 업데이트하시겠습니까?",
+  "更新包已准备完成，是否立即替换更新？":
+    "업데이트가 준비되었습니다. 지금 적용하시겠습니까?",
   开机自动启动: "시작 시 자동 실행",
   系统登录后自动启动桌面端并保持网关可用:
     "시스템 로그인 후 데스크톱 앱을 자동 실행하고 게이트웨이를 계속 사용할 수 있게 합니다.",
   关闭时最小化到托盘: "닫을 때 트레이로 최소화",
+  窗口界面资源常驻: "창 UI 리소스 유지",
+  "需先开启关闭时最小化到托盘，才能选择窗口关闭后的资源策略":
+    "창 리소스 처리 방식을 선택하려면 먼저 닫을 때 트레이로 최소화를 켜세요.",
+  "快速唤醒：关闭后隐藏并保留界面，重开更快，但会占用更多内存":
+    "빠른 다시 열기: 닫을 때 인터페이스를 숨기고 유지하여 더 빨리 열지만 메모리를 더 사용합니다.",
+  "低资源：关闭后销毁界面，后台服务继续运行，重开时重新加载":
+    "낮은 리소스: 닫을 때 인터페이스를 해제하고 백그라운드 서비스는 계속 실행하며, 다시 열 때 인터페이스를 새로 로드합니다.",
   视觉性能模式: "시각 성능 모드",
   服务监听: "서비스 바인딩",
   监听地址: "바인딩 주소",
@@ -482,6 +513,30 @@ export const KO_MESSAGES: MessageCatalog = {
     "인증은 완료되었지만 계정 목록 동기화가 아직 성공하지 않았습니다.",
   开始登录授权: "로그인 인증 시작",
   设备验证码: "디바이스 코드",
+  登录方式: "로그인 방식",
+  浏览器登录: "브라우저 로그인",
+  设备码登录: "디바이스 코드 로그인",
+  "在任意设备打开验证页并输入验证码，验证码有效期为 15 分钟。":
+    "아무 기기에서나 인증 페이지를 열고 코드를 입력하세요. 코드는 15분 동안 유효합니다.",
+  "在当前设备的浏览器中完成 ChatGPT 授权。":
+    "현재 기기의 브라우저에서 ChatGPT 인증을 완료하세요.",
+  重新开始授权: "인증 다시 시작",
+  生成设备验证码: "디바이스 코드 생성",
+  复制验证码: "코드 복사",
+  验证码已复制: "코드가 복사되었습니다",
+  设备验证链接: "디바이스 인증 링크",
+  登录链接: "로그인 링크",
+  打开验证页: "인증 페이지 열기",
+  打开: "열기",
+  复制链接: "링크 복사",
+  登录已取消: "로그인이 취소되었습니다",
+  "设备登录已过期，请重新生成验证码。":
+    "디바이스 로그인이 만료되었습니다. 새 코드를 생성하세요.",
+  "服务返回了无效的登录任务，请重试。":
+    "서비스가 유효하지 않은 로그인 작업을 반환했습니다. 다시 시도하세요.",
+  "验证码有效期为 15 分钟，正在等待授权完成...":
+    "코드는 15분 동안 유효합니다. 인증 완료를 기다리는 중...",
+  "授权已确认，正在完成登录...": "인증이 확인되었습니다. 로그인을 완료하는 중...",
   "正在等待授权完成...": "인증 완료 대기 중...",
   "已生成设备登录信息，请按提示完成授权":
     "디바이스 로그인 정보가 생성되었습니다. 안내에 따라 인증을 완료하세요.",
@@ -711,6 +766,8 @@ export const KO_MESSAGES: MessageCatalog = {
     "단일 업스트림 요청의 최대 지속 시간(ms). 초과 시 요청이 종료되고 타임아웃 오류가 반환됩니다.",
   "控制流式上游请求允许持续的最长时间，单位毫秒；填 0 可关闭流式超时上限。":
     "스트리밍 업스트림 요청의 최대 지속 시간(ms). 0으로 설정하면 타임아웃을 끕니다.",
+  "控制是否向下游补发 SSE keep-alive 帧；默认开启，关闭后不会发送连接心跳。":
+    "다운스트림 SSE keep-alive 프레임 전송 여부를 제어합니다. 기본적으로 활성화되며, 비활성화하면 연결 하트비트를 보내지 않습니다.",
   "控制向下游补发 SSE keep-alive 帧的间隔，单位毫秒；上游长时间安静时可避免客户端误判连接中断。":
     "다운스트림 SSE keep-alive 프레임 전송 간격(ms). 업스트림이 오래 조용할 때 연결 끊김으로 오해하는 것을 방지합니다.",
   "控制连接上游服务器时的超时时间，单位秒；主要影响握手和网络建立阶段。":
@@ -850,6 +907,9 @@ export const KO_MESSAGES: MessageCatalog = {
   "确认卸载这个插件吗？": "이 플러그인을 제거할까요?",
   任务间隔已更新: "작업 간격이 업데이트되었습니다",
   任务已执行: "작업이 실행되었습니다",
+  保持连接心跳: "연결 하트비트 유지",
+  "开启后会按下方间隔向客户端发送 SSE 心跳，防止代理或网络链路因空闲断开。":
+    "활성화하면 아래 간격으로 클라이언트에 SSE 하트비트를 보내 프록시나 네트워크 경로가 유휴 상태로 연결을 끊는 것을 방지합니다.",
   "上游代理 (Proxy)": "업스트림 프록시 (Proxy)",
   "上游总超时 (ms，0 为关闭)": "업스트림 전체 타임아웃(ms, 0=비활성)",
   "上游流式空闲超时 (ms)": "업스트림 스트리밍 유휴 타임아웃(ms)",
@@ -958,6 +1018,10 @@ export const KO_MESSAGES: MessageCatalog = {
   "批量删除完成：成功{success}个，失败{failed}个":
     "일괄 삭제 완료: 성공 {success}개, 실패 {failed}개",
   账号用量已刷新: "계정 사용량이 새로고침되었습니다",
+  "账号用量已刷新：{processed}/{total}":
+    "계정 사용량이 새로고침되었습니다: {processed}/{total}",
+  "账号用量刷新未执行：{message}":
+    "계정 사용량 새로고침이 실행되지 않았습니다: {message}",
   "账号长期未登录，refresh 已过期，已改为不可用状态":
     "계정이 오랫동안 로그인하지 않아 refresh가 만료되어 사용 불가로 변경되었습니다.",
   "正在等待服务连接。": "서비스 연결 대기 중.",
@@ -1199,6 +1263,7 @@ export const KO_MESSAGES: MessageCatalog = {
   "Prompt 缓存 TTL（秒）": "프롬프트 캐시 TTL(초)",
   "Prompt 缓存清理间隔（秒）": "프롬프트 캐시 청소 간격(초)",
   "Prompt 缓存容量": "프롬프트 캐시 용량",
+  "启用 SSE 保活": "SSE keepalive 활성화",
   "SSE 保活间隔（毫秒）": "SSE keepalive 간격(밀리초)",
   "Trace 队列容量": "Trace 큐 용량",
   "Trace Body 预览上限（字节）": "Trace body 미리보기 한도(바이트)",

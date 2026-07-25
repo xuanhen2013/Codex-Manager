@@ -195,6 +195,7 @@ pub(super) fn try_openai_fallback(
     let mut upstream_headers = if is_compact_request_path(request_path) {
         let header_input = super::upstream::header_profile::CodexCompactUpstreamHeaderInput {
             auth_token: bearer.as_str(),
+            is_fedramp: false,
             chatgpt_account_id: resolve_chatgpt_account_header(account, upstream_base),
             installation_id: None,
             incoming_user_agent: incoming_headers.user_agent(),
@@ -215,6 +216,7 @@ pub(super) fn try_openai_fallback(
     } else {
         let header_input = super::upstream::header_profile::CodexUpstreamHeaderInput {
             auth_token: bearer.as_str(),
+            is_fedramp: false,
             chatgpt_account_id: resolve_chatgpt_account_header(account, upstream_base),
             incoming_user_agent: incoming_headers.user_agent(),
             incoming_originator: incoming_headers.originator(),

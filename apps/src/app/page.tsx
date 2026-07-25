@@ -22,6 +22,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ApiKeyModal } from "@/components/modals/api-key-modal";
+import {
+  AdminUsageTrendChart,
+  type AdminUsageGranularity,
+} from "@/components/dashboard/admin-usage-trend-chart";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -580,6 +584,8 @@ function AdminUsageAnalyticsCard({
   onRangeEndInputChange,
   onApplyCustomRange,
   isCustomRangeInvalid,
+  granularity,
+  onGranularityChange,
 }: {
   summary: DashboardAdminUsageSummary | undefined;
   isLoading: boolean;
@@ -592,6 +598,8 @@ function AdminUsageAnalyticsCard({
   onRangeEndInputChange: (value: string) => void;
   onApplyCustomRange: () => void;
   isCustomRangeInvalid: boolean;
+  granularity: AdminUsageGranularity;
+  onGranularityChange: (granularity: AdminUsageGranularity) => void;
 }) {
   const { t, locale } = useI18n();
   const [zoomWindow, setZoomWindow] = useState<{
@@ -662,6 +670,7 @@ function AdminUsageAnalyticsCard({
     ? summary.todayUsage
     : sumDashboardTokenUsages(summary.dailyUsage.map((item) => item.usage));
   const hasZoomWindow =
+    summary.modelUsage.length === 0 &&
     summary.dailyUsage.length > 1 &&
     zoomWindow != null &&
     (zoomWindow.startIndex > 0 ||
@@ -678,7 +687,7 @@ function AdminUsageAnalyticsCard({
               {t("管理员用量分析")}
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
-              {t("按天汇总 token、费用和请求量")}
+              {t("按模型查看 token 和请求趋势，支持小时粒度")}
             </p>
             <div className="mt-2 text-[11px] text-muted-foreground">
               {t("当前区间")} {formatShortDateRange(summary.rangeStartTs, summary.rangeEndTs, locale)}
@@ -747,11 +756,22 @@ function AdminUsageAnalyticsCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        <DailyTokenLineChart
-          points={summary.dailyUsage}
-          zoomWindow={zoomWindow}
-          onZoomWindowChange={setZoomWindow}
-        />
+        {summary.seriesUsage.length > 0 ? (
+          <AdminUsageTrendChart
+            summary={summary}
+            granularity={granularity}
+            onGranularityChange={onGranularityChange}
+            hourlyAvailable={
+              summary.rangeEndTs - summary.rangeStartTs <= 31 * 86_400
+            }
+          />
+        ) : (
+          <DailyTokenLineChart
+            points={summary.dailyUsage}
+            zoomWindow={zoomWindow}
+            onZoomWindowChange={setZoomWindow}
+          />
+        )}
         <div className="grid gap-3 text-xs sm:grid-cols-2 xl:grid-cols-4">
           <div className="mission-panel rounded-md border border-primary/20 bg-primary/10 px-3 py-2">
             <div className="text-muted-foreground">{rangeBadgeLabel}</div>
@@ -822,6 +842,8 @@ function AdminDashboard() {
       startInput: "",
       endInput: "",
     });
+  const [adminUsageGranularity, setAdminUsageGranularity] =
+    useState<AdminUsageGranularity>("day");
 
   useEffect(() => {
     if (adminUsageRangePreset === "custom") {
@@ -857,6 +879,8 @@ function AdminDashboard() {
       startTs: adminUsageRangeParams.startTs,
       endTs: adminUsageRangeParams.endTs,
       includeBreakdowns: false,
+      includeSeries: true,
+      seriesBucketSeconds: adminUsageGranularity === "hour" ? 3_600 : 86_400,
     },
     true,
   );
@@ -1029,6 +1053,9 @@ function AdminDashboard() {
             if (startTs == null || endTs == null || endTs <= startTs) {
               return;
             }
+            if (endTs - startTs > 31 * 86_400) {
+              setAdminUsageGranularity("day");
+            }
             setAdminUsageRangeParams({
               startTs,
               endTs,
@@ -1037,6 +1064,8 @@ function AdminDashboard() {
             });
           }}
           isCustomRangeInvalid={isCustomAdminUsageRangeInvalid}
+          granularity={adminUsageGranularity}
+          onGranularityChange={setAdminUsageGranularity}
         />
       </DirectModeUnavailable>
 

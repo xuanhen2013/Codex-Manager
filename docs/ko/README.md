@@ -19,17 +19,20 @@ CodexManager는 Codex 워크플로를 위한 로컬 desktop + service-process �
 - 계정 풀 관리: 그룹, 태그, 정렬, 메모, 차단 인식/필터링.
 - 일괄 가져오기/내보내기: 다중 파일 가져오기, 데스크톱 폴더 재귀 가져오기, 계정 단위 내보내기.
 - 사용량 표시: 5시간 + 7일 윈도우, 단일 윈도우 계정, Code Review / Spark 등 공식 추가 버킷.
-- 플랫폼 Key: 생성, 비활성화, 삭제, 모델 바인딩, 추론 등급, 서비스 등급.
+- 계정 인증: `chatgpt.com` 브라우저 OAuth 및 Device Code 로그인. 브라우저 OAuth는 콜백 URL 수동 처리도 지원합니다.
+- 플랫폼 Key: 생성, 비활성화, 삭제, 모델 바인딩, 추론 등급, 서비스 등급을 지원합니다. 관리자는 Key를 사용자 지정 계정 그룹에 바인딩하고 플랜 필터와 교집합을 적용하여 허용된 풀 안에서만 순환시킬 수 있습니다.
 - Aggregate API: 서드파티 릴레이 업스트림 생성/수정/연결 테스트, 공급자명, 우선순위.
 - 플러그인 센터: 내장/사설/커스텀 소스 모드, 작업/로그 화면, Rhai 연동.
-- 로컬 서비스 + 게이트웨이: 바인드/리스닝 설정, 업스트림 프록시, 요청 전체 타임아웃, 스트리밍 idle 타임아웃, SSE keepalive, 통합 호환 엔드포인트.
+- Skills 및 플러그인: `/skills/`에서 **Skills 설치**와 **Codex 플러그인 설치**를 별도 탭으로 제공합니다. 내장/사용자 지정 GitHub 저장소와 skills.sh 검색 결과에서 Skill을 개별 설치하거나 ZIP 및 기존 디렉터리에서 가져올 수 있습니다. Codex 기본 Marketplace의 전체 플러그인 설치도 유지되며 `.system` Skill은 읽기 전용입니다.
+- 데스크톱 프로젝트 실행기: 로컬 프로젝트 폴더를 즐겨찾기에 추가하고 로컬 CodexManager 프로필로 새 터미널에서 Codex 또는 현재 프로젝트의 `resume` 선택기를 열 수 있습니다. Web/Docker는 장치 폴더에 접근하지 않습니다.
+- 로컬 서비스 + 게이트웨이: 바인드/리스닝 설정, 업스트림 프록시, 요청 전체 타임아웃, 스트리밍 idle 타임아웃, SSE keepalive, 통합 호환 엔드포인트. SSE keepalive는 기본적으로 활성화되며, 비활성화하려면 `CODEXMANAGER_SSE_KEEPALIVE_ENABLED=0`(또는 `false`)으로 설정합니다.
 - 이미지 생성: 기본적으로 `/v1/responses`에 공식 Codex `image_generation` tool을 자동 주입하고, 명시적으로 전달된 tool은 그대로 전달하며, `/v1/images/generations` 및 `/v1/images/edits` 호환 엔드포인트를 지원합니다. 기본 이미지 tool 모델은 `gpt-image-2`입니다.
 
 ## 빠른 시작
 
 1. 데스크톱 앱을 실행하고 **Start Service**를 클릭합니다.
-2. **Account Management**에서 계정을 추가하고 인증을 완료합니다.
-3. 콜백 파싱에 실패하면 콜백 URL을 붙여넣어 수동 파싱합니다.
+2. **Account Management**에서 `chatgpt.com` 브라우저 인증 또는 Device Code 로그인을 선택합니다.
+3. 브라우저 콜백 처리에 실패하면 콜백 URL을 붙여넣어 수동 처리합니다.
 4. 사용량을 새로고침하고 계정 상태를 확인합니다.
 
 ## 스크린샷

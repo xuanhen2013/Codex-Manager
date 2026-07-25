@@ -14,6 +14,7 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "apikey.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "browser-direct.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "codex-profile.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "codex-skills.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
@@ -29,6 +30,7 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/apikey', './transport-web-commands/apikey.js')
     .replaceAll('./transport-web-commands/browser-direct', './transport-web-commands/browser-direct.js')
     .replaceAll('./transport-web-commands/codex-profile', './transport-web-commands/codex-profile.js')
+    .replaceAll('./transport-web-commands/codex-skills', './transport-web-commands/codex-skills.js')
     .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
     .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
     .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
@@ -83,6 +85,22 @@ async function loadTransportWebCommandsModule() {
 const transportWebCommands = await loadTransportWebCommandsModule();
 const commandMap = transportWebCommands.createWebCommandMap(async () => ({}));
 
+test("createWebCommandMap keeps app and gateway transport settings payloads aligned", () => {
+  const appSettingsSet = commandMap.app_settings_set;
+  assert.equal(appSettingsSet.rpcMethod, "appSettings/set");
+  assert.ok(appSettingsSet.mapParams);
+  assert.deepEqual(
+    appSettingsSet.mapParams({
+      patch: { sseKeepaliveEnabled: false },
+    }),
+    { sseKeepaliveEnabled: false }
+  );
+
+  assert.deepEqual(commandMap.service_gateway_transport_set, {
+    rpcMethod: "gateway/transport/set",
+  });
+});
+
 test("createWebCommandMap 复用 keyId 到 id 的参数映射", () => {
   const descriptor = commandMap.service_apikey_delete;
   assert.ok(descriptor.mapParams);
@@ -99,6 +117,43 @@ test("createWebCommandMap 提供平台密钥每日用量 RPC 映射", () => {
   });
 });
 
+test("API key update Web 映射移除桌面 presence marker 并保留显式清空", () => {
+  const descriptor = commandMap.service_apikey_update_model;
+  assert.ok(descriptor.mapParams);
+  assert.deepEqual(
+    descriptor.mapParams({
+      keyId: "key-1",
+      hasName: true,
+      name: "renamed",
+      hasModelConfig: true,
+      modelSlug: null,
+      reasoningEffort: "high",
+      serviceTier: null,
+      hasRoutingConfig: true,
+      rotationStrategy: "hybrid_rotation",
+      aggregateApiId: null,
+      accountPlanFilter: "plus",
+      hasAccountGroupFilter: true,
+      accountGroupFilter: null,
+      hasQuotaLimitTokens: true,
+      quotaLimitTokens: null,
+    }),
+    {
+      keyId: "key-1",
+      id: "key-1",
+      name: "renamed",
+      modelSlug: null,
+      reasoningEffort: "high",
+      serviceTier: null,
+      rotationStrategy: "hybrid_rotation",
+      aggregateApiId: null,
+      accountPlanFilter: "plus",
+      accountGroupFilter: null,
+      quotaLimitTokens: null,
+    },
+  );
+});
+
 test("createWebCommandMap 为登录命令补齐 Web 运行壳参数", () => {
   const startLogin = commandMap.service_login_start;
   assert.ok(startLogin.mapParams);
@@ -106,6 +161,21 @@ test("createWebCommandMap 为登录命令补齐 Web 运行壳参数", () => {
     loginType: "chatgpt",
     type: "chatgpt",
     openBrowser: false,
+  });
+  assert.deepEqual(
+    startLogin.mapParams({
+      loginType: "chatgptDeviceCode",
+      openBrowser: true,
+    }),
+    {
+      loginType: "chatgptDeviceCode",
+      type: "chatgptDeviceCode",
+      openBrowser: false,
+    },
+  );
+
+  assert.deepEqual(commandMap.service_login_cancel, {
+    rpcMethod: "account/login/cancel",
   });
 
   const authTokens = commandMap.service_login_chatgpt_auth_tokens;
@@ -123,18 +193,18 @@ test("createWebCommandMap 为账号预热命令提供 Web RPC 映射", () => {
   });
 });
 
-test("createWebCommandMap 为额度重置次数查询和消费提供 Web RPC 映射", () => {
-  assert.deepEqual(commandMap.service_usage_reset_credits_read, {
-    rpcMethod: "account/usage/resetCredits/read",
-  });
-  assert.deepEqual(commandMap.service_usage_reset_credits_consume, {
-    rpcMethod: "account/usage/resetCredits/consume",
-  });
-});
-
 test("createWebCommandMap 为批量账号排序提供 Web RPC 映射", () => {
   assert.deepEqual(commandMap.service_account_update_sorts, {
     rpcMethod: "account/updateSorts",
+  });
+});
+
+test("createWebCommandMap 为额度重置查询和消费提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_usage_reset_credits, {
+    rpcMethod: "account/usage/resetCredits",
+  });
+  assert.deepEqual(commandMap.service_usage_reset_credit_consume, {
+    rpcMethod: "account/usage/resetCredit/consume",
   });
 });
 
@@ -163,6 +233,55 @@ test("createWebCommandMap 为 Codex profile 管理提供 Web RPC 映射", () => 
   assert.deepEqual(commandMap.service_codex_profile_prune_history_backups, {
     rpcMethod: "codexProfile/pruneHistoryBackups",
   });
+});
+
+test("createWebCommandMap 为 Codex Skills 管理提供 Web RPC 映射", () => {
+  assert.deepEqual(commandMap.service_codex_skills_list, {
+    rpcMethod: "codexSkills/list",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_install_zip, {
+    rpcMethod: "codexSkills/installZip",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_import_directory, {
+    rpcMethod: "codexSkills/importDirectory",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_delete, {
+    rpcMethod: "codexSkills/delete",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_repository_list, {
+    rpcMethod: "codexSkills/repositoryList",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_repository_add, {
+    rpcMethod: "codexSkills/repositoryAdd",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_repository_delete, {
+    rpcMethod: "codexSkills/repositoryDelete",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_repository_refresh, {
+    rpcMethod: "codexSkills/repositoryRefresh",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_repository_install, {
+    rpcMethod: "codexSkills/repositoryInstall",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_registry_search, {
+    rpcMethod: "codexSkills/registrySearch",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_registry_install, {
+    rpcMethod: "codexSkills/registryInstall",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_marketplace_list, {
+    rpcMethod: "codexSkills/marketplaceList",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_marketplace_add, {
+    rpcMethod: "codexSkills/marketplaceAdd",
+  });
+  assert.deepEqual(commandMap.service_codex_skills_marketplace_refresh, {
+    rpcMethod: "codexSkills/marketplaceRefresh",
+  });
+  assert.deepEqual(
+    commandMap.service_codex_skills_marketplace_plugin_install,
+    { rpcMethod: "codexSkills/marketplacePluginInstall" },
+  );
 });
 
 test("createWebCommandMap 为按状态清理账号提供 Web RPC 映射", () => {
@@ -249,10 +368,22 @@ test("createWebCommandMap 为管理员用量分析提供 Web RPC 映射", () => 
   const summary = commandMap.service_dashboard_admin_usage_summary;
   assert.equal(summary.rpcMethod, "dashboard/adminUsageSummary");
   assert.ok(summary.mapParams);
-  assert.deepEqual(summary.mapParams({ start_ts: 100, end_ts: 200 }), {
-    startTs: 100,
-    endTs: 200,
-  });
+  assert.deepEqual(
+    summary.mapParams({
+      start_ts: 100,
+      end_ts: 200,
+      include_breakdowns: false,
+      include_series: true,
+      series_bucket_seconds: 3_600,
+    }),
+    {
+      startTs: 100,
+      endTs: 200,
+      includeBreakdowns: false,
+      includeSeries: true,
+      seriesBucketSeconds: 3_600,
+    },
+  );
 });
 
 test("createWebCommandMap 为模型目录 V2 原子命令提供 Web RPC 映射", () => {
@@ -272,6 +403,38 @@ test("createWebCommandMap 为模型目录 V2 原子命令提供 Web RPC 映射",
   assert.deepEqual(
     upsert.mapParams({ payload: { previousSlug: null, model: { slug: "local-x" } } }),
     { previousSlug: null, model: { slug: "local-x" } },
+  );
+
+  const updateState = commandMap.service_managed_model_update_state_v2;
+  assert.equal(updateState.rpcMethod, "apikey/managedModelUpdateStateV2");
+  assert.ok(updateState.mapParams);
+  assert.deepEqual(
+    updateState.mapParams({
+      payload: { slug: "gpt-5.4", enabled: false, visibility: "hide" },
+    }),
+    { slug: "gpt-5.4", enabled: false, visibility: "hide" },
+  );
+
+  const batchUpdateState =
+    commandMap.service_managed_model_batch_update_state_v2;
+  assert.equal(
+    batchUpdateState.rpcMethod,
+    "apikey/managedModelBatchUpdateStateV2",
+  );
+  assert.ok(batchUpdateState.mapParams);
+  assert.deepEqual(
+    batchUpdateState.mapParams({
+      payload: {
+        slugs: ["gpt-5.4", "gpt-5.4-mini"],
+        enabled: true,
+        visibility: "list",
+      },
+    }),
+    {
+      slugs: ["gpt-5.4", "gpt-5.4-mini"],
+      enabled: true,
+      visibility: "list",
+    },
   );
 
   for (const command of [

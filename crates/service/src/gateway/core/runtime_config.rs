@@ -38,6 +38,8 @@ static UPSTREAM_CONNECT_TIMEOUT_SECS: AtomicU64 =
     AtomicU64::new(DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS);
 static UPSTREAM_TOTAL_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS);
 static UPSTREAM_STREAM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS);
+static SSE_KEEPALIVE_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SSE_KEEPALIVE_ENABLED);
+static SSE_KEEPALIVE_INTERVAL_MS: AtomicU64 = AtomicU64::new(DEFAULT_SSE_KEEPALIVE_INTERVAL_MS);
 static ACCOUNT_MAX_INFLIGHT: AtomicUsize = AtomicUsize::new(DEFAULT_ACCOUNT_MAX_INFLIGHT);
 static THREAD_AWARE_ACCOUNT_DISTRIBUTION: AtomicBool =
     AtomicBool::new(DEFAULT_THREAD_AWARE_ACCOUNT_DISTRIBUTION);
@@ -68,6 +70,8 @@ pub(crate) const DEFAULT_GATEWAY_DEBUG: bool = false;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS: u64 = 0;
 const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS: u64 = 300_000;
+const DEFAULT_SSE_KEEPALIVE_ENABLED: bool = true;
+const DEFAULT_SSE_KEEPALIVE_INTERVAL_MS: u64 = 15_000;
 const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
 const DEFAULT_THREAD_AWARE_ACCOUNT_DISTRIBUTION: bool = true;
 const DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST: bool = false;
@@ -95,6 +99,8 @@ const ENV_FRONT_PROXY_MAX_BODY_BYTES: &str = "CODEXMANAGER_FRONT_PROXY_MAX_BODY_
 const ENV_UPSTREAM_CONNECT_TIMEOUT_SECS: &str = "CODEXMANAGER_UPSTREAM_CONNECT_TIMEOUT_SECS";
 const ENV_UPSTREAM_TOTAL_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS";
 const ENV_UPSTREAM_STREAM_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS";
+const ENV_SSE_KEEPALIVE_ENABLED: &str = "CODEXMANAGER_SSE_KEEPALIVE_ENABLED";
+const ENV_SSE_KEEPALIVE_INTERVAL_MS: &str = "CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS";
 const ENV_ACCOUNT_MAX_INFLIGHT: &str = "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT";
 const ENV_STRICT_REQUEST_PARAM_ALLOWLIST: &str = "CODEXMANAGER_STRICT_REQUEST_PARAM_ALLOWLIST";
 const ENV_ENABLE_REQUEST_COMPRESSION: &str = "CODEXMANAGER_ENABLE_REQUEST_COMPRESSION";
@@ -535,24 +541,6 @@ fn build_direct_upstream_client() -> Client {
         })
 }
 
-pub(crate) fn apply_blocking_upstream_proxy(
-    mut builder: reqwest::blocking::ClientBuilder,
-    proxy_url: Option<&str>,
-    invalid_event: &str,
-) -> reqwest::blocking::ClientBuilder {
-    if let Some(proxy_url) = proxy_url.map(str::trim).filter(|value| !value.is_empty()) {
-        match Proxy::all(proxy_url) {
-            Ok(proxy) => {
-                builder = builder.proxy(proxy);
-            }
-            Err(err) => {
-                log::warn!("event={} proxy={} err={}", invalid_event, proxy_url, err);
-            }
-        }
-    }
-    builder
-}
-
 pub(crate) fn apply_async_upstream_proxy(
     mut builder: reqwest::ClientBuilder,
     proxy_url: Option<&str>,
@@ -740,6 +728,45 @@ pub(crate) fn current_upstream_stream_timeout_ms() -> u64 {
 pub(crate) fn current_upstream_total_timeout_ms() -> u64 {
     ensure_runtime_config_loaded();
     UPSTREAM_TOTAL_TIMEOUT_MS.load(Ordering::Relaxed)
+}
+
+pub(super) fn current_sse_keepalive_enabled() -> bool {
+    ensure_runtime_config_loaded();
+    SSE_KEEPALIVE_ENABLED.load(Ordering::Relaxed)
+}
+
+pub(super) fn sse_keepalive_enabled_is_env_overridden() -> bool {
+    env_non_empty(ENV_SSE_KEEPALIVE_ENABLED).is_some()
+}
+
+pub(super) fn set_sse_keepalive_enabled(enabled: bool) -> bool {
+    ensure_runtime_config_loaded();
+    if sse_keepalive_enabled_is_env_overridden() {
+        return SSE_KEEPALIVE_ENABLED.load(Ordering::Relaxed);
+    }
+    SSE_KEEPALIVE_ENABLED.store(enabled, Ordering::Relaxed);
+    enabled
+}
+
+pub(super) fn current_sse_keepalive_interval_ms() -> u64 {
+    ensure_runtime_config_loaded();
+    SSE_KEEPALIVE_INTERVAL_MS.load(Ordering::Relaxed).max(1)
+}
+
+pub(super) fn sse_keepalive_interval_is_env_overridden() -> bool {
+    env_non_empty(ENV_SSE_KEEPALIVE_INTERVAL_MS).is_some()
+}
+
+pub(super) fn set_sse_keepalive_interval_ms(interval_ms: u64) -> Result<u64, String> {
+    ensure_runtime_config_loaded();
+    if interval_ms == 0 {
+        return Err("SSE keepalive interval must be greater than 0".to_string());
+    }
+    if sse_keepalive_interval_is_env_overridden() {
+        return Ok(SSE_KEEPALIVE_INTERVAL_MS.load(Ordering::Relaxed).max(1));
+    }
+    SSE_KEEPALIVE_INTERVAL_MS.store(interval_ms, Ordering::Relaxed);
+    Ok(interval_ms)
 }
 
 /// 函数 `request_compression_enabled`
@@ -1474,6 +1501,17 @@ pub(super) fn reload_from_env() {
         env_u64_or(
             ENV_UPSTREAM_STREAM_TIMEOUT_MS,
             DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS,
+        ),
+        Ordering::Relaxed,
+    );
+    SSE_KEEPALIVE_ENABLED.store(
+        env_bool_or(ENV_SSE_KEEPALIVE_ENABLED, DEFAULT_SSE_KEEPALIVE_ENABLED),
+        Ordering::Relaxed,
+    );
+    SSE_KEEPALIVE_INTERVAL_MS.store(
+        env_u64_or(
+            ENV_SSE_KEEPALIVE_INTERVAL_MS,
+            DEFAULT_SSE_KEEPALIVE_INTERVAL_MS,
         ),
         Ordering::Relaxed,
     );

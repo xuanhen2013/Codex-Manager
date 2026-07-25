@@ -1,5 +1,10 @@
 import { invoke, withAddr } from "./transport";
 import {
+  buildApiKeyUpdateInvokePayload,
+  type ApiKeyUpdatePayload,
+} from "./api-key-update-payload";
+import { readApiKeyUsageHistory } from "./api-key-usage-history";
+import {
   normalizeAccountList,
   normalizeAggregateApiBalanceRefreshResult,
   normalizeAggregateApiCreateResult,
@@ -54,15 +59,8 @@ import {
 } from "./account-maintenance";
 import { unwrapUsageSnapshotPayload } from "./usage-response";
 import {
-  readUsageResetConsumeResult,
-  readUsageResetCredits,
-} from "./usage-reset-credits";
-import { readApiKeyUsageHistory } from "./api-key-usage-history";
-import {
   AccountListResult,
   AccountUsage,
-  AccountUsageResetConsumeResult,
-  AccountUsageResetCredits,
   AggregateApi,
   AggregateApiBalanceRefreshResult,
   AggregateApiCreateResult,
@@ -77,6 +75,7 @@ import {
   CurrentAccessTokenAccountReadResult,
   LoginStatusResult,
   LoginStartResult,
+  LoginType,
   AccountProxyUrlTestListResult,
   ProxyDiagnosticTestListResult,
   ProxySpeedTestListResult,
@@ -134,11 +133,21 @@ export interface AccountSortUpdatePayload {
   sort: number;
 }
 
-interface LoginStartPayload {
-  loginType?: string;
+export interface AccountUsageRefreshResult {
+  ok: boolean;
+  source: string;
+  accountId: string | null;
+  processed: number;
+  total: number;
+  message: string | null;
+}
+
+export interface LoginStartPayload {
+  loginType: LoginType;
   openBrowser?: boolean;
   note?: string | null;
   tags?: string[] | string | null;
+  groupName?: string | null;
   workspaceId?: string | null;
 }
 
@@ -147,6 +156,7 @@ interface AccountUpdatePayload {
   preferred?: boolean | null;
   status?: string | null;
   label?: string | null;
+  groupName?: string | null;
   note?: string | null;
   tags?: string[] | string | null;
   quotaCapacityPrimaryWindowTokens?: number | null;
@@ -162,18 +172,7 @@ interface ChatgptAuthTokensLoginPayload {
   chatgptPlanType?: string | null;
 }
 
-interface ApiKeyPayload {
-  name?: string | null;
-  modelSlug?: string | null;
-  reasoningEffort?: string | null;
-  serviceTier?: string | null;
-  protocolType?: string | null;
-  upstreamBaseUrl?: string | null;
-  staticHeadersJson?: string | null;
-  rotationStrategy?: string | null;
-  aggregateApiId?: string | null;
-  accountPlanFilter?: string | null;
-  quotaLimitTokens?: number | null;
+interface ApiKeyPayload extends ApiKeyUpdatePayload {
   customKey?: string | null;
 }
 
@@ -281,6 +280,32 @@ function splitImportContents(contents: string[]): string[][] {
   return chunks;
 }
 
+function normalizeUsageRefreshResult(payload: unknown): AccountUsageRefreshResult {
+  const source =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+  const toInteger = (value: unknown, fallback = 0) => {
+    const parsed =
+      typeof value === "number"
+        ? value
+        : typeof value === "string"
+          ? Number.parseInt(value, 10)
+          : Number.NaN;
+    return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : fallback;
+  };
+  const toStringOrNull = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : null;
+  return {
+    ok: source.ok === true,
+    source: toStringOrNull(source.source) || "manual",
+    accountId: toStringOrNull(source.accountId ?? source.account_id),
+    processed: toInteger(source.processed),
+    total: toInteger(source.total),
+    message: toStringOrNull(source.message),
+  };
+}
+
 /**
  * 函数 `mergeImportResult`
  *
@@ -316,6 +341,20 @@ function mergeImportResult(
       !target.importedAccountIds.includes(normalizedAccountId)
     ) {
       target.importedAccountIds.push(normalizedAccountId);
+    }
+  }
+  if (source.usageRefreshAccountIds !== undefined) {
+    if (!target.usageRefreshAccountIds) {
+      target.usageRefreshAccountIds = [];
+    }
+    for (const accountId of source.usageRefreshAccountIds) {
+      const normalizedAccountId = String(accountId || "").trim();
+      if (
+        normalizedAccountId &&
+        !target.usageRefreshAccountIds.includes(normalizedAccountId)
+      ) {
+        target.usageRefreshAccountIds.push(normalizedAccountId);
+      }
     }
   }
 
@@ -402,32 +441,34 @@ export const accountClient = {
         })),
       })
     ),
-  updateProfile: (accountId: string, params: AccountUpdatePayload) =>
-    invoke(
-      "service_account_update",
-      withAddr({
-        accountId,
-        sort: typeof params.sort === "number" ? params.sort : null,
-        preferred: typeof params.preferred === "boolean" ? params.preferred : null,
-        status: params.status || null,
-        label: params.label ?? null,
-        note: params.note ?? null,
-        tags: Array.isArray(params.tags)
-          ? params.tags
-              .map((item: string) => String(item || "").trim())
-              .filter(Boolean)
-              .join(",")
-          : params.tags ?? null,
-        quotaCapacityPrimaryWindowTokens:
-          typeof params.quotaCapacityPrimaryWindowTokens === "number"
-            ? params.quotaCapacityPrimaryWindowTokens
-            : null,
-        quotaCapacitySecondaryWindowTokens:
-          typeof params.quotaCapacitySecondaryWindowTokens === "number"
-            ? params.quotaCapacitySecondaryWindowTokens
-            : null,
-      })
-    ),
+  updateProfile: (accountId: string, params: AccountUpdatePayload) => {
+    const payload: Record<string, unknown> = {
+      accountId,
+      sort: typeof params.sort === "number" ? params.sort : null,
+      preferred: typeof params.preferred === "boolean" ? params.preferred : null,
+      status: params.status || null,
+      label: params.label ?? null,
+      note: params.note ?? null,
+      tags: Array.isArray(params.tags)
+        ? params.tags
+            .map((item: string) => String(item || "").trim())
+            .filter(Boolean)
+            .join(",")
+        : params.tags ?? null,
+      quotaCapacityPrimaryWindowTokens:
+        typeof params.quotaCapacityPrimaryWindowTokens === "number"
+          ? params.quotaCapacityPrimaryWindowTokens
+          : null,
+      quotaCapacitySecondaryWindowTokens:
+        typeof params.quotaCapacitySecondaryWindowTokens === "number"
+          ? params.quotaCapacitySecondaryWindowTokens
+          : null,
+    };
+    if (params.groupName !== undefined) {
+      payload.groupName = params.groupName ?? "";
+    }
+    return invoke("service_account_update", withAddr(payload));
+  },
   setPreferred: (accountId: string) =>
     invoke("service_account_update", withAddr({ accountId, preferred: true })),
   clearPreferred: (accountId: string) =>
@@ -648,9 +689,9 @@ export const accountClient = {
     const result = await invoke<unknown>("service_usage_list", withAddr());
     return normalizeUsageList(result);
   },
-  refreshUsage: (accountId?: string) => {
+  async refreshUsage(accountId?: string): Promise<AccountUsageRefreshResult> {
     const targetAccountId = accountId?.trim();
-    return invoke(
+    const result = await invoke<unknown>(
       "service_usage_refresh",
       withAddr(
         targetAccountId
@@ -658,22 +699,7 @@ export const accountClient = {
           : {}
       )
     );
-  },
-  async getUsageResetCredits(accountId: string): Promise<AccountUsageResetCredits> {
-    const result = await invoke<unknown>(
-      "service_usage_reset_credits_read",
-      withAddr({ accountId, account_id: accountId }),
-    );
-    return readUsageResetCredits(result);
-  },
-  async consumeUsageResetCredit(
-    accountId: string,
-  ): Promise<AccountUsageResetConsumeResult> {
-    const result = await invoke<unknown>(
-      "service_usage_reset_credits_consume",
-      withAddr({ accountId, account_id: accountId }),
-    );
-    return readUsageResetConsumeResult(result);
+    return normalizeUsageRefreshResult(result);
   },
   async aggregateUsage(): Promise<UsageAggregateSummary> {
     const result = await invoke<unknown>("service_usage_aggregate", withAddr());
@@ -693,6 +719,7 @@ export const accountClient = {
               .filter(Boolean)
               .join(",")
           : params?.tags || null,
+        groupName: params?.groupName || null,
         workspaceId: params?.workspaceId || null,
       })
     );
@@ -701,6 +728,9 @@ export const accountClient = {
   async getLoginStatus(loginId: string): Promise<LoginStatusResult> {
     const result = await invoke<unknown>("service_login_status", withAddr({ loginId }));
     return readLoginStatusResult(result);
+  },
+  async cancelLogin(loginId: string): Promise<void> {
+    await invoke<unknown>("service_login_cancel", withAddr({ loginId }));
   },
   completeLogin: (state: string, code: string, redirectUri: string) =>
     invoke("service_login_complete", withAddr({ state, code, redirectUri })),
@@ -879,6 +909,7 @@ export const accountClient = {
         rotationStrategy: params.rotationStrategy || null,
         aggregateApiId: params.aggregateApiId || null,
         accountPlanFilter: params.accountPlanFilter || null,
+        accountGroupFilter: params.accountGroupFilter || null,
         quotaLimitTokens: params.quotaLimitTokens ?? null,
         customKey: params.customKey || null,
       })
@@ -903,25 +934,11 @@ export const accountClient = {
   },
   deleteApiKey: (keyId: string) =>
     invoke("service_apikey_delete", withAddr({ keyId })),
-  updateApiKey: (keyId: string, params: ApiKeyPayload) => {
-    const payload: Record<string, unknown> = {
-      keyId,
-      name: params.name || null,
-      modelSlug: params.modelSlug || null,
-      reasoningEffort: params.reasoningEffort || null,
-      serviceTier: params.serviceTier || null,
-      protocolType: params.protocolType || null,
-      upstreamBaseUrl: params.upstreamBaseUrl || null,
-      staticHeadersJson: params.staticHeadersJson || null,
-      rotationStrategy: params.rotationStrategy || null,
-      aggregateApiId: params.aggregateApiId || null,
-      accountPlanFilter: params.accountPlanFilter || null,
-    };
-    if ("quotaLimitTokens" in params) {
-      payload.quotaLimitTokens = params.quotaLimitTokens ?? null;
-    }
-    return invoke("service_apikey_update_model", withAddr(payload));
-  },
+  updateApiKey: (keyId: string, params: ApiKeyPayload) =>
+    invoke(
+      "service_apikey_update_model",
+      withAddr(buildApiKeyUpdateInvokePayload(keyId, params)),
+    ),
   disableApiKey: (keyId: string) =>
     invoke("service_apikey_disable", withAddr({ keyId })),
   enableApiKey: (keyId: string) =>

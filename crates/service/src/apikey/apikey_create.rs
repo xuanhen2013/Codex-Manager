@@ -86,11 +86,13 @@ pub(crate) fn create_api_key(
     rotation_strategy: Option<String>,
     aggregate_api_id: Option<String>,
     account_plan_filter: Option<String>,
+    account_group_filter: Option<String>,
     quota_limit_tokens: Option<i64>,
     custom_key: Option<String>,
 ) -> Result<ApiKeyCreateResult, String> {
     // 创建平台 Key 并写入存储
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    crate::models_v2::ensure_text_generation_model(&storage, model_slug.as_deref())?;
     let key = resolve_platform_key(&storage, custom_key)?;
     let key_hash = hash_platform_key(&key);
     let key_id = generate_key_id();
@@ -115,6 +117,13 @@ pub(crate) fn create_api_key(
     } else {
         None
     };
+    let account_group_filter = if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
+        || rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+    {
+        crate::account_group::normalize_account_group_filter(account_group_filter)
+    } else {
+        None
+    };
     let record = ApiKey {
         id: key_id.clone(),
         name,
@@ -136,6 +145,14 @@ pub(crate) fn create_api_key(
         last_used_at: None,
     };
     storage.insert_api_key(&record).map_err(|e| e.to_string())?;
+    if let Err(err) =
+        storage.update_api_key_account_group_filter(&key_id, account_group_filter.as_deref())
+    {
+        let _ = storage.delete_api_key(&key_id);
+        return Err(format!(
+            "persist api key account group filter failed: {err}"
+        ));
+    }
     if let Err(err) = storage.upsert_api_key_quota_limit(&key_id, quota_limit_tokens) {
         let _ = storage.delete_api_key(&key_id);
         return Err(format!("persist api key quota limit failed: {err}"));

@@ -90,7 +90,14 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
       rpcMethod: "dashboard/adminUsageSummary",
       mapParams: (params) => {
         const source = asRecord(params) ?? {};
-        return { startTs: source.start_ts ?? source.startTs, endTs: source.end_ts ?? source.endTs };
+        return {
+          startTs: source.start_ts ?? source.startTs,
+          endTs: source.end_ts ?? source.endTs,
+          includeBreakdowns: source.include_breakdowns ?? source.includeBreakdowns,
+          includeSeries: source.include_series ?? source.includeSeries,
+          seriesBucketSeconds:
+            source.series_bucket_seconds ?? source.seriesBucketSeconds,
+        };
       },
     },
     service_dashboard_member_summary: {
@@ -108,8 +115,8 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
     service_usage_read: { rpcMethod: "account/usage/read" },
     service_usage_list: { rpcMethod: "account/usage/list" },
     service_usage_refresh: { rpcMethod: "account/usage/refresh" },
+    service_usage_reset_credits: { rpcMethod: "account/usage/resetCredits" },
+    service_usage_reset_credit_consume: { rpcMethod: "account/usage/resetCredit/consume" },
     service_usage_aggregate: { rpcMethod: "account/usage/aggregate" },
-    service_usage_reset_credits_read: { rpcMethod: "account/usage/resetCredits/read" },
-    service_usage_reset_credits_consume: { rpcMethod: "account/usage/resetCredits/consume" },
   };
 }

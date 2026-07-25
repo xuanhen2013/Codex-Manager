@@ -11,10 +11,12 @@ mod account_proxy_settings;
 mod account_subscriptions;
 mod accounts;
 mod accounts_sql;
+mod agent_identities;
 mod aggregate_apis;
 mod aggregate_apis_sql;
 mod api_key_quota_limits;
 mod api_keys;
+mod codex_skill_repositories;
 mod conversation_bindings;
 mod events;
 mod key_id_filters;
@@ -40,7 +42,8 @@ pub use model_billing_v2::{
     ChargeComputationV2, ChargeSnapshotInputV2, ChargeSnapshotV2, ModelPriceTierV2,
 };
 pub use model_catalog_v2::{
-    ManagedModelV2, ManagedModelV2Upsert, ModelCatalogV2Stats, ModelPriceV2, ModelRouteV2,
+    ManagedModelBatchStateV2Update, ManagedModelStateV2Update, ManagedModelV2,
+    ManagedModelV2Upsert, ModelCatalogV2Stats, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
 
@@ -54,6 +57,20 @@ pub struct Account {
     pub group_name: Option<String>,
     pub sort: i64,
     pub status: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountAgentIdentity {
+    pub account_id: String,
+    pub agent_runtime_id: String,
+    pub agent_private_key: String,
+    pub task_id: Option<String>,
+    pub chatgpt_user_id: String,
+    pub chatgpt_account_is_fedramp: bool,
+    pub auth_mode: String,
+    pub workspace_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -620,6 +637,36 @@ fn update_login_session_code_verifier_sql() -> &'static str {
     "UPDATE login_sessions SET code_verifier = ?1, updated_at = ?2 WHERE login_id = ?3"
 }
 
+fn claim_login_session_for_completion_sql() -> &'static str {
+    "UPDATE login_sessions
+     SET status = 'completing', error = NULL, updated_at = ?1
+     WHERE login_id = ?2 AND status = 'pending'"
+}
+
+fn finish_login_session_sql() -> &'static str {
+    "UPDATE login_sessions
+     SET status = ?1, error = ?2, code_verifier = '', updated_at = ?3
+     WHERE login_id = ?4 AND status IN ('pending', 'completing')"
+}
+
+fn fail_pending_login_session_sql() -> &'static str {
+    "UPDATE login_sessions
+     SET status = 'failed', error = ?1, code_verifier = '', updated_at = ?2
+     WHERE login_id = ?3 AND status = 'pending'"
+}
+
+fn cancel_login_session_sql() -> &'static str {
+    "UPDATE login_sessions
+     SET status = 'cancelled', error = NULL, code_verifier = '', updated_at = ?1
+     WHERE login_id = ?2 AND status = 'pending'"
+}
+
+fn update_login_session_code_verifier_if_pending_sql() -> &'static str {
+    "UPDATE login_sessions
+     SET code_verifier = ?1, updated_at = ?2
+     WHERE login_id = ?3 AND status = 'pending'"
+}
+
 #[derive(Debug, Clone)]
 pub struct UsageSnapshotRecord {
     pub account_id: String,
@@ -702,6 +749,50 @@ pub struct ConversationBinding {
     pub created_at: i64,
     pub updated_at: i64,
     pub last_used_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSkillRepositoryRecord {
+    pub id: String,
+    pub owner: String,
+    pub repository: String,
+    pub ref_name: String,
+    pub enabled: bool,
+    pub is_builtin: bool,
+    pub revision: Option<String>,
+    pub last_scanned_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSkillRepositoryUpsert {
+    pub id: String,
+    pub owner: String,
+    pub repository: String,
+    pub ref_name: String,
+    pub enabled: bool,
+    pub is_builtin: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSkillRepositorySkillRecord {
+    pub repository_id: String,
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub source_url: String,
+    pub revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexSkillRepositoryCatalogSnapshot {
+    pub repositories: Vec<CodexSkillRepositoryRecord>,
+    pub skills: Vec<CodexSkillRepositorySkillRecord>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -841,6 +932,14 @@ pub struct TokenUsageRollup {
 pub struct DailyTokenUsageRollup {
     pub day_start_ts: i64,
     pub day_end_ts: i64,
+    pub usage: TokenUsageRollup,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModelTokenUsageRollup {
+    pub bucket_start_ts: i64,
+    pub bucket_end_ts: i64,
+    pub model: String,
     pub usage: TokenUsageRollup,
 }
 
@@ -1124,6 +1223,7 @@ pub struct ApiKeyListSummary {
     pub rotation_strategy: String,
     pub aggregate_api_id: Option<String>,
     pub account_plan_filter: Option<String>,
+    pub account_group_filter: Option<String>,
     pub aggregate_api_url: Option<String>,
     pub client_type: String,
     pub protocol_type: String,
@@ -2137,7 +2237,22 @@ impl Storage {
             include_str!("../../migrations/120_proxy_history.sql"),
             |s| s.ensure_proxy_history_tables(),
         )?;
+        self.apply_gpt56_official_pricing_migration()?;
+        self.apply_sql_migration(
+            "122_account_agent_identities",
+            include_str!("../../migrations/122_account_agent_identities.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "123_api_keys_account_group_filter",
+            include_str!("../../migrations/123_api_keys_account_group_filter.sql"),
+            |s| s.ensure_api_key_account_group_filter_column(),
+        )?;
+        self.apply_sql_migration(
+            "124_codex_skill_repositories",
+            include_str!("../../migrations/124_codex_skill_repositories.sql"),
+        )?;
         self.ensure_api_key_rotation_columns()?;
+        self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;
         self.ensure_aggregate_api_secrets_table()?;
         self.ensure_aggregate_api_balance_secrets_table()?;
@@ -2355,6 +2470,66 @@ impl Storage {
             (code_verifier, now_ts(), login_id),
         )?;
         Ok(())
+    }
+
+    /// Atomically claims a pending login session for token/account persistence.
+    pub fn claim_login_session_for_completion(&self, login_id: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            claim_login_session_for_completion_sql(),
+            (now_ts(), login_id),
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Moves an active login session to a terminal state and clears its PKCE verifier.
+    ///
+    /// The guarded update prevents a late completion/error from overwriting a session
+    /// that has already been cancelled or otherwise completed.
+    pub fn finish_login_session(
+        &self,
+        login_id: &str,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            finish_login_session_sql(),
+            (status, error, now_ts(), login_id),
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Fails a session only before a completion worker has claimed ownership.
+    ///
+    /// OAuth error callbacks use this narrower transition so a second browser
+    /// callback cannot overwrite an in-flight successful completion.
+    pub fn fail_pending_login_session(&self, login_id: &str, error: Option<&str>) -> Result<bool> {
+        let changed = self.conn.execute(
+            fail_pending_login_session_sql(),
+            (error, now_ts(), login_id),
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Cancels a pending login session without racing a completion owner.
+    pub fn cancel_login_session(&self, login_id: &str) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute(cancel_login_session_sql(), (now_ts(), login_id))?;
+        Ok(changed == 1)
+    }
+
+    /// Stores a verifier returned by the Device Code endpoint only while the
+    /// session is still pending.
+    pub fn update_login_session_code_verifier_if_pending(
+        &self,
+        login_id: &str,
+        code_verifier: &str,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            update_login_session_code_verifier_if_pending_sql(),
+            (code_verifier, now_ts(), login_id),
+        )?;
+        Ok(changed == 1)
     }
 
     /// 函数 `ensure_column`

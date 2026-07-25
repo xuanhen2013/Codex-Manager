@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use super::key_id_filters::{PairedKeyIdSqlFilter, TempKeyIdFilter};
 use super::{
     now_ts, ApiKeyModelTokenUsageSummary, ApiKeyTokenUsageSummary, DailyTokenUsageRollup,
-    MemberDashboardUsageBreakdownSnapshot, RequestLogQuerySummary, RequestLogTodaySummary,
-    RequestTokenStat, SourceTokenUsageRollup, Storage, TokenUsageRollup, TokenUsageSummary,
-    UserTokenUsageRollup,
+    MemberDashboardUsageBreakdownSnapshot, ModelTokenUsageRollup, RequestLogQuerySummary,
+    RequestLogTodaySummary, RequestTokenStat, SourceTokenUsageRollup, Storage, TokenUsageRollup,
+    TokenUsageSummary, UserTokenUsageRollup,
 };
 
 const DEFAULT_REQUEST_TOKEN_STATS_RETAIN_DAYS: i64 = 14;
@@ -372,6 +372,24 @@ fn request_token_stats_daily_rollup_sql(raw: &str, hourly: &str) -> String {
          FROM combined
          GROUP BY bucket_start
          ORDER BY bucket_start ASC"
+    )
+}
+
+fn request_token_stats_model_timeline_sql(raw: &str, hourly: &str) -> String {
+    format!(
+        "WITH combined AS (
+            {raw}
+            UNION ALL
+            {hourly}
+         )
+         SELECT
+            bucket_start,
+            MIN(bucket_start + ?3, ?2) AS bucket_end,
+            normalized_model,
+            {COMBINED_ROLLUP_COLUMNS}
+         FROM combined
+         GROUP BY bucket_start, normalized_model
+         ORDER BY bucket_start ASC, total_tokens DESC, normalized_model ASC"
     )
 }
 fn request_token_stats_by_user_rollup_sql(raw: &str, hourly: &str, limit_clause: &str) -> String {
@@ -1305,6 +1323,45 @@ impl Storage {
                 day_start_ts,
                 day_end_ts,
                 usage,
+            });
+        }
+        Ok(items)
+    }
+
+    pub fn summarize_request_token_stats_by_model_timeline(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+        bucket_seconds: i64,
+    ) -> Result<Vec<ModelTokenUsageRollup>> {
+        if end_ts <= start_ts {
+            return Ok(Vec::new());
+        }
+        let bucket_seconds = bucket_seconds.max(1);
+        let raw = raw_token_rollup_select(
+            "?1 + CAST((t.created_at - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,
+             COALESCE(NULLIF(TRIM(t.model), ''), 'unknown') AS normalized_model,",
+            "t.created_at >= ?1 AND t.created_at < ?2",
+            "GROUP BY bucket_start, normalized_model",
+            false,
+        );
+        let hourly = hourly_token_rollup_select(
+            "?1 + CAST((h.bucket_start - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,
+             COALESCE(NULLIF(TRIM(h.model), ''), 'unknown') AS normalized_model,",
+            hourly_rollup_range_clause(),
+            "GROUP BY bucket_start, normalized_model",
+        );
+        let sql = request_token_stats_model_timeline_sql(&raw, &hourly);
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![start_ts, end_ts, bucket_seconds])?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next()? {
+            items.push(ModelTokenUsageRollup {
+                bucket_start_ts: row.get(0)?,
+                bucket_end_ts: row.get(1)?,
+                model: row.get(2)?,
+                usage: token_usage_rollup_from_row(row, 3)?,
             });
         }
         Ok(items)

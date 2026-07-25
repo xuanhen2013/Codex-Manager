@@ -371,19 +371,45 @@ fn is_openai_text_generation_path(normalized_path: &str) -> bool {
         || normalized_path.starts_with("/v1/responses")
 }
 
-fn ensure_codex_image_tool_model_not_used_for_text_request(
+fn ensure_non_text_model_not_used_for_text_request(
+    storage: &codexmanager_core::storage::Storage,
     normalized_path: &str,
     model: Option<&str>,
 ) -> Result<(), LocalValidationError> {
-    if !is_openai_text_generation_path(normalized_path) || !is_codex_image_tool_model(model) {
+    if !is_openai_text_generation_path(normalized_path) {
+        return Ok(());
+    }
+
+    let Some(model_slug) = model.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+
+    if is_codex_image_tool_model(Some(model_slug)) {
+        return Err(LocalValidationError::new(
+            400,
+            crate::gateway::bilingual_error(
+                "gpt-image-2 只能用于图片接口",
+                "model gpt-image-2 is only supported on /v1/images/generations and /v1/images/edits",
+            ),
+        ));
+    }
+
+    let catalog_model = storage.get_managed_model_v2(model_slug).map_err(|err| {
+        LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+    })?;
+    if catalog_model
+        .as_ref()
+        .is_none_or(crate::models_v2::supports_text_generation)
+    {
+        // Unknown slugs remain compatible with external or not-yet-cataloged models.
         return Ok(());
     }
 
     Err(LocalValidationError::new(
         400,
         crate::gateway::bilingual_error(
-            "gpt-image-2 只能用于图片接口",
-            "model gpt-image-2 is only supported on /v1/images/generations and /v1/images/edits",
+            format!("模型 {model_slug} 不支持文本生成"),
+            format!("model {model_slug} does not support text generation"),
         ),
     ))
 }
@@ -1782,6 +1808,17 @@ pub(super) fn build_local_validation_result(
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
+    let account_group_filter = storage
+        .find_api_key_account_group_filter(&api_key.id)
+        .map_err(|err| {
+            LocalValidationError::new(
+                500,
+                crate::gateway::bilingual_error(
+                    "读取 API Key 账号分组失败",
+                    format!("read api key account group filter failed: {err}"),
+                ),
+            )
+        })?;
     let normalized_path = super::super::normalize_models_path(request.url());
     if is_removed_openai_compat_request_path(normalized_path.as_str()) {
         return Err(LocalValidationError::new(
@@ -1860,12 +1897,15 @@ pub(super) fn build_local_validation_result(
         &incoming_headers,
         initial_request_meta.has_prompt_cache_key,
     );
-    ensure_codex_image_tool_model_not_used_for_text_request(
+    ensure_non_text_model_not_used_for_text_request(
+        &storage,
         logical_path.as_str(),
-        initial_request_meta
-            .model
-            .as_deref()
-            .or(api_key.model_slug.as_deref()),
+        initial_request_meta.model.as_deref(),
+    )?;
+    ensure_non_text_model_not_used_for_text_request(
+        &storage,
+        logical_path.as_str(),
+        api_key.model_slug.as_deref(),
     )?;
 
     if api_key.rotation_strategy == ROTATION_AGGREGATE_API {
@@ -1948,6 +1988,7 @@ pub(super) fn build_local_validation_result(
             protocol_type: effective_protocol_type.to_string(),
             rotation_strategy: ROTATION_AGGREGATE_API.to_string(),
             aggregate_api_id: api_key.aggregate_api_id,
+            account_group_filter: account_group_filter.clone(),
             account_plan_filter: api_key.account_plan_filter,
             response_adapter: maybe_wrap_compact_response_adapter(
                 logical_path.as_str(),
@@ -2315,6 +2356,7 @@ pub(super) fn build_local_validation_result(
         conversation_binding,
         rotation_strategy: api_key.rotation_strategy,
         aggregate_api_id: api_key.aggregate_api_id,
+        account_group_filter,
         account_plan_filter: api_key.account_plan_filter,
         client_model_for_log,
         model_for_log,

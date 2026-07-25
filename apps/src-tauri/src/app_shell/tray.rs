@@ -174,7 +174,9 @@ fn format_tray_reset_time(value: Option<i64>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_refresh_tray_menu_on_click_event, tray_usage_reset_labels};
+    use super::{
+        format_tray_reset_time, should_refresh_tray_menu_on_click_event, tray_usage_reset_labels,
+    };
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
     use tauri::Rect;
 
@@ -238,11 +240,24 @@ mod tests {
         assert_eq!(stale_labels.0, "5小时重置：暂无");
         assert_eq!(stale_labels.1, "7天重置：暂无");
 
-        let updated_labels = tray_usage_reset_labels(Some(1_700_000_000), Some(1_700_604_800));
+        let primary_resets_at = 1_700_000_000;
+        let secondary_resets_at = 1_700_604_800;
+        let updated_labels =
+            tray_usage_reset_labels(Some(primary_resets_at), Some(secondary_resets_at));
         assert_ne!(updated_labels, stale_labels);
-        assert!(updated_labels.0.starts_with("5小时重置："));
-        assert!(updated_labels.1.starts_with("7天重置："));
-        assert!(!updated_labels.0.ends_with("暂无"));
-        assert!(!updated_labels.1.ends_with("暂无"));
+        assert_eq!(
+            updated_labels.0,
+            format!(
+                "5小时重置：{}",
+                format_tray_reset_time(Some(primary_resets_at))
+            )
+        );
+        assert_eq!(
+            updated_labels.1,
+            format!(
+                "7天重置：{}",
+                format_tray_reset_time(Some(secondary_resets_at))
+            )
+        );
     }
 }

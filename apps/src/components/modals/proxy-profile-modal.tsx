@@ -45,6 +45,19 @@ interface ProxyProfileFormProps {
 
 type ProxyProtocol = "http" | "https" | "socks5";
 
+const PROXY_PROTOCOL_LABELS: Record<ProxyProtocol, string> = {
+  http: "HTTP 代理",
+  https: "HTTPS 代理",
+  socks5: "SOCKS5 代理",
+};
+
+function proxyProtocolLabel(
+  protocol: ProxyProtocol,
+  t: (message: string) => string,
+): string {
+  return t(PROXY_PROTOCOL_LABELS[protocol] || PROXY_PROTOCOL_LABELS.http);
+}
+
 function parseTagsInput(value: string): string | null {
   const items = value
     .split(/[,\n]/)
@@ -210,12 +223,22 @@ function ProxyProfileForm({
                   onValueChange={(value) => setProtocol(value as ProxyProtocol)}
                 >
                   <SelectTrigger className="w-[110px] rounded-xl bg-card/50">
-                    <SelectValue />
+                    <SelectValue>
+                      {(value) =>
+                        proxyProtocolLabel((value || "http") as ProxyProtocol, t)
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="http">HTTP</SelectItem>
-                    <SelectItem value="https">HTTPS</SelectItem>
-                    <SelectItem value="socks5">SOCKS5</SelectItem>
+                    <SelectItem value="http">
+                      {proxyProtocolLabel("http", t)}
+                    </SelectItem>
+                    <SelectItem value="https">
+                      {proxyProtocolLabel("https", t)}
+                    </SelectItem>
+                    <SelectItem value="socks5">
+                      {proxyProtocolLabel("socks5", t)}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <Input

@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 
 import { PageHeader, MetricCard, PageWorkspace } from "@/components/layout/page-workspace";
+import { BatchModelStateDropdown } from "@/components/models/batch-model-state-dropdown";
+import {
+  ModelStateDropdown,
+  type ModelStateTarget,
+} from "@/components/models/model-state-dropdown";
 import { BatchModelRoutesModal } from "@/components/modals/batch-model-routes-modal";
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { ModelCatalogModal } from "@/components/modals/model-catalog-modal";
@@ -70,6 +75,23 @@ type ModelFilter =
   | "route_missing"
   | "hidden";
 
+const MODEL_FILTER_LABELS: Record<ModelFilter, string> = {
+  all: "全部模型",
+  enabled: "已启用",
+  builtin: "内置模型",
+  custom: "自定义模型",
+  price_missing: "价格缺失",
+  route_missing: "路由缺失",
+  hidden: "已隐藏",
+};
+
+function modelFilterLabel(
+  filter: ModelFilter,
+  t: (message: string) => string,
+): string {
+  return t(MODEL_FILTER_LABELS[filter] || MODEL_FILTER_LABELS.all);
+}
+
 function enabledRouteCount(model: ManagedModelV2): number {
   return model.routes.filter((route) => route.enabled).length;
 }
@@ -93,6 +115,7 @@ const BUILTIN_MODEL_DESCRIPTION_KEYS: Record<string, string> = {
   "gpt-5.4": "适合日常编程的强大模型。",
   "gpt-5.4-mini": "适合简单编程任务的小型、快速且高性价比模型。",
   "gpt-5.2": "针对专业工作和长时间运行智能体优化的模型。",
+  "gpt-image-2": "先进的图像生成和编辑模型。",
   "codex-auto-review": "用于 Codex 自动审批审查的模型。",
 };
 
@@ -166,6 +189,8 @@ export default function ModelsPage() {
     isServiceReady,
     refreshLocal,
     saveModel,
+    updateModelState,
+    updateModelStates,
     deleteModel,
     deleteModels,
     assignModelRoutes,
@@ -175,12 +200,23 @@ export default function ModelsPage() {
     canExportCodexCache,
     isRefreshing,
     isSaving,
+    isUpdatingModelState,
+    isBatchUpdatingModelState,
+    updatingModelStateSlug,
     isDeleting,
     isAssigningRoutes,
     isImporting,
     isExporting,
   } = useManagedModels();
   usePageTransitionReady("/models/", !isServiceReady || !isLoading);
+  const isModelOperationPending =
+    isLoading ||
+    isRefreshing ||
+    isSaving ||
+    isDeleting ||
+    isAssigningRoutes ||
+    isImporting ||
+    isUpdatingModelState;
 
   const { data: aggregateApis = [] } = useQuery({
     queryKey: ["aggregate-apis"],
@@ -263,6 +299,19 @@ export default function ModelsPage() {
     setEditorOpen(true);
   };
 
+  const updateSelectedModelStates = async (target: ModelStateTarget) => {
+    const targets = [...selectedSlugs];
+    try {
+      const result = await updateModelStates({ slugs: targets, ...target });
+      const processed = new Set(result.map((model) => model.slug));
+      setSelectedSlugs((current) =>
+        current.filter((slug) => !processed.has(slug)),
+      );
+    } catch {
+      // The mutation already reports the normalized error and keeps selections.
+    }
+  };
+
   const confirmDeleteDescription = useMemo(() => {
     if (deleteSlugs.length === 0) return "";
     const builtinCount = deleteSlugs.filter(
@@ -271,11 +320,13 @@ export default function ModelsPage() {
     if (deleteSlugs.length === 1) {
       const model = models.find((item) => item.slug === deleteSlugs[0]);
       return model?.origin === "builtin"
-        ? t("内置模型 {slug} 将被禁用，数据不会删除。", { slug: model.slug })
+        ? t("内置模型 {slug} 将被隐藏并禁用，数据不会删除。", {
+            slug: model.slug,
+          })
         : t("确定要永久删除自定义模型 {slug} 吗？", { slug: deleteSlugs[0] });
     }
     return t(
-      "将处理 {count} 个模型：{builtin} 个内置模型会被禁用，其余自定义模型会被删除。",
+      "将处理 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。",
       { count: deleteSlugs.length, builtin: builtinCount },
     );
   }, [deleteSlugs, models, t]);
@@ -291,14 +342,19 @@ export default function ModelsPage() {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!isServiceReady || isRefreshing}
+                disabled={!isServiceReady || isModelOperationPending}
                 onClick={() => void refreshLocal()}
               >
                 <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
                 {t("重新读取")}
               </Button>
               {isAdminMode ? (
-                <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={isModelOperationPending}
+                  onClick={() => setImportOpen(true)}
+                >
                   <FileJson className="mr-1.5 h-4 w-4" />
                   {t("从本地 JSON 导入")}
                 </Button>
@@ -313,7 +369,11 @@ export default function ModelsPage() {
                 {isExporting ? t("导出中...") : t("导出到本地 Codex 缓存")}
               </Button>
               {isAdminMode ? (
-                <Button size="sm" disabled={!isServiceReady} onClick={openNewModel}>
+                <Button
+                  size="sm"
+                  disabled={!isServiceReady || isModelOperationPending}
+                  onClick={openNewModel}
+                >
                   <Plus className="mr-1.5 h-4 w-4" />
                   {t("新增自定义模型")}
                 </Button>
@@ -355,16 +415,26 @@ export default function ModelsPage() {
                     className="h-9 pl-9"
                   />
                 </div>
-                <Select value={filter} onValueChange={(value) => setFilter((value || "all") as ModelFilter)}>
-                  <SelectTrigger className="h-9 w-[160px]"><SelectValue /></SelectTrigger>
+                <Select
+                  value={filter}
+                  onValueChange={(value) => setFilter((value || "all") as ModelFilter)}
+                >
+                  <SelectTrigger
+                    aria-label={t("筛选模型")}
+                    className="h-9 w-[160px]"
+                  >
+                    <SelectValue>
+                      {(value) =>
+                        modelFilterLabel((value || "all") as ModelFilter, t)
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
                   <SelectContent><SelectGroup>
-                    <SelectItem value="all">{t("全部模型")}</SelectItem>
-                    <SelectItem value="enabled">{t("已启用")}</SelectItem>
-                    <SelectItem value="builtin">{t("内置模型")}</SelectItem>
-                    <SelectItem value="custom">{t("自定义模型")}</SelectItem>
-                    <SelectItem value="price_missing">{t("价格缺失")}</SelectItem>
-                    <SelectItem value="route_missing">{t("路由缺失")}</SelectItem>
-                    <SelectItem value="hidden">{t("已隐藏")}</SelectItem>
+                    {(Object.keys(MODEL_FILTER_LABELS) as ModelFilter[]).map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {modelFilterLabel(option, t)}
+                      </SelectItem>
+                    ))}
                   </SelectGroup></SelectContent>
                 </Select>
                 {isAdminMode ? (
@@ -372,23 +442,33 @@ export default function ModelsPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      disabled={isAssigningRoutes || selectedSlugs.length === 0}
+                      disabled={
+                        isModelOperationPending || selectedSlugs.length === 0
+                      }
                       onClick={() => setBatchRoutesOpen(true)}
                     >
                       <GitBranch className="mr-1.5 h-4 w-4" />
                       {t("批量分配路由")} ({selectedSlugs.length})
                     </Button>
-                    {selectedSlugs.length > 0 ? (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={isDeleting}
-                        onClick={() => setDeleteSlugs(selectedSlugs)}
-                      >
-                        <Trash2 className="mr-1.5 h-4 w-4" />
-                        {t("批量删除模型")} ({selectedSlugs.length})
-                      </Button>
-                    ) : null}
+                    <BatchModelStateDropdown
+                      selectedCount={selectedSlugs.length}
+                      disabled={
+                        isModelOperationPending || selectedSlugs.length === 0
+                      }
+                      isUpdating={isBatchUpdatingModelState}
+                      onStateChange={updateSelectedModelStates}
+                    />
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={
+                        isModelOperationPending || selectedSlugs.length === 0
+                      }
+                      onClick={() => setDeleteSlugs(selectedSlugs)}
+                    >
+                      <Trash2 className="mr-1.5 h-4 w-4" />
+                      {t("批量删除模型")} ({selectedSlugs.length})
+                    </Button>
                   </>
                 ) : null}
               </div>
@@ -419,6 +499,7 @@ export default function ModelsPage() {
                         <TableHead className="w-10">
                           <Checkbox
                             aria-label={t("选择全部模型")}
+                            disabled={isModelOperationPending}
                             checked={allVisibleSelected}
                             onCheckedChange={(checked) => {
                               const visibleSlugs = filteredModels.map((model) => model.slug);
@@ -433,7 +514,7 @@ export default function ModelsPage() {
                       ) : null}
                       <TableHead>{t("模型")}</TableHead>
                       <TableHead>{t("来源")}</TableHead>
-                      <TableHead>{t("状态")}</TableHead>
+                      <TableHead className="min-w-[132px]">{t("状态")}</TableHead>
                       <TableHead>{t("价格")}</TableHead>
                       <TableHead>{t("指令")}</TableHead>
                       <TableHead>{t("路由")}</TableHead>
@@ -445,11 +526,12 @@ export default function ModelsPage() {
                       const routeCount = enabledRouteCount(model);
                       const description = modelDescription(model, t);
                       return (
-                        <TableRow key={model.id || model.slug} className={!model.enabled ? "opacity-60" : undefined}>
+                        <TableRow key={model.id || model.slug}>
                           {isAdminMode ? (
                             <TableCell>
                               <Checkbox
                                 aria-label={t("选择模型 {slug}", { slug: model.slug })}
+                                disabled={isModelOperationPending}
                                 checked={selectedSlugs.includes(model.slug)}
                                 onCheckedChange={(checked) =>
                                   setSelectedSlugs((current) =>
@@ -473,7 +555,24 @@ export default function ModelsPage() {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={model.enabled ? "default" : "outline"}>{model.enabled ? t("已启用") : t("已禁用")}</Badge>
+                            {isAdminMode ? (
+                              <ModelStateDropdown
+                                model={model}
+                                disabled={!isServiceReady || isModelOperationPending}
+                                isUpdating={
+                                  isUpdatingModelState &&
+                                  updatingModelStateSlug === model.slug
+                                }
+                                onStateChange={(target) =>
+                                  void updateModelState({
+                                    model,
+                                    ...target,
+                                  })
+                                }
+                              />
+                            ) : (
+                              <Badge variant={model.enabled ? "default" : "outline"}>{model.enabled ? t("已启用") : t("已禁用")}</Badge>
+                            )}
                           </TableCell>
                           <TableCell><PriceBadge model={model} /></TableCell>
                           <TableCell><Badge variant="outline">{instructionsModeLabel(model.instructionsMode, t)}</Badge></TableCell>
@@ -481,7 +580,7 @@ export default function ModelsPage() {
                             {routeCount > 0 ? (
                               <div className="space-y-1">
                                 <Badge variant="secondary">{t("{count} 条路由", { count: routeCount })}</Badge>
-                                <div className="max-w-[220px] truncate font-mono text-[10px] text-muted-foreground">
+                                <div className="max-w-[220px] truncate text-xs text-muted-foreground">
                                   {model.routes.filter((route) => route.enabled).map((route) => routeSourceLabel(route.sourceKind, route.sourceId, t)).join("，")}
                                 </div>
                               </div>
@@ -492,10 +591,10 @@ export default function ModelsPage() {
                           {isAdminMode ? (
                             <TableCell>
                               <div className="flex justify-end gap-1">
-                                <Button type="button" variant="ghost" size="icon" aria-label={t("编辑模型 {slug}", { slug: model.slug })} onClick={() => openEditor(model.slug)}>
+                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={t("编辑模型 {slug}", { slug: model.slug })} onClick={() => openEditor(model.slug)}>
                                   <PencilLine className="h-4 w-4" />
                                 </Button>
-                                <Button type="button" variant="ghost" size="icon" aria-label={model.origin === "builtin" ? t("禁用模型 {slug}", { slug: model.slug }) : t("删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
+                                <Button type="button" variant="ghost" size="icon" disabled={isModelOperationPending} aria-label={model.origin === "builtin" ? t("隐藏模型 {slug}", { slug: model.slug }) : t("删除模型 {slug}", { slug: model.slug })} onClick={() => setDeleteSlugs([model.slug])}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                               </div>
@@ -559,19 +658,25 @@ export default function ModelsPage() {
           description={confirmDeleteDescription}
           confirmText={isDeleting ? t("处理中...") : t("删除")}
           confirmVariant="destructive"
-          onConfirm={() => {
+          onConfirm={async () => {
             const targets = [...deleteSlugs];
             if (targets.length === 1) {
-              void deleteModel(targets[0]).then(() => {
+              const succeeded = await deleteModel(targets[0]);
+              if (succeeded) {
                 setSelectedSlugs((current) => current.filter((slug) => slug !== targets[0]));
-                setDeleteSlugs([]);
-              });
-              return;
+              }
+              return succeeded;
             }
-            void deleteModels(targets).then((result) => {
-              setSelectedSlugs((current) => current.filter((slug) => !result.deleted.includes(slug)));
-              setDeleteSlugs([]);
-            });
+            const result = await deleteModels(targets);
+            const processed = new Set([...result.hidden, ...result.deleted]);
+            setSelectedSlugs((current) =>
+              current.filter((slug) => !processed.has(slug)),
+            );
+            if (result.failed.length > 0) {
+              setDeleteSlugs(result.failed.map((item) => item.slug));
+              return false;
+            }
+            return processed.size > 0;
           }}
         />
       ) : null}

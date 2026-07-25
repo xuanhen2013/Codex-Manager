@@ -181,6 +181,92 @@ fn spawn_recording_http_proxy(
     (format!("http://{proxy_addr}"), request_rx, handle)
 }
 
+fn spawn_delayed_success_server() -> (
+    String,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    thread::JoinHandle<()>,
+) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed response server");
+    let server_addr = listener.local_addr().expect("delayed response server addr");
+    let (headers_sent_tx, headers_sent_rx) = std::sync::mpsc::channel();
+    let (release_body_tx, release_body_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut client, _) = listener.accept().expect("accept delayed response client");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set delayed response read timeout");
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = client
+                .read(&mut buf)
+                .expect("read delayed response request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+        }
+        client
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{",
+            )
+            .expect("write delayed response headers");
+        client.flush().expect("flush delayed response headers");
+        headers_sent_tx.send(()).expect("signal response headers");
+        release_body_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait to release response body");
+        client
+            .write_all(b"\"ok\":true}")
+            .expect("write delayed response body");
+        client.flush().expect("flush delayed response body");
+    });
+    (
+        format!("http://{server_addr}"),
+        headers_sent_rx,
+        release_body_tx,
+        handle,
+    )
+}
+
+fn spawn_truncated_success_server() -> (String, thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind truncated response server");
+    let server_addr = listener
+        .local_addr()
+        .expect("truncated response server addr");
+    let handle = thread::spawn(move || {
+        let (mut client, _) = listener.accept().expect("accept truncated response client");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set truncated response read timeout");
+        let mut request = Vec::new();
+        let mut buf = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = client
+                .read(&mut buf)
+                .expect("read truncated response request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buf[..read]);
+        }
+        client
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{",
+            )
+            .expect("write truncated response");
+        client.flush().expect("flush truncated response");
+    });
+    (format!("http://{server_addr}"), handle)
+}
+
 fn spawn_timeout_recording_http_proxy(
     response_body: &'static str,
     content_type: &'static str,
@@ -710,7 +796,7 @@ fn usage_http_default_headers_follow_gateway_runtime_profile() {
 /// 无
 #[test]
 fn usage_request_headers_use_official_chatgpt_account_header_name() {
-    let headers = build_usage_request_headers(Some("workspace_123"));
+    let headers = build_usage_request_headers(Some("workspace_123"), false);
 
     assert_eq!(
         headers
@@ -722,136 +808,65 @@ fn usage_request_headers_use_official_chatgpt_account_header_name() {
 }
 
 #[test]
-fn reset_credits_request_uses_account_scope_and_codex_desktop_headers() {
-    let (_guard, _restore) = usage_header_runtime_scope();
-    let server = Server::http("127.0.0.1:0").expect("start reset credits server");
-    let addr = format!("http://{}", server.server_addr());
-    let handle = thread::spawn(move || {
-        let request = server
-            .recv_timeout(Duration::from_secs(5))
-            .expect("reset credits server timeout")
-            .expect("receive reset credits request");
-        assert_eq!(request.method().as_str(), "GET");
-        assert_eq!(request.url(), "/api/codex/rate-limit-reset-credits");
-        let header = |name: &'static str| {
-            request
-                .headers()
-                .iter()
-                .find(|header| header.field.equiv(name))
-                .map(|header| header.value.as_str().to_string())
-        };
-        assert_eq!(
-            header("Authorization").as_deref(),
-            Some("Bearer access-token")
-        );
-        assert_eq!(header("ChatGPT-Account-ID").as_deref(), Some("workspace-1"));
-        assert_eq!(header("OpenAI-Beta").as_deref(), Some("codex-1"));
-        assert_eq!(header("Originator").as_deref(), Some("Codex Desktop"));
+fn usage_request_headers_include_fedramp_context_when_enabled() {
+    let headers = build_usage_request_headers(Some("workspace_123"), true);
 
-        request
-            .respond(
-                Response::from_string(r#"{"available_count":1,"credits":[]}"#)
-                    .with_status_code(TinyStatusCode(200))
-                    .with_header(
-                        Header::from_bytes("Content-Type", "application/json")
-                            .expect("content-type header"),
-                    ),
-            )
-            .expect("respond reset credits request");
-    });
-
-    let payload = super::fetch_usage_reset_credits(&addr, "access-token", Some("workspace-1"))
-        .expect("fetch reset credits");
-    assert_eq!(payload["available_count"], 1);
-    handle.join().expect("join reset credits server");
-}
-
-#[test]
-fn reset_credit_consume_posts_redeem_request_id() {
-    let (_guard, _restore) = usage_header_runtime_scope();
-    let server = Server::http("127.0.0.1:0").expect("start consume reset credit server");
-    let addr = format!("http://{}", server.server_addr());
-    let handle = thread::spawn(move || {
-        let mut request = server
-            .recv_timeout(Duration::from_secs(5))
-            .expect("consume reset credit server timeout")
-            .expect("receive consume reset credit request");
-        assert_eq!(request.method().as_str(), "POST");
-        assert_eq!(request.url(), "/api/codex/rate-limit-reset-credits/consume");
-        let mut body = String::new();
-        request
-            .as_reader()
-            .read_to_string(&mut body)
-            .expect("read consume body");
-        let payload: serde_json::Value = serde_json::from_str(&body).expect("parse consume body");
-        assert_eq!(payload["redeem_request_id"], "redeem-1");
-        request
-            .respond(Response::empty(TinyStatusCode(204)))
-            .expect("respond consume reset credit request");
-    });
-
-    super::consume_usage_reset_credit(&addr, "access-token", Some("workspace-1"), "redeem-1")
-        .expect("consume reset credit");
-    handle.join().expect("join consume reset credit server");
-}
-
-#[test]
-fn reset_credits_with_explicit_proxy_uses_account_proxy() {
-    let _guard = crate::test_env_guard();
-    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
-    super::reload_usage_http_client_from_env();
-    let (proxy_url, request_rx, proxy_handle) =
-        spawn_recording_http_proxy(r#"{"available_count":1,"credits":[]}"#, "application/json");
-
-    let payload = super::fetch_usage_reset_credits_with_explicit_proxy(
-        "http://chatgpt.test",
-        "access-token",
-        Some("workspace-1"),
-        proxy_url.as_str(),
-    )
-    .expect("fetch reset credits through account proxy");
-    let request = request_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("capture reset credits proxy request")
-        .to_ascii_lowercase();
-    proxy_handle.join().expect("join reset credits proxy");
-
-    assert!(request.starts_with("get http://chatgpt.test/api/codex/rate-limit-reset-credits"));
-    assert!(request.contains("authorization: bearer access-token"));
-    assert!(request.contains("chatgpt-account-id: workspace-1"));
-    assert!(request.contains("openai-beta: codex-1"));
-    assert_eq!(payload["available_count"], 1);
-}
-
-#[test]
-fn reset_credit_consume_with_explicit_proxy_uses_account_proxy() {
-    let _guard = crate::test_env_guard();
-    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
-    super::reload_usage_http_client_from_env();
-    let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy("", "application/json");
-
-    super::consume_usage_reset_credit_with_explicit_proxy(
-        "http://chatgpt.test",
-        "access-token",
-        Some("workspace-1"),
-        "redeem-1",
-        proxy_url.as_str(),
-    )
-    .expect("consume reset credit through account proxy");
-    let request = request_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("capture consume reset credit proxy request")
-        .to_ascii_lowercase();
-    proxy_handle
-        .join()
-        .expect("join consume reset credit proxy");
-
-    assert!(
-        request.starts_with("post http://chatgpt.test/api/codex/rate-limit-reset-credits/consume")
+    assert_eq!(
+        headers
+            .get("x-openai-fedramp")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
     );
-    assert!(request.contains("authorization: bearer access-token"));
-    assert!(request.contains("chatgpt-account-id: workspace-1"));
-    assert!(request.contains("openai-beta: codex-1"));
+    assert_eq!(headers.len(), 2);
+}
+
+#[test]
+fn reset_credit_headers_follow_configured_usage_origin() {
+    let cases = [
+        (
+            "https://chat.openai.com/backend-api",
+            "https://chat.openai.com",
+            "https://chat.openai.com/",
+        ),
+        (
+            "http://127.0.0.1:58438/backend-api",
+            "http://127.0.0.1:58438",
+            "http://127.0.0.1:58438/",
+        ),
+    ];
+
+    for (base_url, expected_origin, expected_referer) in cases {
+        let headers = super::reset_credit_request_headers(base_url, Some("workspace_123"))
+            .expect("build reset credit headers");
+        assert_eq!(
+            headers
+                .get(reqwest::header::ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_origin)
+        );
+        assert_eq!(
+            headers
+                .get(reqwest::header::REFERER)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_referer)
+        );
+        assert_eq!(
+            headers
+                .get(CHATGPT_ACCOUNT_ID_HEADER_NAME)
+                .and_then(|value| value.to_str().ok()),
+            Some("workspace_123")
+        );
+    }
+}
+
+#[test]
+fn reset_credit_headers_reject_unsupported_scheme() {
+    let error = super::reset_credit_request_headers("file:///tmp/chatgpt", None)
+        .expect_err("file URL must be rejected");
+
+    assert!(error
+        .message
+        .contains("unsupported reset credit URL scheme: file"));
 }
 
 /// 函数 `subscription_request_uses_only_authorization_without_custom_usage_headers`
@@ -1119,6 +1134,153 @@ fn fetch_usage_snapshot_with_explicit_proxy_uses_explicit_proxy_before_global_pr
 }
 
 #[test]
+fn fetch_usage_snapshot_preserves_agent_assertion_authorization() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    super::reload_usage_http_client_from_env();
+    let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
+        r#"{"gpt4":{"usedPercent":8.0,"windowMinutes":180}}"#,
+        "application/json",
+    );
+
+    let snapshot = super::fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
+        "http://chatgpt.test",
+        "AgentAssertion encoded-value",
+        Some("workspace-agent"),
+        true,
+        proxy_url.as_str(),
+    )
+    .expect("fetch agent identity usage snapshot");
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("capture agent identity usage request");
+    proxy_handle
+        .join()
+        .expect("join agent identity usage proxy");
+    let request = request.to_ascii_lowercase();
+
+    assert!(request.contains("authorization: agentassertion encoded-value"));
+    assert!(request.contains("chatgpt-account-id: workspace-agent"));
+    assert!(request.contains("x-openai-fedramp: true"));
+    assert_eq!(snapshot["gpt4"]["usedPercent"], 8.0);
+}
+
+#[test]
+fn fetch_reset_credits_with_explicit_proxy_uses_account_route_and_dynamic_headers() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
+    super::reload_usage_http_client_from_env();
+    let (proxy_url, request_rx, proxy_handle) = spawn_recording_http_proxy(
+        r#"{"credits":[{"id":"credit-1","status":"available"}]}"#,
+        "application/json",
+    );
+
+    let snapshot = super::fetch_reset_credits_snapshot_with_explicit_proxy(
+        "http://chatgpt.test/backend-api",
+        "token_123",
+        Some("workspace_123"),
+        proxy_url.as_str(),
+    )
+    .expect("fetch reset credits");
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("capture reset credit proxy request");
+    proxy_handle.join().expect("join reset credit proxy");
+    let request = request.to_ascii_lowercase();
+
+    assert!(
+        request.starts_with("get http://chatgpt.test/backend-api/wham/rate-limit-reset-credits")
+    );
+    assert!(request.contains("authorization: bearer token_123"));
+    assert!(request.contains("chatgpt-account-id: workspace_123"));
+    assert!(request.contains("origin: http://chatgpt.test"));
+    assert!(request.contains("referer: http://chatgpt.test/"));
+    assert_eq!(snapshot.available_count, Some(1));
+}
+
+#[test]
+fn consume_reset_credit_with_explicit_proxy_uses_account_route() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
+    super::reload_usage_http_client_from_env();
+    let (proxy_url, request_rx, proxy_handle) =
+        spawn_recording_http_proxy(r#"{"ok":true}"#, "application/json");
+
+    super::consume_reset_credit_request_with_explicit_proxy(
+        "http://chatgpt.test/backend-api",
+        "token_123",
+        Some("workspace_123"),
+        "redeem-request-123",
+        proxy_url.as_str(),
+    )
+    .expect("consume reset credit");
+    let request = request_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("capture reset credit consume proxy request");
+    proxy_handle
+        .join()
+        .expect("join reset credit consume proxy");
+    let request = request.to_ascii_lowercase();
+
+    assert!(request
+        .starts_with("post http://chatgpt.test/backend-api/wham/rate-limit-reset-credits/consume"));
+    assert!(request.contains("authorization: bearer token_123"));
+    assert!(request.contains("chatgpt-account-id: workspace_123"));
+    assert!(request.contains("origin: http://chatgpt.test"));
+}
+
+#[test]
+fn consume_reset_credit_waits_for_success_response_body() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    super::reload_usage_http_client_from_env();
+    let (base_url, headers_sent_rx, release_body_tx, server_handle) =
+        spawn_delayed_success_server();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let client_handle = thread::spawn(move || {
+        result_tx
+            .send(super::consume_reset_credit_request(
+                &base_url,
+                "token_123",
+                Some("workspace_123"),
+                "redeem-request-123",
+            ))
+            .expect("send consume result");
+    });
+
+    headers_sent_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("receive response header signal");
+    assert!(result_rx.recv_timeout(Duration::from_millis(150)).is_err());
+    release_body_tx.send(()).expect("release response body");
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("receive consume result")
+        .expect("consume reset credit");
+    client_handle.join().expect("join consume client");
+    server_handle.join().expect("join delayed response server");
+}
+
+#[test]
+fn success_body_read_failure_does_not_reclassify_redeem_as_failed() {
+    let _guard = crate::test_env_guard();
+    let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    super::reload_usage_http_client_from_env();
+    let (base_url, server_handle) = spawn_truncated_success_server();
+
+    super::consume_reset_credit_request(
+        &base_url,
+        "token_123",
+        Some("workspace_123"),
+        "redeem-request-123",
+    )
+    .expect("2xx status already confirms redeem success");
+    server_handle
+        .join()
+        .expect("join truncated response server");
+}
+
+#[test]
 fn fetch_account_subscription_with_explicit_proxy_uses_explicit_proxy_before_global_proxy() {
     let _guard = crate::test_env_guard();
     let _global_proxy = EnvVarRestore::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "http://127.0.0.1:1");
@@ -1337,6 +1499,36 @@ fn summarize_usage_error_response_stabilizes_html_and_debug_headers() {
     assert!(summary.contains("cf-ray: cf_usage_123"));
     assert!(summary.contains("auth error: missing_authorization_header"));
     assert!(summary.contains("identity error code: token_expired"));
+}
+
+#[test]
+fn summarize_usage_error_response_redacts_invalid_agent_task_details() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-openai-authorization-error",
+        HeaderValue::from_static("task-secret-from-header"),
+    );
+    headers.insert(
+        "x-error-json",
+        HeaderValue::from_static(
+            "{\"details\":{\"identity_error_code\":\"task-secret-from-identity-header\"}}",
+        ),
+    );
+
+    let summary = summarize_usage_error_response(
+        StatusCode::UNAUTHORIZED,
+        &headers,
+        r#"{"error":{"code":"task_expired","message":"task-secret-from-body"}}"#,
+        false,
+    );
+
+    assert!(summary.contains("invalid_task_id"));
+    assert!(crate::agent_identity::is_agent_identity_task_invalid_error(
+        &summary
+    ));
+    assert!(!summary.contains("task-secret-from-body"));
+    assert!(!summary.contains("task-secret-from-header"));
+    assert!(!summary.contains("task-secret-from-identity-header"));
 }
 
 /// 函数 `summarize_usage_error_response_accepts_raw_error_json_header`

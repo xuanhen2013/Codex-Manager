@@ -98,6 +98,18 @@ export interface ManagedModelV2Upsert {
   model: ManagedModelV2;
 }
 
+export interface ManagedModelStateV2Update {
+  slug: string;
+  enabled: boolean;
+  visibility: ModelVisibilityV2;
+}
+
+export interface ManagedModelBatchStateV2Update {
+  slugs: string[];
+  enabled: boolean;
+  visibility: ModelVisibilityV2;
+}
+
 export interface ManagedModelImportV2Params {
   jsonContent: string;
   conflictStrategy: ManagedModelImportConflictStrategyV2;

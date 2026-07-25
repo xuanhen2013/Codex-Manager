@@ -12,14 +12,27 @@ import { EN_MODEL_CATALOG_MESSAGES } from "./sections/en-model-catalog";
 import { EN_MODEL_GROUPS_MESSAGES } from "./sections/en-model-groups";
 import { EN_MODELS_MESSAGES } from "./sections/en-models";
 import { EN_PLATFORM_MODE_MESSAGES } from "./sections/en-platform-mode";
+import { EN_PROJECTS_MESSAGES } from "./sections/en-projects";
 import { EN_RUNTIME_UI_MESSAGES } from "./sections/en-runtime-ui";
+import { EN_SKILLS_MESSAGES } from "./sections/en-skills";
 
 export const EN_MESSAGES: MessageCatalog = {
+  ...EN_PROJECTS_MESSAGES,
+  ...EN_SKILLS_MESSAGES,
   "延迟测试设置": "Latency test settings",
   "速度测试设置": "Speed test settings",
   "下载预设": "Download preset",
   "上传预设": "Upload preset",
   "默认（所有大小）": "Default (all sizes)",
+  "100 kB（很小）": "100 kB (tiny)",
+  "1 MB（快速）": "1 MB (quick)",
+  "10 MB（标准）": "10 MB (standard)",
+  "25 MB（完整）": "25 MB (full)",
+  "50 MB（完整）": "50 MB (full)",
+  "选择预设": "Select preset",
+  "HTTP 代理": "HTTP proxy",
+  "HTTPS 代理": "HTTPS proxy",
+  "SOCKS5 代理": "SOCKS5 proxy",
   "Download determines how fast your network connection can get data from the test network. This is important when downloading large files such as updates for applications or streaming video services. Download speed is tested by downloading files of various sizes. The number reported represents the 90th percentile of download measurements and not the absolute maximum. Scroll down to view details.": "Download determines how fast your network connection can get data from the test network. This is important when downloading large files such as updates for applications or streaming video services. Download speed is tested by downloading files of various sizes. The number reported represents the 90th percentile of download measurements and not the absolute maximum.",
   "展开高级设置": "Expand advanced settings",
   "未配置上传测试接口。请在系统设置或环境变量中设置 CODEXMANAGER_PROXY_TEST_UPLOAD_URL。": "Upload test endpoint is not configured. Please set CODEXMANAGER_PROXY_TEST_UPLOAD_URL in system settings or environment variables.",
@@ -157,9 +170,20 @@ export const EN_MESSAGES: MessageCatalog = {
   "接入配置 · 请求观测": "Access Config · Request Observability",
   收起侧边栏: "Collapse Sidebar",
   展开侧边栏: "Expand Sidebar",
+  "关于 CodexManager": "About CodexManager",
+  "查看软件名称、功能简介和当前版本信息":
+    "View the app name, feature summary, and current version.",
+  "CodexManager 用于统一管理 Codex CLI 账号、本地网关、平台密钥、请求日志和用量统计，让 Codex 接入与运维更集中可控。":
+    "CodexManager centralizes Codex CLI accounts, the local gateway, platform keys, request logs, and usage analytics, making Codex access and operations easier to manage.",
   基础设置: "Basic settings",
   控制应用启动和窗口行为: "Control startup and window behavior.",
   自动检查更新: "Check updates automatically",
+  "启动完成后在后台检查更新，并每 7 小时检查一次":
+    "Check for updates in the background after startup, then every 7 hours.",
+  "检测到新版本，是否现在更新？":
+    "A new version is available. Would you like to update now?",
+  "更新包已准备完成，是否立即替换更新？":
+    "The update is ready. Would you like to apply it now?",
   启动时自动检测新版本: "Check for new versions on startup.",
   开机自动启动: "Launch at startup",
   系统登录后自动启动桌面端并保持网关可用:
@@ -167,6 +191,13 @@ export const EN_MESSAGES: MessageCatalog = {
   关闭时最小化到托盘: "Minimize to tray on close",
   点击关闭按钮不会直接退出程序:
     "Closing the window won't exit the app immediately.",
+  窗口界面资源常驻: "Keep window UI loaded",
+  "需先开启关闭时最小化到托盘，才能选择窗口关闭后的资源策略":
+    "Enable minimize to tray on close before choosing how window resources are handled.",
+  "快速唤醒：关闭后隐藏并保留界面，重开更快，但会占用更多内存":
+    "Fast reopen: hide and retain the interface on close for faster reopening, using more memory.",
+  "低资源：关闭后销毁界面，后台服务继续运行，重开时重新加载":
+    "Low resource: release the interface on close while the background service keeps running, then reload it when reopened.",
   视觉性能模式: "Visual performance mode",
   关闭毛玻璃等特效以提升低配电脑性能:
     "Disable blur and heavy effects for lower-end devices.",
@@ -507,6 +538,31 @@ export const EN_MESSAGES: MessageCatalog = {
     "Authorization completed, but the account list has not synced successfully yet.",
   开始登录授权: "start login authorization",
   设备验证码: "Device code",
+  登录方式: "Login method",
+  浏览器登录: "Browser login",
+  设备码登录: "Device code login",
+  "在任意设备打开验证页并输入验证码，验证码有效期为 15 分钟。":
+    "Open the verification page on any device and enter the code. The code is valid for 15 minutes.",
+  "在当前设备的浏览器中完成 ChatGPT 授权。":
+    "Complete ChatGPT authorization in this device's browser.",
+  重新开始授权: "Restart authorization",
+  生成设备验证码: "Generate device code",
+  复制验证码: "Copy code",
+  验证码已复制: "Code copied",
+  设备验证链接: "Device verification URL",
+  登录链接: "Login URL",
+  打开验证页: "Open verification page",
+  打开: "Open",
+  复制链接: "Copy link",
+  登录已取消: "Login cancelled",
+  "设备登录已过期，请重新生成验证码。":
+    "Device login expired. Please generate a new code.",
+  "服务返回了无效的登录任务，请重试。":
+    "The service returned an invalid login task. Please try again.",
+  "验证码有效期为 15 分钟，正在等待授权完成...":
+    "The code is valid for 15 minutes. Waiting for authorization...",
+  "授权已确认，正在完成登录...":
+    "Authorization confirmed. Finishing sign-in...",
   "正在等待授权完成...": "waiting for authorization...",
   "已生成设备登录信息，请按提示完成授权":
     "Device login info generated. Please complete authorization as prompted.",
@@ -824,6 +880,8 @@ export const EN_MESSAGES: MessageCatalog = {
     "Max duration allowed for a single upstream request (ms). Requests beyond this will be terminated with a timeout error.",
   "控制流式上游请求允许持续的最长时间，单位毫秒；填 0 可关闭流式超时上限。":
     "Max duration allowed for streaming upstream requests (ms). Set 0 to disable streaming timeout.",
+  "控制是否向下游补发 SSE keep-alive 帧；默认开启，关闭后不会发送连接心跳。":
+    "Controls whether downstream SSE keep-alive frames are sent. Enabled by default; when disabled, connection heartbeats are not sent.",
   "控制向下游补发 SSE keep-alive 帧的间隔，单位毫秒；上游长时间安静时可避免客户端误判连接中断。":
     "Interval for downstream SSE keep-alive frames (ms) to prevent clients from misjudging idle upstreams as disconnected.",
   "控制连接上游服务器时的超时时间，单位秒；主要影响握手和网络建立阶段。":
@@ -963,6 +1021,9 @@ export const EN_MESSAGES: MessageCatalog = {
   "确认卸载这个插件吗？": "Are you sure to uninstall this plugin?",
   任务间隔已更新: "Task interval updated",
   任务已执行: "Task executed",
+  保持连接心跳: "Keep connection heartbeat",
+  "开启后会按下方间隔向客户端发送 SSE 心跳，防止代理或网络链路因空闲断开。":
+    "When enabled, SSE heartbeats are sent to clients at the interval below to prevent idle disconnects by proxies or network links.",
   "上游代理 (Proxy)": "Upstream proxy (Proxy)",
   "上游总超时 (ms，0 为关闭)": "Upstream total timeout (ms, 0 to disable)",
   "上游流式空闲超时 (ms)": "Upstream stream idle timeout (ms)",
@@ -1071,6 +1132,9 @@ export const EN_MESSAGES: MessageCatalog = {
   "批量删除完成：成功{success}个，失败{failed}个":
     "Bulk delete finished: {success} succeeded, {failed} failed",
   账号用量已刷新: "Account usage refreshed",
+  "账号用量已刷新：{processed}/{total}":
+    "Account usage refreshed: {processed}/{total}",
+  "账号用量刷新未执行：{message}": "Account usage refresh was not run: {message}",
   "账号长期未登录，refresh 已过期，已改为不可用状态":
     "Account inactive for a long time; refresh expired and marked unavailable.",
   "正在等待服务连接。": "Waiting for service connection.",
@@ -1224,6 +1288,7 @@ export const EN_MESSAGES: MessageCatalog = {
   "Prompt 缓存 TTL（秒）": "Prompt cache TTL (s)",
   "Prompt 缓存清理间隔（秒）": "Prompt cache cleanup interval (s)",
   "Prompt 缓存容量": "Prompt cache capacity",
+  "启用 SSE 保活": "Enable SSE keepalive",
   "SSE 保活间隔（毫秒）": "SSE keepalive interval (ms)",
   "Trace 队列容量": "Trace queue capacity",
   "Trace Body 预览上限（字节）": "Trace body preview limit (bytes)",

@@ -1653,7 +1653,10 @@ fn api_key_daily_usage_combines_hourly_and_raw_stats_with_exclusive_end_boundary
         .expect("roll up first hour");
 
     let daily = storage
-        .summarize_request_token_stats_daily_for_key_boundaries(" key-history ", &[0, 86_400])
+        .summarize_request_token_stats_daily_for_key_boundaries(
+            " key-history ",
+            &[0, 86_400],
+        )
         .expect("summarize api key daily usage");
     assert_eq!(daily.len(), 1);
     assert_eq!(daily[0].day_start_ts, 0);
@@ -1673,16 +1676,67 @@ fn api_key_daily_usage_combines_hourly_and_raw_stats_with_exclusive_end_boundary
         )
         .expect("summarize variable day boundaries");
     assert_eq!(variable_days.len(), 2);
-    assert_eq!(
-        variable_days[1].day_end_ts - variable_days[1].day_start_ts,
-        82_800
-    );
+    assert_eq!(variable_days[1].day_end_ts - variable_days[1].day_start_ts, 82_800);
     assert_eq!(variable_days[1].usage.total_tokens, 999);
 
     assert!(storage
         .summarize_request_token_stats_daily_for_key_boundaries("key-history", &[86_400])
         .expect("empty boundaries")
         .is_empty());
+}
+
+#[test]
+fn model_usage_timeline_groups_raw_and_hourly_usage_by_bucket() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    for (model, total_tokens, status_code, created_at) in
+        [("gpt-5", 10, 200, 1_800), ("gpt-4.1", 20, 500, 5_400)]
+    {
+        storage
+            .insert_request_log_with_token_stat(
+                &RequestLog {
+                    request_path: "/v1/responses".to_string(),
+                    method: "POST".to_string(),
+                    model: Some(model.to_string()),
+                    status_code: Some(status_code),
+                    created_at,
+                    ..RequestLog::default()
+                },
+                &RequestTokenStat {
+                    model: Some(model.to_string()),
+                    total_tokens: Some(total_tokens),
+                    estimated_cost_usd: Some(total_tokens as f64 / 100.0),
+                    created_at,
+                    ..RequestTokenStat::default()
+                },
+            )
+            .expect("insert usage request");
+    }
+
+    assert_eq!(
+        storage
+            .rollup_request_token_stats_before(3_600)
+            .expect("roll up first bucket"),
+        1
+    );
+
+    let timeline = storage
+        .summarize_request_token_stats_by_model_timeline(0, 7_200, 3_600)
+        .expect("summarize model timeline");
+
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0].bucket_start_ts, 0);
+    assert_eq!(timeline[0].bucket_end_ts, 3_600);
+    assert_eq!(timeline[0].model, "gpt-5");
+    assert_eq!(timeline[0].usage.total_tokens, 10);
+    assert_eq!(timeline[0].usage.request_count, 1);
+    assert_eq!(timeline[0].usage.success_count, 1);
+    assert_eq!(timeline[1].bucket_start_ts, 3_600);
+    assert_eq!(timeline[1].model, "gpt-4.1");
+    assert_eq!(timeline[1].usage.total_tokens, 20);
+    assert_eq!(timeline[1].usage.request_count, 1);
+    assert_eq!(timeline[1].usage.error_count, 1);
 }
 
 #[test]

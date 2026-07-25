@@ -405,8 +405,8 @@ use runtime_config::{
 pub(crate) use runtime_config::{
     set_thread_aware_account_distribution_enabled, thread_aware_account_distribution_enabled,
 };
-use selection::collect_gateway_candidates;
 pub(crate) use selection::{
+    collect_gateway_candidates_for_account_ids_with_low_quota_mode,
     collect_gateway_candidates_with_low_quota_mode, current_quota_guard_config,
     invalidate_candidate_cache, set_quota_guard_config, LowQuotaCandidateMode, QuotaGuardConfig,
 };
@@ -809,14 +809,6 @@ pub(crate) fn upstream_client_for_aggregate_url(url: &str) -> reqwest::blocking:
     runtime_config::upstream_client_for_aggregate_url(url)
 }
 
-pub(crate) fn apply_blocking_upstream_proxy(
-    builder: reqwest::blocking::ClientBuilder,
-    proxy_url: Option<&str>,
-    invalid_event: &str,
-) -> reqwest::blocking::ClientBuilder {
-    runtime_config::apply_blocking_upstream_proxy(builder, proxy_url, invalid_event)
-}
-
 pub(crate) fn apply_async_upstream_proxy(
     builder: reqwest::ClientBuilder,
     proxy_url: Option<&str>,
@@ -901,7 +893,23 @@ pub(crate) fn set_upstream_total_timeout_ms(timeout_ms: u64) -> u64 {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn current_sse_keepalive_interval_ms() -> u64 {
-    http_bridge::current_sse_keepalive_interval_ms()
+    runtime_config::current_sse_keepalive_interval_ms()
+}
+
+pub(crate) fn current_sse_keepalive_enabled() -> bool {
+    runtime_config::current_sse_keepalive_enabled()
+}
+
+pub(crate) fn sse_keepalive_enabled_is_env_overridden() -> bool {
+    runtime_config::sse_keepalive_enabled_is_env_overridden()
+}
+
+pub(crate) fn sse_keepalive_interval_is_env_overridden() -> bool {
+    runtime_config::sse_keepalive_interval_is_env_overridden()
+}
+
+pub(crate) fn set_sse_keepalive_enabled(enabled: bool) -> bool {
+    runtime_config::set_sse_keepalive_enabled(enabled)
 }
 
 /// 函数 `set_sse_keepalive_interval_ms`
@@ -916,7 +924,7 @@ pub(crate) fn current_sse_keepalive_interval_ms() -> u64 {
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn set_sse_keepalive_interval_ms(interval_ms: u64) -> Result<u64, String> {
-    http_bridge::set_sse_keepalive_interval_ms(interval_ms)
+    runtime_config::set_sse_keepalive_interval_ms(interval_ms)
 }
 
 /// 函数 `manual_preferred_account`
@@ -1050,7 +1058,20 @@ pub(crate) fn gateway_collect_routed_candidates_with_log_source(
     key_id: &str,
     model: Option<&str>,
 ) -> Result<GatewayRoutedCandidates, String> {
-    let mut candidates = collect_gateway_candidates(storage)?;
+    let api_key = storage
+        .find_api_key_by_id(key_id)
+        .map_err(|err| format!("read api key routing config failed: {err}"))?
+        .ok_or_else(|| "api key not found".to_string())?;
+    let account_group_filter = storage
+        .find_api_key_account_group_filter(key_id)
+        .map_err(|err| format!("read api key account group filter failed: {err}"))?;
+    let mut candidates = upstream::support::candidates::prepare_gateway_candidates(
+        storage,
+        model,
+        account_group_filter.as_deref(),
+        api_key.account_plan_filter.as_deref(),
+        LowQuotaCandidateMode::NormalOnly,
+    )?;
     let application = apply_route_strategy_with_source(&mut candidates, key_id, model);
     Ok(GatewayRoutedCandidates {
         candidates,

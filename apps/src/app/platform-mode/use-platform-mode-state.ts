@@ -20,9 +20,50 @@ import { useAppStore } from "@/lib/store/useAppStore";
 import type {
   CodexProfileHistoryRepairSummary,
   CodexProfileMode,
+  CodexRuntimeReloadResult,
 } from "@/types";
 
 const EMPTY_CANDIDATES = { accounts: [], apiKeys: [] };
+const RELOAD_AFTER_SWITCH_STORAGE_KEY =
+  "codexmanager.platform-mode.reload-after-switch";
+const RELOAD_AFTER_SWITCH_EVENT =
+  "codexmanager:platform-mode-reload-after-switch";
+
+let reloadAfterSwitchMemoryValue = true;
+
+function getReloadAfterSwitchPreference(): boolean {
+  if (typeof window === "undefined") {
+    return reloadAfterSwitchMemoryValue;
+  }
+  try {
+    const stored = window.localStorage.getItem(RELOAD_AFTER_SWITCH_STORAGE_KEY);
+    if (stored === "true" || stored === "false") {
+      reloadAfterSwitchMemoryValue = stored === "true";
+    }
+  } catch {
+    // Use the in-memory preference when browser storage is unavailable.
+  }
+  return reloadAfterSwitchMemoryValue;
+}
+
+function subscribeToReloadAfterSwitchPreference(
+  onStoreChange: () => void,
+): () => void {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === RELOAD_AFTER_SWITCH_STORAGE_KEY) {
+      onStoreChange();
+    }
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(RELOAD_AFTER_SWITCH_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(RELOAD_AFTER_SWITCH_EVENT, onStoreChange);
+  };
+}
 
 export function historyRepairChangeCount(
   summary: CodexProfileHistoryRepairSummary | null,
@@ -71,6 +112,11 @@ export function usePlatformModePageState(
   const [selectedAccountIdDraft, setSelectedAccountIdDraft] = useState<string | null>(null);
   const [selectedApiKeyIdDraft, setSelectedApiKeyIdDraft] = useState<string | null>(null);
   const [gatewayBaseUrlDraft, setGatewayBaseUrlDraft] = useState<string | null>(null);
+  const reloadAfterSwitch = useSyncExternalStore(
+    subscribeToReloadAfterSwitchPreference,
+    getReloadAfterSwitchPreference,
+    () => true,
+  );
   const browserOrigin = useSyncExternalStore(
     () => () => undefined,
     () =>
@@ -90,6 +136,19 @@ export function usePlatformModePageState(
   }, [browserOrigin, mode, serviceStatus.addr]);
 
   const statusQuery = useCodexProfileModeStatus();
+
+  const setReloadAfterSwitch = (enabled: boolean) => {
+    reloadAfterSwitchMemoryValue = enabled;
+    try {
+      window.localStorage.setItem(
+        RELOAD_AFTER_SWITCH_STORAGE_KEY,
+        String(enabled),
+      );
+    } catch {
+      // The preference still applies to the current page session.
+    }
+    window.dispatchEvent(new Event(RELOAD_AFTER_SWITCH_EVENT));
+  };
   const candidatesQuery = useQuery({
     queryKey: CODEX_PROFILE_CANDIDATES_QUERY_KEY,
     queryFn: () => codexProfileClient.listCandidates(),
@@ -145,6 +204,29 @@ export function usePlatformModePageState(
     }
   };
 
+  const showRuntimeReloadToast = (result: CodexRuntimeReloadResult | null) => {
+    if (!result) return;
+    if (!result.requested) {
+      toast.info(t("配置已切换；现有 Codex 进程将在下次启动时生效"));
+      return;
+    }
+    if (result.warnings.length > 0) {
+      toast.warning(
+        `${t("配置已切换，但 Codex 后台重载有警告")}: ${result.warnings[0]}`,
+      );
+      return;
+    }
+    if (result.signaledProcessCount > 0) {
+      toast.success(
+        t("已请求重载 {count} 个 Codex 后台进程", {
+          count: result.signaledProcessCount,
+        }),
+      );
+      return;
+    }
+    toast.info(t("未发现需要重载的 Codex 后台进程"));
+  };
+
   const saveConfigMutation = useMutation({
     mutationFn: () => codexProfileClient.setConfig(codexHomeInput),
     onSuccess: async (nextStatus) => {
@@ -162,11 +244,13 @@ export function usePlatformModePageState(
       codexProfileClient.applyDirectAccount({
         accountId: selectedAccountId,
         codexHome: codexHomeInput,
+        reloadAfterSwitch,
       }),
     onSuccess: async (nextStatus) => {
       await refreshAll();
       toast.success(t("已切换到账号直连"));
       showHistoryRepairToast(nextStatus.historyRepair);
+      showRuntimeReloadToast(nextStatus.runtimeReload);
     },
     onError: (error: unknown) => {
       toast.error(`${t("切换失败")}: ${getAppErrorMessage(error)}`);
@@ -179,11 +263,13 @@ export function usePlatformModePageState(
         apiKeyId: selectedApiKeyId,
         codexHome: codexHomeInput,
         baseUrl: gatewayBaseUrl,
+        reloadAfterSwitch,
       }),
     onSuccess: async (nextStatus) => {
       await refreshAll();
       toast.success(t("已切换到本地网关"));
       showHistoryRepairToast(nextStatus.historyRepair);
+      showRuntimeReloadToast(nextStatus.runtimeReload);
     },
     onError: (error: unknown) => {
       toast.error(`${t("切换失败")}: ${getAppErrorMessage(error)}`);
@@ -262,6 +348,7 @@ export function usePlatformModePageState(
     selectedAccountId,
     selectedApiKeyId,
     gatewayBaseUrl,
+    reloadAfterSwitch,
     defaultGatewayBaseUrl,
     isDirectActive,
     isGatewayActive,
@@ -271,6 +358,7 @@ export function usePlatformModePageState(
     setSelectedAccountIdDraft,
     setSelectedApiKeyIdDraft,
     setGatewayBaseUrlDraft,
+    setReloadAfterSwitch,
     refreshAll,
     saveConfigMutation,
     applyDirectMutation,

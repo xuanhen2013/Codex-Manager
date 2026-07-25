@@ -78,6 +78,13 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin"],
   },
   {
+    path: "/projects",
+    label: "项目启动",
+    section: "platform-config",
+    desktopOnly: true,
+    roles: ["system_admin", "admin"],
+  },
+  {
     path: "/apikeys",
     label: "平台密钥",
     memberLabel: "我的密钥",
@@ -136,6 +143,12 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin"],
   },
   {
+    path: "/skills",
+    label: "Skills 与插件",
+    section: "system",
+    roles: ["system_admin", "admin"],
+  },
+  {
     path: "/author",
     label: "赞助与推荐",
     section: "system",
@@ -149,6 +162,7 @@ export type TopLevelRouteConfig = (typeof TOP_LEVEL_ROUTE_CONFIG)[number];
 export interface TopLevelRouteAccessContext {
   role?: AppRole | string | null;
   mode?: string | null;
+  isDesktopRuntime?: boolean | null;
 }
 
 export type TopLevelRouteAccess =
@@ -161,6 +175,7 @@ export type TopLevelRouteAccess =
 interface NormalizedTopLevelRouteAccessContext {
   role: string;
   mode: string | null;
+  isDesktopRuntime: boolean;
 }
 
 export interface TopLevelRouteSection {
@@ -196,11 +211,13 @@ function normalizeAccessContext(
     return {
       role: normalizeRole(access.role),
       mode: normalizeMode(access.mode),
+      isDesktopRuntime: access.isDesktopRuntime === true,
     };
   }
   return {
     role: normalizeRole(access),
     mode: normalizeMode(mode),
+    isDesktopRuntime: false,
   };
 }
 
@@ -212,6 +229,10 @@ function isAccountSystemOnlyRoute(route: TopLevelRouteConfig): boolean {
   return "accountSystemOnly" in route && route.accountSystemOnly === true;
 }
 
+function isDesktopOnlyRoute(route: TopLevelRouteConfig): boolean {
+  return "desktopOnly" in route && route.desktopOnly === true;
+}
+
 function isRouteAllowedForAccess(
   route: TopLevelRouteConfig,
   access: NormalizedTopLevelRouteAccessContext,
@@ -220,6 +241,9 @@ function isRouteAllowedForAccess(
     return false;
   }
   if (isAccountSystemOnlyRoute(route) && !isAccountSystemMode(access.mode)) {
+    return false;
+  }
+  if (isDesktopOnlyRoute(route) && !access.isDesktopRuntime) {
     return false;
   }
   return true;

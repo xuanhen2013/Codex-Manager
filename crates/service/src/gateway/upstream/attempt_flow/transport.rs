@@ -24,6 +24,7 @@ enum RequestCompression {
 pub(in super::super) struct UpstreamRequestContext<'a> {
     pub(in super::super) request_path: &'a str,
     pub(in super::super) protocol_type: &'a str,
+    pub(in super::super) is_fedramp: bool,
 }
 
 impl<'a> UpstreamRequestContext<'a> {
@@ -42,7 +43,13 @@ impl<'a> UpstreamRequestContext<'a> {
         Self {
             request_path: request.url(),
             protocol_type,
+            is_fedramp: false,
         }
+    }
+
+    pub(in super::super) fn with_fedramp(mut self, is_fedramp: bool) -> Self {
+        self.is_fedramp = is_fedramp;
+        self
     }
 }
 
@@ -838,6 +845,7 @@ fn send_upstream_request_with_compression_override(
         };
         let header_input = super::super::header_profile::CodexCompactUpstreamHeaderInput {
             auth_token,
+            is_fedramp: request_ctx.is_fedramp,
             chatgpt_account_id: chatgpt_account_header,
             installation_id: installation_id.as_deref(),
             incoming_user_agent: incoming_headers.user_agent(),
@@ -882,6 +890,7 @@ fn send_upstream_request_with_compression_override(
     } else {
         let header_input = super::super::header_profile::CodexUpstreamHeaderInput {
             auth_token,
+            is_fedramp: request_ctx.is_fedramp,
             chatgpt_account_id: chatgpt_account_header,
             incoming_user_agent: incoming_headers.user_agent(),
             incoming_originator: incoming_headers.originator(),

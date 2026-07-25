@@ -378,9 +378,32 @@ fn run_dynamic_poll_loop<F, L, E, I, J, B>(
             if crate::shutdown_requested() {
                 return;
             }
+            if should_recalculate_dynamic_poll_delay(
+                enabled(),
+                base_interval_secs,
+                interval_secs().max(1),
+                start.elapsed(),
+            ) {
+                break;
+            }
             thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+fn should_recalculate_dynamic_poll_delay(
+    current_enabled: bool,
+    initial_interval_secs: u64,
+    current_interval_secs: u64,
+    elapsed: Duration,
+) -> bool {
+    if !current_enabled {
+        return true;
+    }
+    if current_interval_secs >= initial_interval_secs {
+        return false;
+    }
+    elapsed >= Duration::from_secs(current_interval_secs.max(1))
 }
 
 /// 函数 `next_dynamic_poll_delay`

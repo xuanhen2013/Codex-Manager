@@ -1,6 +1,7 @@
 pub const APP_SETTING_UPDATE_AUTO_CHECK_KEY: &str = "app.update.auto_check";
 pub const APP_SETTING_AUTO_START_ENABLED_KEY: &str = "app.auto_start_enabled";
 pub const APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY: &str = "app.close_to_tray_on_close";
+pub const APP_SETTING_KEEP_WINDOW_UI_MOUNTED_KEY: &str = "app.keep_window_ui_mounted";
 pub const APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY: &str =
     "app.lightweight_mode_on_close_to_tray";
 pub const APP_SETTING_UI_LOW_TRANSPARENCY_KEY: &str = "ui.low_transparency";
@@ -32,6 +33,7 @@ pub const APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY: &str =
     "gateway.upstream_stream_timeout_ms";
 pub const APP_SETTING_GATEWAY_UPSTREAM_TOTAL_TIMEOUT_MS_KEY: &str =
     "gateway.upstream_total_timeout_ms";
+pub const APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY: &str = "gateway.sse_keepalive_enabled";
 pub const APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY: &str =
     "gateway.sse_keepalive_interval_ms";
 pub const APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY: &str = "gateway.background_tasks";

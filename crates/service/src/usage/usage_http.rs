@@ -1,10 +1,10 @@
 use chrono::DateTime;
 use codexmanager_core::usage::{
-    accounts_check_endpoint, rate_limit_reset_credits_consume_endpoint,
-    rate_limit_reset_credits_endpoint, usage_endpoint,
+    accounts_check_endpoint, parse_reset_credits_snapshot, reset_credits_consume_endpoint,
+    reset_credits_endpoint, usage_endpoint, ResetCreditsSnapshot,
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Proxy};
+use reqwest::{Client, Proxy, Url};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{OnceLock, RwLock};
@@ -40,7 +40,25 @@ const REQUEST_ID_HEADER: &str = "x-request-id";
 const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 const AUTH_ERROR_HEADER: &str = "x-openai-authorization-error";
-const CODEX_DESKTOP_ORIGINATOR: &str = "Codex Desktop";
+const X_OPENAI_FEDRAMP_HEADER_NAME: &str = "x-openai-fedramp";
+
+#[derive(Debug, Clone)]
+pub(crate) struct UsageActionHttpError {
+    pub(crate) status: Option<u16>,
+    pub(crate) message: String,
+}
+
+impl UsageActionHttpError {
+    pub(crate) fn is_unauthorized(&self) -> bool {
+        self.status == Some(reqwest::StatusCode::UNAUTHORIZED.as_u16())
+    }
+}
+
+impl std::fmt::Display for UsageActionHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefreshTokenAuthErrorReason {
@@ -626,7 +644,7 @@ fn build_usage_http_default_headers() -> HeaderMap {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn build_usage_request_headers(workspace_id: Option<&str>) -> HeaderMap {
+fn build_usage_request_headers(workspace_id: Option<&str>, is_fedramp: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Some(workspace_id) = workspace_id
         .map(str::trim)
@@ -637,6 +655,12 @@ fn build_usage_request_headers(workspace_id: Option<&str>) -> HeaderMap {
                 headers.insert(name, value);
             }
         }
+    }
+    if is_fedramp {
+        headers.insert(
+            HeaderName::from_static(X_OPENAI_FEDRAMP_HEADER_NAME),
+            HeaderValue::from_static("true"),
+        );
     }
     headers
 }
@@ -713,21 +737,33 @@ fn summarize_endpoint_error_response(
     body: &str,
     force_html_error: bool,
 ) -> String {
+    let invalid_agent_task = crate::agent_identity::is_agent_identity_task_invalid_response(
+        status.as_u16(),
+        body.as_bytes(),
+    );
     let request_id = extract_response_header(headers, REQUEST_ID_HEADER)
         .or_else(|| extract_response_header(headers, OAI_REQUEST_ID_HEADER));
     let cf_ray = extract_response_header(headers, CF_RAY_HEADER);
     let auth_error = extract_response_header(headers, AUTH_ERROR_HEADER);
     let identity_error_code = crate::gateway::extract_identity_error_code_from_headers(headers);
-    let body_hint = if force_html_error {
-        crate::gateway::summarize_upstream_error_hint_from_body(403, body.as_bytes())
+    let body_hint = if invalid_agent_task {
+        "invalid_task_id".to_string()
     } else {
-        crate::gateway::summarize_upstream_error_hint_from_body(status.as_u16(), body.as_bytes())
-    }
-    .or_else(|| {
-        let trimmed = body.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-    .unwrap_or_else(|| "unknown error".to_string());
+        let summarized = if force_html_error {
+            crate::gateway::summarize_upstream_error_hint_from_body(403, body.as_bytes())
+        } else {
+            crate::gateway::summarize_upstream_error_hint_from_body(
+                status.as_u16(),
+                body.as_bytes(),
+            )
+        };
+        summarized
+            .or_else(|| {
+                let trimmed = body.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+            .unwrap_or_else(|| "unknown error".to_string())
+    };
 
     let mut details = Vec::new();
     if let Some(request_id) = request_id {
@@ -736,11 +772,18 @@ fn summarize_endpoint_error_response(
     if let Some(cf_ray) = cf_ray {
         details.push(format!("cf-ray: {cf_ray}"));
     }
-    if let Some(auth_error) = auth_error {
-        details.push(format!("auth error: {auth_error}"));
+    if !invalid_agent_task {
+        if let Some(auth_error) = auth_error {
+            details.push(format!("auth error: {auth_error}"));
+        }
     }
-    if let Some(identity_error_code) = identity_error_code {
-        details.push(format!("identity error code: {identity_error_code}"));
+    if !invalid_agent_task {
+        if let Some(identity_error_code) = identity_error_code {
+            details.push(format!("identity error code: {identity_error_code}"));
+        }
+    }
+    if invalid_agent_task {
+        details.push("agent identity task error: invalid_task_id".to_string());
     }
 
     if details.is_empty() {
@@ -1007,10 +1050,20 @@ pub(crate) fn fetch_usage_snapshot(
     bearer: &str,
     workspace_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
+    fetch_usage_snapshot_with_auth_context(base_url, bearer, workspace_id, false)
+}
+
+pub(crate) fn fetch_usage_snapshot_with_auth_context(
+    base_url: &str,
+    auth_token: &str,
+    workspace_id: Option<&str>,
+    is_fedramp: bool,
+) -> Result<serde_json::Value, String> {
     run_usage_future(fetch_usage_snapshot_async(
         base_url,
-        bearer,
+        auth_token,
         workspace_id,
+        is_fedramp,
         None,
     ))
 }
@@ -1021,21 +1074,38 @@ pub(crate) fn fetch_usage_snapshot_with_explicit_proxy(
     workspace_id: Option<&str>,
     proxy_url: &str,
 ) -> Result<serde_json::Value, String> {
+    fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
+        base_url,
+        bearer,
+        workspace_id,
+        false,
+        proxy_url,
+    )
+}
+
+pub(crate) fn fetch_usage_snapshot_with_auth_context_and_explicit_proxy(
+    base_url: &str,
+    auth_token: &str,
+    workspace_id: Option<&str>,
+    is_fedramp: bool,
+    proxy_url: &str,
+) -> Result<serde_json::Value, String> {
     let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
     run_usage_future(fetch_usage_snapshot_async(
         base_url,
-        bearer,
+        auth_token,
         workspace_id,
+        is_fedramp,
         Some(proxy_url.as_str()),
     ))
 }
 
-pub(crate) fn fetch_usage_reset_credits(
+pub(crate) fn fetch_reset_credits_snapshot(
     base_url: &str,
     bearer: &str,
     workspace_id: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    run_usage_future(fetch_usage_reset_credits_async(
+) -> Result<ResetCreditsSnapshot, UsageActionHttpError> {
+    run_usage_future(fetch_reset_credits_snapshot_async(
         base_url,
         bearer,
         workspace_id,
@@ -1043,14 +1113,18 @@ pub(crate) fn fetch_usage_reset_credits(
     ))
 }
 
-pub(crate) fn fetch_usage_reset_credits_with_explicit_proxy(
+pub(crate) fn fetch_reset_credits_snapshot_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
     workspace_id: Option<&str>,
     proxy_url: &str,
-) -> Result<serde_json::Value, String> {
-    let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
-    run_usage_future(fetch_usage_reset_credits_async(
+) -> Result<ResetCreditsSnapshot, UsageActionHttpError> {
+    let proxy_url =
+        normalize_explicit_proxy_url(proxy_url).map_err(|message| UsageActionHttpError {
+            status: None,
+            message,
+        })?;
+    run_usage_future(fetch_reset_credits_snapshot_async(
         base_url,
         bearer,
         workspace_id,
@@ -1058,13 +1132,13 @@ pub(crate) fn fetch_usage_reset_credits_with_explicit_proxy(
     ))
 }
 
-pub(crate) fn consume_usage_reset_credit(
+pub(crate) fn consume_reset_credit_request(
     base_url: &str,
     bearer: &str,
     workspace_id: Option<&str>,
     redeem_request_id: &str,
-) -> Result<(), String> {
-    run_usage_future(consume_usage_reset_credit_async(
+) -> Result<(), UsageActionHttpError> {
+    run_usage_future(consume_reset_credit_request_async(
         base_url,
         bearer,
         workspace_id,
@@ -1073,21 +1147,195 @@ pub(crate) fn consume_usage_reset_credit(
     ))
 }
 
-pub(crate) fn consume_usage_reset_credit_with_explicit_proxy(
+pub(crate) fn consume_reset_credit_request_with_explicit_proxy(
     base_url: &str,
     bearer: &str,
     workspace_id: Option<&str>,
     redeem_request_id: &str,
     proxy_url: &str,
-) -> Result<(), String> {
-    let proxy_url = normalize_explicit_proxy_url(proxy_url)?;
-    run_usage_future(consume_usage_reset_credit_async(
+) -> Result<(), UsageActionHttpError> {
+    let proxy_url =
+        normalize_explicit_proxy_url(proxy_url).map_err(|message| UsageActionHttpError {
+            status: None,
+            message,
+        })?;
+    run_usage_future(consume_reset_credit_request_async(
         base_url,
         bearer,
         workspace_id,
         redeem_request_id,
         Some(proxy_url.as_str()),
     ))
+}
+
+fn reset_credit_request_headers(
+    base_url: &str,
+    workspace_id: Option<&str>,
+) -> Result<HeaderMap, UsageActionHttpError> {
+    let endpoint = reset_credits_endpoint(base_url);
+    let url = Url::parse(&endpoint).map_err(|error| UsageActionHttpError {
+        status: None,
+        message: format!("invalid reset credit base URL: {error}"),
+    })?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(UsageActionHttpError {
+            status: None,
+            message: format!("unsupported reset credit URL scheme: {}", url.scheme()),
+        });
+    }
+    let origin = url.origin().ascii_serialization();
+    let referer = format!("{origin}/");
+    let mut headers = build_usage_request_headers(workspace_id, false);
+    headers.insert(
+        reqwest::header::ACCEPT,
+        HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        reqwest::header::ORIGIN,
+        HeaderValue::from_str(&origin).map_err(|error| UsageActionHttpError {
+            status: None,
+            message: format!("invalid reset credit origin header: {error}"),
+        })?,
+    );
+    headers.insert(
+        reqwest::header::REFERER,
+        HeaderValue::from_str(&referer).map_err(|error| UsageActionHttpError {
+            status: None,
+            message: format!("invalid reset credit referer header: {error}"),
+        })?,
+    );
+    headers.insert(
+        HeaderName::from_static("openai-beta"),
+        HeaderValue::from_static("codex-1"),
+    );
+    Ok(headers)
+}
+
+async fn fetch_reset_credits_snapshot_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    explicit_proxy_url: Option<&str>,
+) -> Result<ResetCreditsSnapshot, UsageActionHttpError> {
+    let url = reset_credits_endpoint(base_url);
+    let request_headers = reset_credit_request_headers(base_url, workspace_id)?;
+    let build_request = |client: Client| {
+        client
+            .get(&url)
+            .header("Authorization", format!("Bearer {bearer}"))
+            .headers(request_headers.clone())
+    };
+    let client = usage_http_client_for_proxy(explicit_proxy_url).map_err(|message| {
+        UsageActionHttpError {
+            status: None,
+            message,
+        }
+    })?;
+    let response = match build_request(client).send().await {
+        Ok(response) => response,
+        Err(first_error) => {
+            let retry_client =
+                refresh_usage_http_client_for_proxy(explicit_proxy_url).map_err(|message| {
+                    UsageActionHttpError {
+                        status: None,
+                        message,
+                    }
+                })?;
+            build_request(retry_client).send().await.map_err(|second_error| {
+                UsageActionHttpError {
+                    status: None,
+                    message: format!(
+                        "request reset credits failed: {first_error}; retry_after_client_rebuild: {second_error}"
+                    ),
+                }
+            })?
+        }
+    };
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = read_response_text(response, USAGE_HTTP_TOTAL_TIMEOUT)
+        .await
+        .map_err(|message| UsageActionHttpError {
+            status: Some(status.as_u16()),
+            message,
+        })?;
+    if !status.is_success() {
+        return Err(UsageActionHttpError {
+            status: Some(status.as_u16()),
+            message: summarize_usage_error_response(status, &headers, &body, false),
+        });
+    }
+    let value =
+        serde_json::from_str::<serde_json::Value>(&body).map_err(|error| UsageActionHttpError {
+            status: Some(status.as_u16()),
+            message: format!("read reset credits json failed: {error}"),
+        })?;
+    Ok(parse_reset_credits_snapshot(&value))
+}
+
+async fn consume_reset_credit_request_async(
+    base_url: &str,
+    bearer: &str,
+    workspace_id: Option<&str>,
+    redeem_request_id: &str,
+    explicit_proxy_url: Option<&str>,
+) -> Result<(), UsageActionHttpError> {
+    let url = reset_credits_consume_endpoint(base_url);
+    let request_headers = reset_credit_request_headers(base_url, workspace_id)?;
+    let build_request = |client: Client| {
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {bearer}"))
+            .headers(request_headers.clone())
+            .json(&serde_json::json!({ "redeem_request_id": redeem_request_id }))
+    };
+    let client = usage_http_client_for_proxy(explicit_proxy_url).map_err(|message| {
+        UsageActionHttpError {
+            status: None,
+            message,
+        }
+    })?;
+    let response = match build_request(client).send().await {
+        Ok(response) => response,
+        Err(first_error) => {
+            let retry_client =
+                refresh_usage_http_client_for_proxy(explicit_proxy_url).map_err(|message| {
+                    UsageActionHttpError {
+                        status: None,
+                        message,
+                    }
+                })?;
+            build_request(retry_client).send().await.map_err(|second_error| {
+                UsageActionHttpError {
+                    status: None,
+                    message: format!(
+                        "request reset credit consume failed: {first_error}; retry_after_client_rebuild: {second_error}"
+                    ),
+                }
+            })?
+        }
+    };
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = read_response_text(response, USAGE_HTTP_TOTAL_TIMEOUT).await;
+    if status.is_success() {
+        if let Err(error) = body {
+            log::warn!(
+                "event=reset_credit_consume_response_drain_failed status={} error={}",
+                status,
+                error
+            );
+        }
+        return Ok(());
+    }
+    let body = body.map_err(|message| UsageActionHttpError {
+        status: Some(status.as_u16()),
+        message,
+    })?;
+    Err(UsageActionHttpError {
+        status: Some(status.as_u16()),
+        message: summarize_usage_error_response(status, &headers, &body, false),
+    })
 }
 
 /// 函数 `fetch_account_subscription`
@@ -1151,17 +1399,17 @@ pub(crate) fn fetch_account_subscription_with_explicit_proxy(
 /// 返回函数执行结果
 async fn fetch_usage_snapshot_async(
     base_url: &str,
-    bearer: &str,
+    auth_token: &str,
     workspace_id: Option<&str>,
+    is_fedramp: bool,
     explicit_proxy_url: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     // 调用上游用量接口
     let url = usage_endpoint(base_url);
-    let request_headers = build_usage_request_headers(workspace_id);
+    let request_headers = build_usage_request_headers(workspace_id, is_fedramp);
+    let authorization = crate::agent_identity::format_upstream_authorization(auth_token);
     let build_request = |client: Client| {
-        let mut req = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {bearer}"));
+        let mut req = client.get(&url).header("Authorization", &authorization);
         if !request_headers.is_empty() {
             req = req.headers(request_headers.clone());
         }
@@ -1210,91 +1458,6 @@ async fn fetch_usage_snapshot_async(
     read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
         .await
         .map_err(|e| format!("read usage endpoint json failed: {e}"))
-}
-
-fn build_usage_reset_credits_request_headers(workspace_id: Option<&str>) -> HeaderMap {
-    let mut headers = build_usage_request_headers(workspace_id);
-    headers.insert(
-        HeaderName::from_static("openai-beta"),
-        HeaderValue::from_static("codex-1"),
-    );
-    headers.insert(
-        HeaderName::from_static("originator"),
-        HeaderValue::from_static(CODEX_DESKTOP_ORIGINATOR),
-    );
-    headers
-}
-
-async fn fetch_usage_reset_credits_async(
-    base_url: &str,
-    bearer: &str,
-    workspace_id: Option<&str>,
-    explicit_proxy_url: Option<&str>,
-) -> Result<serde_json::Value, String> {
-    let url = rate_limit_reset_credits_endpoint(base_url);
-    let request_headers = build_usage_reset_credits_request_headers(workspace_id);
-    let build_request = |client: Client| {
-        client
-            .get(&url)
-            .header("Authorization", format!("Bearer {bearer}"))
-            .headers(request_headers.clone())
-    };
-    let client = usage_http_client_for_proxy(explicit_proxy_url)?;
-    let resp = match build_request(client).send().await {
-        Ok(resp) => resp,
-        Err(first_err) => build_request(refresh_usage_http_client_for_proxy(explicit_proxy_url)?)
-            .send()
-            .await
-            .map_err(|second_err| {
-                format!("{}; retry_after_client_rebuild: {}", first_err, second_err)
-            })?,
-    };
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
-        return Err(summarize_endpoint_error_response(
-            "usage reset credits",
-            status,
-            &headers,
-            &body,
-            false,
-        ));
-    }
-    read_response_json(resp, USAGE_HTTP_TOTAL_TIMEOUT)
-        .await
-        .map_err(|err| format!("read usage reset credits response json failed: {err}"))
-}
-
-async fn consume_usage_reset_credit_async(
-    base_url: &str,
-    bearer: &str,
-    workspace_id: Option<&str>,
-    redeem_request_id: &str,
-    explicit_proxy_url: Option<&str>,
-) -> Result<(), String> {
-    let url = rate_limit_reset_credits_consume_endpoint(base_url);
-    let resp = usage_http_client_for_proxy(explicit_proxy_url)?
-        .post(url)
-        .header("Authorization", format!("Bearer {bearer}"))
-        .headers(build_usage_reset_credits_request_headers(workspace_id))
-        .json(&serde_json::json!({ "redeem_request_id": redeem_request_id }))
-        .send()
-        .await
-        .map_err(|err| format!("usage reset credit request failed: {err}"))?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = read_response_text(resp, USAGE_HTTP_TOTAL_TIMEOUT).await?;
-        return Err(summarize_endpoint_error_response(
-            "usage reset credit consume",
-            status,
-            &headers,
-            &body,
-            false,
-        ));
-    }
-    Ok(())
 }
 
 async fn fetch_accounts_check_response_async(

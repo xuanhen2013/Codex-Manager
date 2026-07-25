@@ -1,12 +1,26 @@
 use super::*;
 use crate::gateway::IncomingHeaderSnapshot;
 use axum::http::{HeaderMap, HeaderValue};
-use codexmanager_core::storage::{now_ts, Account, Storage, Token};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
+use codexmanager_core::storage::{now_ts, Account, AccountAgentIdentity, Storage, Token};
+use ed25519_dalek::pkcs8::EncodePrivateKey;
+use ed25519_dalek::SigningKey;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use tiny_http::{Response, Server, StatusCode};
+
+fn oauth_authorization(value: &str) -> super::super::primary_flow::PrimaryAuthorization {
+    super::super::primary_flow::PrimaryAuthorization {
+        value: value.to_string(),
+        task_id: None,
+        uses_agent_identity: false,
+        is_fedramp: false,
+        account_scope_id: None,
+    }
+}
 
 /// 函数 `build_account`
 ///
@@ -82,6 +96,14 @@ fn request_has_header(request: &tiny_http::Request, name: &str) -> bool {
         .any(|header| header.field.to_string().eq_ignore_ascii_case(name))
 }
 
+fn request_header_value(request: &tiny_http::Request, name: &str) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.to_string().eq_ignore_ascii_case(name))
+        .map(|header| header.value.as_str().to_string())
+}
+
 fn captured_session_headers(request: &tiny_http::Request) -> Vec<bool> {
     [
         "session-id",
@@ -108,6 +130,26 @@ fn anthropic_challenge_uses_extended_cooldown_reason() {
 }
 
 #[test]
+fn agent_identity_always_disables_openai_fallback() {
+    let agent_identity = super::super::primary_flow::PrimaryAuthorization {
+        value: "AgentAssertion encoded-envelope".to_string(),
+        task_id: Some("task-id".to_string()),
+        uses_agent_identity: true,
+        is_fedramp: false,
+        account_scope_id: Some("workspace-account".to_string()),
+    };
+
+    assert!(!allow_openai_fallback_for_authorization(
+        true,
+        &agent_identity
+    ));
+    assert!(allow_openai_fallback_for_authorization(
+        true,
+        &oauth_authorization("access-token")
+    ));
+}
+
+#[test]
 fn bad_request_stateless_retry_requires_actual_responses_target() {
     assert!(should_retry_chatgpt_responses_bad_request(
         "https://chatgpt.com/backend-api/codex",
@@ -124,6 +166,144 @@ fn bad_request_stateless_retry_requires_actual_responses_target() {
         "https://chatgpt.com/backend-api/codex/responses",
         404,
     ));
+}
+
+#[test]
+fn agent_identity_invalid_task_recovery_replays_once_without_oauth_fallback() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let account = build_account("acc-agent-identity-recovery", now);
+    let mut token = build_token(account.id.as_str(), now);
+    token.access_token.clear();
+    token.refresh_token = "must-not-be-used".to_string();
+    storage.insert_account(&account).expect("insert account");
+    storage.insert_token(&token).expect("insert token");
+
+    let signing_key = SigningKey::from_bytes(&[19_u8; 32]);
+    let private_key = signing_key.to_pkcs8_der().expect("encode private key");
+    storage
+        .upsert_account_agent_identity(&AccountAgentIdentity {
+            account_id: account.id.clone(),
+            agent_runtime_id: "agent-runtime-recovery".to_string(),
+            agent_private_key: BASE64_STANDARD.encode(private_key.as_bytes()),
+            task_id: Some("task-current".to_string()),
+            chatgpt_user_id: "user-recovery".to_string(),
+            chatgpt_account_is_fedramp: true,
+            auth_mode: "agentIdentity".to_string(),
+            workspace_id: account.workspace_id.clone(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert agent identity");
+
+    let server = Server::http("127.0.0.1:0").expect("start server");
+    let addr = format!("http://{}", server.server_addr());
+    let (request_tx, request_rx) = mpsc::channel();
+    let join = thread::spawn(move || {
+        for status in [401_u16, 200_u16] {
+            let mut request = server
+                .recv_timeout(Duration::from_secs(2))
+                .expect("receive upstream request")
+                .expect("request present");
+            request_tx
+                .send((
+                    request_header_value(&request, "Authorization"),
+                    request_header_value(&request, "x-openai-fedramp"),
+                ))
+                .expect("capture request headers");
+            let mut body = Vec::new();
+            std::io::Read::read_to_end(request.as_reader(), &mut body).expect("read request body");
+            let response_body = if status == 401 {
+                r#"{"error":{"code":"task_expired"}}"#
+            } else {
+                r#"{"ok":true}"#
+            };
+            request
+                .respond(
+                    Response::from_string(response_body)
+                        .with_status_code(StatusCode(status))
+                        .with_header(
+                            tiny_http::Header::from_bytes("Content-Type", "application/json")
+                                .expect("content type"),
+                        ),
+                )
+                .expect("respond request");
+        }
+    });
+
+    let client = reqwest::blocking::Client::new();
+    let request_ctx = UpstreamRequestContext {
+        request_path: "/v1/responses",
+        protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: true,
+    };
+    let incoming_headers = IncomingHeaderSnapshot::default();
+    let body = Bytes::from_static(br#"{"model":"gpt-5.5","input":"hello"}"#);
+    let authorization = super::super::primary_flow::PrimaryAuthorization {
+        value: "AgentAssertion stale-envelope".to_string(),
+        task_id: Some("task-stale".to_string()),
+        uses_agent_identity: true,
+        is_fedramp: true,
+        account_scope_id: Some("workspace-account".to_string()),
+    };
+    let upstream = super::super::transport::send_upstream_request(
+        &client,
+        &reqwest::Method::POST,
+        addr.as_str(),
+        None,
+        request_ctx,
+        &incoming_headers,
+        &body,
+        false,
+        authorization.value.as_str(),
+        &account,
+        false,
+    )
+    .expect("send initial request");
+
+    let decision = process_upstream_post_retry_flow(
+        &client,
+        &storage,
+        &reqwest::Method::POST,
+        "https://chatgpt.com/backend-api/codex",
+        "/v1/responses",
+        addr.as_str(),
+        None,
+        None,
+        request_ctx,
+        &incoming_headers,
+        &body,
+        false,
+        &authorization,
+        &account,
+        &mut token,
+        None,
+        false,
+        false,
+        true,
+        false,
+        false,
+        upstream,
+        |_, _, _| {},
+    );
+
+    join.join().expect("join server");
+    let first = request_rx.recv().expect("first request");
+    let second = request_rx.recv().expect("second request");
+    assert_eq!(first.0.as_deref(), Some("AgentAssertion stale-envelope"));
+    assert_eq!(first.1.as_deref(), Some("true"));
+    assert!(second
+        .0
+        .as_deref()
+        .is_some_and(|value| value.starts_with("AgentAssertion ")));
+    assert_eq!(second.1.as_deref(), Some("true"));
+    match decision {
+        PostRetryFlowDecision::RespondUpstream(response) => {
+            assert_eq!(response.status().as_u16(), 200)
+        }
+        _ => panic!("expected recovered upstream response"),
+    }
 }
 
 #[test]
@@ -173,6 +353,7 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
@@ -192,6 +373,7 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -205,7 +387,7 @@ fn chatgpt_responses_400_retries_same_path_without_session_headers() {
         &incoming_headers,
         &body,
         false,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -276,6 +458,7 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
@@ -295,6 +478,7 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -308,7 +492,7 @@ fn chatgpt_responses_failed_stateless_retry_keeps_original_400() {
         &incoming_headers,
         &body,
         false,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -386,6 +570,7 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(
         br#"{"model":"gpt-5.5","input":"hello","prompt_cache_key":"thread-current"}"#,
@@ -405,6 +590,7 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
     )
     .expect("send stripped candidate request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -418,7 +604,7 @@ fn chatgpt_responses_stripped_candidate_does_not_retry_without_session_headers_a
         &incoming_headers,
         &body,
         false,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -493,6 +679,7 @@ fn retries_server_error_once_before_final_decision() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -510,6 +697,7 @@ fn retries_server_error_once_before_final_decision() {
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -523,7 +711,7 @@ fn retries_server_error_once_before_final_decision() {
         &incoming_headers,
         &body,
         false,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -595,6 +783,7 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -612,6 +801,7 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -625,7 +815,7 @@ fn chatgpt_challenge_on_last_candidate_retries_without_same_account_failover() {
         &incoming_headers,
         &body,
         true,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -689,6 +879,7 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -706,6 +897,7 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -719,7 +911,7 @@ fn chatgpt_cloudflare_challenge_directly_failovers_without_same_account_retry() 
         &incoming_headers,
         &body,
         true,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,
@@ -782,6 +974,7 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
     let request_ctx = UpstreamRequestContext {
         request_path: "/v1/responses",
         protocol_type: crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        is_fedramp: false,
     };
     let body = Bytes::from_static(br#"{"model":"gpt-5.3-codex","input":"hello"}"#);
     let upstream = super::super::transport::send_upstream_request(
@@ -799,6 +992,7 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
     )
     .expect("send initial request");
 
+    let authorization = oauth_authorization(auth_token.as_str());
     let decision = process_upstream_post_retry_flow(
         &client,
         &storage,
@@ -812,7 +1006,7 @@ fn cloudflare_cf_ray_directly_failovers_without_same_account_retry() {
         &incoming_headers,
         &body,
         true,
-        auth_token.as_str(),
+        &authorization,
         &account,
         &mut token,
         None,

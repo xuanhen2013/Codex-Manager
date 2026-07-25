@@ -31,6 +31,7 @@ const ISOLATED_RUNTIME_ENV_KEYS: &[&str] = &[
     "CODEXMANAGER_UPSTREAM_PROXY_URL",
     "CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS",
     "CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS",
+    "CODEXMANAGER_SSE_KEEPALIVE_ENABLED",
     "CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS",
     "CODEXMANAGER_USAGE_POLLING_ENABLED",
     "CODEXMANAGER_USAGE_POLL_INTERVAL_SECS",
@@ -97,10 +98,12 @@ fn reset_runtime_defaults() {
         "gatewayUserAgentVersion": codexmanager_service::default_gateway_user_agent_version(),
         "gatewayResidencyRequirement": "",
         "appearancePreset": "classic",
+        "keepWindowUiMounted": true,
         "lightweightModeOnCloseToTray": false,
         "upstreamProxyUrl": "",
         "upstreamStreamTimeoutMs": 600000,
         "upstreamTotalTimeoutMs": 0,
+        "sseKeepaliveEnabled": true,
         "sseKeepaliveIntervalMs": 15000,
         "envOverrides": {},
         "backgroundTasks": {
@@ -680,6 +683,216 @@ fn app_settings_gateway_mode_is_no_longer_a_persisted_runtime_setting() {
     });
 }
 
+#[test]
+fn app_settings_sse_keepalive_enabled_defaults_true_and_persists_updates() {
+    with_temp_db(|db_path| {
+        let storage = Storage::open(db_path).expect("open storage");
+        storage
+            .delete_app_setting(codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY)
+            .expect("delete sse keepalive enabled setting");
+        drop(storage);
+
+        let initial = codexmanager_service::app_settings_get().expect("get default app settings");
+        assert_eq!(
+            initial
+                .get("sseKeepaliveEnabled")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+
+        let updated = codexmanager_service::app_settings_set(Some(&json!({
+            "sseKeepaliveEnabled": false
+        })))
+        .expect("disable sse keepalive");
+        assert_eq!(
+            updated
+                .get("sseKeepaliveEnabled")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert!(!codexmanager_service::current_gateway_sse_keepalive_enabled());
+
+        let storage = Storage::open(db_path).expect("reopen storage");
+        assert_eq!(
+            storage
+                .get_app_setting(
+                    codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY
+                )
+                .expect("read sse keepalive enabled setting"),
+            Some("0".to_string())
+        );
+    });
+}
+
+#[test]
+fn window_ui_mount_default_preserves_existing_platform_behavior() {
+    with_temp_db(|db_path| {
+        let storage = Storage::open(db_path).expect("open storage");
+        storage
+            .delete_app_setting(codexmanager_service::APP_SETTING_KEEP_WINDOW_UI_MOUNTED_KEY)
+            .expect("delete window UI mount setting");
+        storage
+            .delete_app_setting(
+                codexmanager_service::APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY,
+            )
+            .expect("delete legacy lightweight setting");
+        drop(storage);
+
+        let snapshot = codexmanager_service::app_settings_get().expect("get app settings");
+        let expected_keep_mounted = !cfg!(target_os = "windows");
+        assert_eq!(
+            snapshot
+                .get("keepWindowUiMounted")
+                .and_then(|value| value.as_bool()),
+            Some(expected_keep_mounted)
+        );
+        assert_eq!(
+            snapshot
+                .get("lightweightModeOnCloseToTray")
+                .and_then(|value| value.as_bool()),
+            Some(!expected_keep_mounted)
+        );
+    });
+}
+
+#[test]
+fn window_ui_mount_setting_keeps_legacy_alias_in_sync() {
+    with_temp_db(|db_path| {
+        let storage = Storage::open(db_path).expect("open storage");
+        storage
+            .delete_app_setting(codexmanager_service::APP_SETTING_KEEP_WINDOW_UI_MOUNTED_KEY)
+            .expect("delete window UI mount setting");
+        storage
+            .set_app_setting(
+                codexmanager_service::APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY,
+                "1",
+                now_ts(),
+            )
+            .expect("save legacy lightweight setting");
+        drop(storage);
+
+        let legacy_snapshot =
+            codexmanager_service::app_settings_get().expect("get legacy app settings");
+        assert_eq!(legacy_snapshot["keepWindowUiMounted"], false);
+        assert_eq!(legacy_snapshot["lightweightModeOnCloseToTray"], true);
+
+        let legacy_update = codexmanager_service::app_settings_set(Some(&json!({
+            "lightweightModeOnCloseToTray": false
+        })))
+        .expect("update legacy lightweight setting");
+        assert_eq!(legacy_update["keepWindowUiMounted"], true);
+        assert_eq!(legacy_update["lightweightModeOnCloseToTray"], false);
+
+        let new_setting_wins = codexmanager_service::app_settings_set(Some(&json!({
+            "keepWindowUiMounted": false,
+            "lightweightModeOnCloseToTray": false
+        })))
+        .expect("update window UI mount setting");
+        assert_eq!(new_setting_wins["keepWindowUiMounted"], false);
+        assert_eq!(new_setting_wins["lightweightModeOnCloseToTray"], true);
+
+        let storage = Storage::open(db_path).expect("reopen storage");
+        assert_eq!(
+            storage
+                .get_app_setting(codexmanager_service::APP_SETTING_KEEP_WINDOW_UI_MOUNTED_KEY)
+                .expect("read window UI mount setting"),
+            Some("0".to_string())
+        );
+        assert_eq!(
+            storage
+                .get_app_setting(
+                    codexmanager_service::APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY,
+                )
+                .expect("read legacy lightweight setting"),
+            Some("1".to_string())
+        );
+    });
+}
+
+#[test]
+fn sse_keepalive_app_settings_respect_process_env_and_preserve_requested_storage() {
+    with_temp_db(|db_path| {
+        codexmanager_service::set_gateway_sse_keepalive_enabled(true)
+            .expect("initialize enabled runtime value");
+        codexmanager_service::set_gateway_sse_keepalive_interval_ms(15_000)
+            .expect("initialize interval runtime value");
+
+        {
+            let _enabled_env = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
+            let _interval_env = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "15000");
+            let snapshot = codexmanager_service::app_settings_set(Some(&json!({
+                "sseKeepaliveEnabled": false,
+                "sseKeepaliveIntervalMs": 42000
+            })))
+            .expect("persist requested sse keepalive values under env overrides");
+
+            assert_eq!(
+                snapshot
+                    .get("sseKeepaliveEnabled")
+                    .and_then(|value| value.as_bool()),
+                Some(true),
+                "snapshot must report the effective env-backed enabled value"
+            );
+            assert_eq!(
+                snapshot
+                    .get("sseKeepaliveIntervalMs")
+                    .and_then(|value| value.as_u64()),
+                Some(15_000),
+                "snapshot must report the effective env-backed interval"
+            );
+
+            let storage = Storage::open(db_path).expect("open storage");
+            assert_eq!(
+                storage
+                    .get_app_setting(
+                        codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY
+                    )
+                    .expect("read requested enabled setting"),
+                Some("0".to_string())
+            );
+            assert_eq!(
+                storage
+                    .get_app_setting(
+                        codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY
+                    )
+                    .expect("read requested interval setting"),
+                Some("42000".to_string())
+            );
+            drop(storage);
+
+            let _ = codexmanager_service::app_settings_get()
+                .expect("get app settings under env overrides");
+            let storage = Storage::open(db_path).expect("reopen storage after snapshot");
+            assert_eq!(
+                storage
+                    .get_app_setting(
+                        codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY
+                    )
+                    .expect("read enabled setting after snapshot"),
+                Some("0".to_string()),
+                "current snapshot must not overwrite the requested enabled setting"
+            );
+            assert_eq!(
+                storage
+                    .get_app_setting(
+                        codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY
+                    )
+                    .expect("read interval setting after snapshot"),
+                Some("42000".to_string()),
+                "current snapshot must not overwrite the requested interval setting"
+            );
+        }
+
+        codexmanager_service::sync_runtime_settings_from_storage();
+        assert!(!codexmanager_service::current_gateway_sse_keepalive_enabled());
+        assert_eq!(
+            codexmanager_service::current_gateway_sse_keepalive_interval_ms(),
+            42_000,
+            "persisted requests must apply after env overrides are removed"
+        );
+    });
+}
+
 /// 函数 `app_settings_set_persists_snapshot_and_password_hash`
 ///
 /// 作者: gaohongshun
@@ -697,6 +910,7 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
         let snapshot = codexmanager_service::app_settings_set(Some(&json!({
             "updateAutoCheck": false,
             "closeToTrayOnClose": true,
+            "keepWindowUiMounted": false,
             "lightweightModeOnCloseToTray": true,
             "codexCliGuideDismissed": true,
             "lowTransparency": true,
@@ -748,6 +962,12 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
                 .get("closeToTrayOnClose")
                 .and_then(|value| value.as_bool()),
             Some(true)
+        );
+        assert_eq!(
+            snapshot
+                .get("keepWindowUiMounted")
+                .and_then(|value| value.as_bool()),
+            Some(false)
         );
         assert_eq!(
             snapshot
@@ -858,6 +1078,12 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
         ));
 
         let storage = Storage::open(db_path).expect("open storage");
+        assert_eq!(
+            storage
+                .get_app_setting(codexmanager_service::APP_SETTING_KEEP_WINDOW_UI_MOUNTED_KEY)
+                .expect("read keep window UI mounted"),
+            Some("0".to_string())
+        );
         assert_eq!(
             storage
                 .get_app_setting(
@@ -1404,6 +1630,7 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
             codexmanager_service::APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY,
             codexmanager_service::APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
             codexmanager_service::APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
+            codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY,
             codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
             codexmanager_service::APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
         ] {
@@ -1427,6 +1654,7 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
                 Some("http://127.0.0.1:7899"),
             ),
             ("CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS", Some("432100")),
+            ("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", Some("0")),
             ("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", Some("14000")),
             ("CODEXMANAGER_USAGE_POLLING_ENABLED", Some("0")),
             ("CODEXMANAGER_USAGE_POLL_INTERVAL_SECS", Some("777")),
@@ -1515,6 +1743,12 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
         );
         assert_eq!(
             snapshot
+                .get("sseKeepaliveEnabled")
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            snapshot
                 .get("sseKeepaliveIntervalMs")
                 .and_then(|value| value.as_u64()),
             Some(14000)
@@ -1566,6 +1800,14 @@ fn app_settings_get_loads_env_backed_dedicated_settings_when_storage_missing() {
                 .get_app_setting(codexmanager_service::APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY)
                 .expect("read route strategy"),
             Some("balanced".to_string())
+        );
+        assert_eq!(
+            storage
+                .get_app_setting(
+                    codexmanager_service::APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY
+                )
+                .expect("read sse keepalive enabled"),
+            Some("0".to_string())
         );
         assert_eq!(
             storage

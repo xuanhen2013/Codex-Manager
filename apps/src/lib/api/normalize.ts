@@ -56,6 +56,7 @@ import {
   toNullableNumber,
 } from "@/lib/utils/usage";
 import { readBillingModeLock } from "./billing-mode-lock";
+import { normalizeGatewayTransportValues } from "@/lib/gateway/transport-settings";
 
 const DEFAULT_BACKGROUND_TASKS: BackgroundTaskSettings = {
   usagePollingEnabled: true,
@@ -663,6 +664,16 @@ function normalizeModelInfo(payload: unknown): ModelInfo | null {
       source.experimental_supported_tools ?? source.experimentalSupportedTools,
     ).map((item) => asString(item)),
     inputModalities: asArray(rawInputModalities).map((item) => asString(item)),
+    outputModalities: asArray(
+      source.output_modalities ?? source.outputModalities,
+    ).map((item) => asString(item)),
+    supportedEndpoints: asArray(
+      source.supported_endpoints ?? source.supportedEndpoints,
+    ).map((item) => asString(item)),
+    supportsTextGeneration: asBoolean(
+      source.supports_text_generation ?? source.supportsTextGeneration,
+      true,
+    ),
     minimalClientVersion:
       source.minimal_client_version ?? source.minimalClientVersion ?? null,
     supportsSearchTool: toNullableBoolean(
@@ -726,6 +737,7 @@ export function normalizeApiKey(item: unknown): ApiKey | null {
     rotationStrategy: asString(source.rotationStrategy ?? source.rotation_strategy) || "account_rotation",
     aggregateApiId: asString(source.aggregateApiId ?? source.aggregate_api_id) || null,
     accountPlanFilter: asString(source.accountPlanFilter ?? source.account_plan_filter) || null,
+    accountGroupFilter: asString(source.accountGroupFilter ?? source.account_group_filter) || null,
     aggregateApiUrl: asString(source.aggregateApiUrl ?? source.aggregate_api_url) || null,
     quotaLimitTokens: toNullableNumber(source.quotaLimitTokens ?? source.quota_limit_tokens),
     protocol: asString(source.protocolType ?? source.protocol_type) || "openai_compat",
@@ -1312,14 +1324,27 @@ export function normalizeDeviceAuthInfo(payload: unknown): DeviceAuthInfo | null
  */
 export function normalizeLoginStartResult(payload: unknown): LoginStartResult {
   const source = asObject(payload);
+  const type = asString(source.type ?? source.loginType ?? source.login_type);
   const verificationUrl = asString(source.verificationUrl ?? source.verification_url);
-  return {
-    type: asString(source.type ?? source.loginType ?? source.login_type),
-    authUrl: asString(source.authUrl ?? source.auth_url ?? verificationUrl),
-    loginId: asString(source.loginId ?? source.login_id),
-    verificationUrl: verificationUrl || null,
-    userCode: asString(source.userCode ?? source.user_code) || null,
-  };
+  const loginId = asString(source.loginId ?? source.login_id);
+
+  if (type === "chatgptDeviceCode") {
+    return {
+      type,
+      loginId,
+      verificationUrl,
+      userCode: asString(source.userCode ?? source.user_code),
+    };
+  }
+  if (type === "chatgpt") {
+    return {
+      type,
+      loginId,
+      authUrl: asString(source.authUrl ?? source.auth_url),
+    };
+  }
+
+  throw new Error(`unsupported login start result type: ${type || "unknown"}`);
 }
 
 /**
@@ -1691,17 +1716,23 @@ export function normalizeEnvOverrideCatalog(payload: unknown): EnvOverrideCatalo
  */
 export function normalizeAppSettings(payload: unknown): AppSettings {
   const source = asObject(payload);
+  const legacyLightweightMode = asBoolean(
+    source.lightweightModeOnCloseToTray,
+    false
+  );
+  const keepWindowUiMounted = asBoolean(
+    source.keepWindowUiMounted,
+    !legacyLightweightMode
+  );
   return {
     updateAutoCheck: asBoolean(source.updateAutoCheck, true),
     autoStartEnabled: asBoolean(source.autoStartEnabled, false),
     autoStartSupported: asBoolean(source.autoStartSupported, false),
     closeToTrayOnClose: asBoolean(source.closeToTrayOnClose, false),
     closeToTraySupported: asBoolean(source.closeToTraySupported, false),
+    keepWindowUiMounted,
     lowTransparency: asBoolean(source.lowTransparency, false),
-    lightweightModeOnCloseToTray: asBoolean(
-      source.lightweightModeOnCloseToTray,
-      false
-    ),
+    lightweightModeOnCloseToTray: !keepWindowUiMounted,
     codexCliGuideDismissed: asBoolean(source.codexCliGuideDismissed, false),
     webAccessPasswordConfigured: asBoolean(
       source.webAccessPasswordConfigured,
@@ -1765,9 +1796,7 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     ),
     upstreamProxyUrl: asString(source.upstreamProxyUrl),
     upstreamProxyBypassHosts: asString(source.upstreamProxyBypassHosts),
-    upstreamStreamTimeoutMs: asInteger(source.upstreamStreamTimeoutMs, 300_000, 0),
-    upstreamTotalTimeoutMs: asInteger(source.upstreamTotalTimeoutMs, 0, 0),
-    sseKeepaliveIntervalMs: asInteger(source.sseKeepaliveIntervalMs, 15_000, 1),
+    ...normalizeGatewayTransportValues(source),
     backgroundTasks: normalizeBackgroundTasks(source.backgroundTasks),
     runtimeTimeZone: normalizeRuntimeTimeZone(source.runtimeTimeZone),
     envOverrides: normalizeStringRecord(source.envOverrides),

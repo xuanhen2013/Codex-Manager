@@ -9,7 +9,7 @@ use super::{
     PassthroughSseProtocol, PassthroughSseUsageReader, SseKeepAliveFrame,
 };
 use crate::gateway::GeminiStreamOutputMode;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -63,6 +63,14 @@ impl Drop for EnvGuard {
         } else {
             std::env::remove_var(self.key);
         }
+    }
+}
+
+struct RuntimeConfigReloadGuard;
+
+impl Drop for RuntimeConfigReloadGuard {
+    fn drop(&mut self) {
+        let _ = std::panic::catch_unwind(crate::gateway::reload_runtime_config_from_env);
     }
 }
 
@@ -1017,6 +1025,152 @@ fn images_reader_streams_partial_and_completed_events() {
     assert!(out.contains("\"total_tokens\":5"));
 }
 
+#[test]
+fn images_reader_emits_comment_keepalive_before_delayed_first_frame() {
+    let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let mut out = String::new();
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    {
+        let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
+        let _interval_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "10");
+        crate::gateway::reload_runtime_config_from_env();
+
+        let (upstream, server) = open_streaming_mock_http_response(
+            "text/event-stream",
+            &[
+                (
+                    "data: {\"type\":\"response.image_generation_call.partial_image\",\"item_id\":\"ig_delayed\",\"output_format\":\"png\",\"partial_image_b64\":\"cGFydGlhbA==\",\"partial_image_index\":0}\n\n",
+                    60,
+                ),
+                (
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_img_delayed\",\"output\":[]}}\n\n",
+                    0,
+                ),
+            ],
+        );
+        let mut reader = ImagesFromResponsesSseReader::new(
+            upstream,
+            Arc::clone(&usage_collector),
+            std::time::Instant::now(),
+            ImagesResponseFormat::B64Json,
+        );
+        reader
+            .read_to_string(&mut out)
+            .expect("read delayed images stream");
+        server.join().expect("join delayed images upstream");
+    }
+    crate::gateway::reload_runtime_config_from_env();
+
+    let keepalive_at = out.find(": keep-alive\n\n").expect("comment keepalive");
+    let partial_at = out
+        .find("event: image_generation.partial_image")
+        .expect("partial image event");
+    assert!(keepalive_at < partial_at);
+    assert!(
+        usage_collector
+            .lock()
+            .expect("lock image usage collector")
+            .usage
+            .first_response_ms
+            .is_some_and(|elapsed| elapsed >= 30),
+        "keepalive must not be counted as the first upstream response"
+    );
+}
+
+#[test]
+fn images_reader_suppresses_comment_keepalive_when_disabled() {
+    let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let mut out = String::new();
+    {
+        let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "0");
+        let _interval_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "5");
+        crate::gateway::reload_runtime_config_from_env();
+
+        let (upstream, server) = open_streaming_mock_http_response(
+            "text/event-stream",
+            &[
+                (
+                    "data: {\"type\":\"response.image_generation_call.partial_image\",\"item_id\":\"ig_disabled\",\"output_format\":\"png\",\"partial_image_b64\":\"cGFydGlhbA==\",\"partial_image_index\":0}\n\n",
+                    40,
+                ),
+                (
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_img_disabled\",\"output\":[]}}\n\n",
+                    0,
+                ),
+            ],
+        );
+        let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+        let mut reader = ImagesFromResponsesSseReader::new(
+            upstream,
+            usage_collector,
+            std::time::Instant::now(),
+            ImagesResponseFormat::B64Json,
+        );
+        reader
+            .read_to_string(&mut out)
+            .expect("read images stream with keepalive disabled");
+        server
+            .join()
+            .expect("join images upstream with keepalive disabled");
+    }
+    crate::gateway::reload_runtime_config_from_env();
+
+    assert!(!out.contains(": keep-alive"));
+    assert!(out.contains("event: image_generation.partial_image"));
+}
+
+#[test]
+fn images_reader_keepalive_does_not_mask_upstream_idle_timeout() {
+    let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let previous_timeout_ms = crate::gateway::current_upstream_stream_timeout_ms();
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut out = String::new();
+    {
+        let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
+        let _interval_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "5");
+        let _timeout_guard = EnvGuard::set(
+            "CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS",
+            &previous_timeout_ms.to_string(),
+        );
+        crate::gateway::reload_runtime_config_from_env();
+        crate::gateway::set_upstream_stream_timeout_ms(25);
+
+        let (upstream, server) = open_streaming_mock_http_response(
+            "text/event-stream",
+            &[(
+                "data: {\"type\":\"response.image_generation_call.partial_image\",\"item_id\":\"ig_too_late\",\"output_format\":\"png\",\"partial_image_b64\":\"bGF0ZQ==\",\"partial_image_index\":0}\n\n",
+                80,
+            )],
+        );
+        let mut reader = ImagesFromResponsesSseReader::new(
+            upstream,
+            Arc::clone(&usage_collector),
+            std::time::Instant::now(),
+            ImagesResponseFormat::B64Json,
+        );
+        reader
+            .read_to_string(&mut out)
+            .expect("read image stream until idle timeout");
+        server.join().expect("join idle timeout image upstream");
+        crate::gateway::set_upstream_stream_timeout_ms(previous_timeout_ms);
+    }
+    crate::gateway::reload_runtime_config_from_env();
+
+    assert!(out.contains(": keep-alive\n\n"));
+    assert!(!out.contains("event: image_generation.partial_image"));
+    assert_eq!(
+        usage_collector
+            .lock()
+            .expect("lock idle timeout collector")
+            .terminal_error
+            .as_deref(),
+        Some("上游流式空闲超时")
+    );
+}
+
 /// 函数 `extract_openai_completed_output_text_reads_completed_output_message_text`
 ///
 /// 作者: gaohongshun
@@ -1643,8 +1797,10 @@ fn gemini_cli_sse_reader_emits_raw_gemini_chunks() {
 #[test]
 fn gemini_cli_sse_reader_does_not_emit_comment_keepalive_frames() {
     let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "5");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2080,8 +2236,10 @@ fn gemini_raw_reader_emits_plain_json_error_for_incomplete_stream() {
 #[test]
 fn passthrough_sse_reader_emits_keepalive_for_responses_stream() {
     let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "15");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2097,7 +2255,7 @@ fn passthrough_sse_reader_emits_keepalive_for_responses_stream() {
     let mut reader = PassthroughSseUsageReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         PassthroughSseProtocol::Generic,
         std::time::Instant::now(),
     );
@@ -2106,9 +2264,10 @@ fn passthrough_sse_reader_emits_keepalive_for_responses_stream() {
         .read_to_string(&mut mapped)
         .expect("read passthrough sse");
     server.join().expect("join streaming mock upstream");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
-    assert!(mapped.contains("\"type\":\"codexmanager.keepalive\""));
+    assert!(mapped.contains(": keep-alive\n\n"));
+    assert!(!mapped.contains("codexmanager.keepalive"));
     assert!(mapped.contains("\"type\":\"response.created\""));
     assert!(mapped.contains("data: [DONE]"));
 }
@@ -2116,8 +2275,10 @@ fn passthrough_sse_reader_emits_keepalive_for_responses_stream() {
 #[test]
 fn passthrough_sse_reader_waits_for_first_upstream_frame_before_keepalive() {
     let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "5");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2133,7 +2294,7 @@ fn passthrough_sse_reader_waits_for_first_upstream_frame_before_keepalive() {
     let mut reader = PassthroughSseUsageReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         PassthroughSseProtocol::Generic,
         std::time::Instant::now(),
     );
@@ -2142,9 +2303,9 @@ fn passthrough_sse_reader_waits_for_first_upstream_frame_before_keepalive() {
         .read_to_string(&mut mapped)
         .expect("read passthrough sse without initial keepalive");
     server.join().expect("join delayed first-frame upstream");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
-    assert!(!mapped.contains("\"type\":\"codexmanager.keepalive\""));
+    assert!(!mapped.contains(": keep-alive\n\n"));
     assert!(mapped.contains("\"type\":\"response.created\""));
     assert!(mapped.contains("data: [DONE]"));
 }
@@ -2152,8 +2313,10 @@ fn passthrough_sse_reader_waits_for_first_upstream_frame_before_keepalive() {
 #[test]
 fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
     let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "15");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2174,7 +2337,7 @@ fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2184,21 +2347,20 @@ fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
     server
         .join()
         .expect("join openai responses keepalive upstream");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let collector = usage_collector
         .lock()
         .expect("lock usage collector")
         .clone();
-    assert!(mapped.contains("\"type\":\"codexmanager.keepalive\""));
+    assert!(mapped.contains(": keep-alive\n\n"));
+    assert!(!mapped.contains("codexmanager.keepalive"));
     assert!(mapped.contains("event: response.created"));
     assert!(mapped.contains("event: response.completed"));
     let created_at = mapped
         .find("event: response.created")
         .expect("created event position");
-    let keepalive_at = mapped
-        .find("\"type\":\"codexmanager.keepalive\"")
-        .expect("keepalive position");
+    let keepalive_at = mapped.find(": keep-alive\n\n").expect("keepalive position");
     let completed_at = mapped
         .find("event: response.completed")
         .expect("completed event position");
@@ -2209,13 +2371,30 @@ fn openai_responses_passthrough_reader_emits_keepalive_during_silent_gap() {
         collector.last_event_type.as_deref(),
         Some("response.completed")
     );
+    let semantic_event_types = mapped
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+        .filter_map(|value| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        semantic_event_types,
+        vec!["response.created", "response.completed"]
+    );
 }
 
 #[test]
 fn openai_responses_passthrough_reader_emits_keepalive_before_delayed_first_frame() {
     let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "1");
     let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "10");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2236,7 +2415,7 @@ fn openai_responses_passthrough_reader_emits_keepalive_before_delayed_first_fram
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2244,15 +2423,58 @@ fn openai_responses_passthrough_reader_emits_keepalive_before_delayed_first_fram
         .read_to_string(&mut mapped)
         .expect("read delayed first openai responses stream");
     server.join().expect("join delayed first-frame upstream");
-    super::reload_from_env();
+    crate::gateway::reload_runtime_config_from_env();
 
-    let keepalive_at = mapped
-        .find("\"type\":\"codexmanager.keepalive\"")
-        .expect("keepalive position");
+    let keepalive_at = mapped.find(": keep-alive\n\n").expect("keepalive position");
     let created_at = mapped
         .find("event: response.created")
         .expect("created event position");
     assert!(keepalive_at < created_at);
+    assert!(mapped.contains("event: response.completed"));
+}
+
+#[test]
+fn openai_responses_passthrough_reader_suppresses_keepalive_when_disabled() {
+    let _guard = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let mut mapped = String::new();
+    {
+        let _enabled_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_ENABLED", "0");
+        let _interval_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "10");
+        crate::gateway::reload_runtime_config_from_env();
+
+        let (upstream, server) = open_streaming_mock_http_response(
+            "text/event-stream",
+            &[
+                (
+                    "event: response.created\n\
+                     data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive_disabled\"}}\n\n",
+                    50,
+                ),
+                (
+                    "event: response.completed\n\
+                     data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive_disabled\"}}\n\n",
+                    0,
+                ),
+            ],
+        );
+        let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+        let mut reader = OpenAIResponsesPassthroughSseReader::new(
+            upstream,
+            usage_collector,
+            SseKeepAliveFrame::Comment,
+            std::time::Instant::now(),
+        );
+        reader
+            .read_to_string(&mut mapped)
+            .expect("read disabled keepalive stream");
+        server.join().expect("join disabled keepalive upstream");
+    }
+    crate::gateway::reload_runtime_config_from_env();
+
+    assert!(!mapped.contains(": keep-alive\n\n"));
+    assert!(!mapped.contains("codexmanager.keepalive"));
+    assert!(mapped.contains("event: response.created"));
     assert!(mapped.contains("event: response.completed"));
 }
 
@@ -2275,7 +2497,7 @@ fn openai_responses_passthrough_reader_parses_split_events_with_eventsource_stre
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2316,7 +2538,7 @@ fn openai_responses_passthrough_reader_collects_output_item_field_text() {
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2359,7 +2581,7 @@ fn openai_responses_passthrough_reader_usage_text_not_duplicated_across_delta_it
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2403,7 +2625,7 @@ fn openai_responses_passthrough_reader_usage_text_dedupes_snapshot_only_events()
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2442,7 +2664,7 @@ fn openai_responses_passthrough_reader_marks_incomplete_terminal_error_from_stat
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2493,7 +2715,7 @@ fn openai_responses_passthrough_reader_maps_bare_incomplete_to_disconnect_messag
     let mut reader = OpenAIResponsesPassthroughSseReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         std::time::Instant::now(),
     );
     let mut mapped = String::new();
@@ -2541,7 +2763,7 @@ fn passthrough_sse_reader_captures_raw_html_error_body() {
     let mut reader = PassthroughSseUsageReader::new(
         upstream,
         Arc::clone(&usage_collector),
-        SseKeepAliveFrame::OpenAIResponses,
+        SseKeepAliveFrame::Comment,
         PassthroughSseProtocol::Generic,
         std::time::Instant::now(),
     );

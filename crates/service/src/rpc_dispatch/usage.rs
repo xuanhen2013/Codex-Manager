@@ -2,7 +2,7 @@ use codexmanager_core::rpc::types::{
     JsonRpcRequest, JsonRpcResponse, UsageListResult, UsageReadResult,
 };
 
-use crate::{usage_aggregate, usage_list, usage_read, usage_refresh, usage_reset_credits};
+use crate::{usage_aggregate, usage_list, usage_read, usage_refresh};
 
 /// 函数 `try_handle`
 ///
@@ -38,28 +38,28 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let account_id =
                 super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
             let result = match account_id {
-                Some(account_id) => usage_refresh::refresh_usage_for_account(account_id),
-                None => usage_refresh::refresh_usage_for_all_accounts(),
+                Some(account_id) => usage_refresh::refresh_usage_for_account_result(account_id),
+                None => usage_refresh::refresh_usage_for_all_accounts_result(),
             };
-            super::ok_or_error(result)
+            super::value_or_error(result)
         }
-        "account/usage/resetCredits/read" => {
+        "account/usage/resetCredits" => {
             let account_id =
                 super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
-            super::value_or_error(match account_id {
-                Some(account_id) => usage_reset_credits::read_usage_reset_credits(account_id),
-                None => Err("account_id is required".to_string()),
-            })
+            super::value_or_error(
+                account_id
+                    .ok_or_else(|| "accountId is required".to_string())
+                    .and_then(crate::usage_reset_credits::read_reset_credits),
+            )
         }
-        "account/usage/resetCredits/consume" => {
+        "account/usage/resetCredit/consume" => {
             let account_id =
                 super::str_param(req, "accountId").or_else(|| super::str_param(req, "account_id"));
-            super::value_or_error(match account_id {
-                Some(account_id) => {
-                    usage_reset_credits::consume_usage_reset_credit_for_account(account_id)
-                }
-                None => Err("account_id is required".to_string()),
-            })
+            super::value_or_error(
+                account_id
+                    .ok_or_else(|| "accountId is required".to_string())
+                    .and_then(crate::usage_reset_credits::consume_reset_credit),
+            )
         }
         _ => return None,
     };

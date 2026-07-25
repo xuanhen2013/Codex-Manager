@@ -1,16 +1,24 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::webview::{Color, PageLoadEvent};
+#[cfg(not(target_os = "windows"))]
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::Manager;
-use tauri::{PhysicalPosition, PhysicalRect, Rect, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    LogicalSize, PhysicalPosition, PhysicalRect, Rect, Size, WebviewUrl, WebviewWindowBuilder,
+};
 
-use super::state::{APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE};
+#[cfg(debug_assertions)]
+use tauri::Url;
+
+use super::state::{
+    APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE, KEEP_WINDOW_UI_MOUNTED,
+};
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const TRAY_PREVIEW_WINDOW_LABEL: &str = "tray-preview";
 const TRAY_PREVIEW_WIDTH: f64 = 360.0;
-const TRAY_PREVIEW_HEIGHT: f64 = 390.0;
+const TRAY_PREVIEW_HEIGHT: f64 = 430.0;
 const TRAY_PREVIEW_MARGIN: f64 = 8.0;
 static SHOW_MAIN_WINDOW_PENDING: AtomicBool = AtomicBool::new(false);
 static MAIN_WINDOW_CREATED_ONCE: AtomicBool = AtomicBool::new(false);
@@ -38,7 +46,7 @@ fn show_main_window(app: &tauri::AppHandle) -> bool {
         return false;
     }
     log::info!("show main window requested");
-    hide_tray_preview_window(app);
+    dismiss_tray_preview_window(app);
     KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE.store(false, Ordering::Relaxed);
     let Some(main_window) = ensure_main_window(app) else {
         return false;
@@ -125,11 +133,38 @@ pub(crate) fn navigate_main_window_to_startup_app(app: &tauri::AppHandle) -> Res
         .map_err(|err| format!("startup app navigation callback timed out: {err}"))?
 }
 
-pub(crate) fn hide_tray_preview_window(app: &tauri::AppHandle) {
+pub(crate) fn dismiss_tray_preview_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
-        if let Err(err) = window.hide() {
-            log::warn!("hide tray preview window failed: {}", err);
+        let result = if KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed) {
+            window.hide()
+        } else {
+            window.close()
+        };
+        if let Err(err) = result {
+            log::warn!("dismiss tray preview window failed: {}", err);
         }
+    }
+}
+
+pub(crate) fn release_tray_preview_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
+        if let Err(err) = window.close() {
+            log::warn!("release tray preview window failed: {}", err);
+        }
+    }
+}
+
+pub(crate) fn sync_window_ui_mount_state(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let app_for_callback = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || {
+        if KEEP_WINDOW_UI_MOUNTED.load(Ordering::Relaxed) {
+            let _ = ensure_tray_preview_window(&app_for_callback);
+        } else {
+            release_tray_preview_window(&app_for_callback);
+        }
+    }) {
+        log::warn!("schedule window UI mount state sync failed: {}", err);
     }
 }
 
@@ -142,9 +177,7 @@ pub(crate) fn toggle_tray_preview_window(
         return;
     };
     if window.is_visible().unwrap_or(false) {
-        if let Err(err) = window.hide() {
-            log::warn!("hide tray preview window failed: {}", err);
-        }
+        dismiss_tray_preview_window(app);
         return;
     }
 
@@ -267,10 +300,11 @@ fn navigate_window_to_app_url(_window: &tauri::WebviewWindow) -> tauri::Result<(
 
 fn ensure_tray_preview_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
+        apply_tray_preview_window_size(&window);
         return Some(window);
     }
 
-    match WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         TRAY_PREVIEW_WINDOW_LABEL,
         WebviewUrl::App("tray-preview/".into()),
@@ -285,29 +319,58 @@ fn ensure_tray_preview_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWi
     .decorations(false)
     .transparent(true)
     .background_color(Color(0, 0, 0, 0))
-    .effects(
-        EffectsBuilder::new()
-            .effect(Effect::Popover)
-            .state(EffectState::Active)
-            .radius(18.0)
-            .build(),
-    )
     .shadow(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
     .visible(false)
-    .focused(false)
-    .build()
-    {
-        Ok(window) => Some(window),
+    .focused(false);
+
+    #[cfg(not(target_os = "windows"))]
+    let builder = builder.effects(
+        EffectsBuilder::new()
+            .effect(Effect::Popover)
+            .state(EffectState::Active)
+            .radius(18.0)
+            .build(),
+    );
+
+    match builder.build() {
+        Ok(window) => {
+            apply_tray_preview_window_size(&window);
+            Some(window)
+        }
         Err(err) => {
             if let Some(window) = app.get_webview_window(TRAY_PREVIEW_WINDOW_LABEL) {
+                apply_tray_preview_window_size(&window);
                 return Some(window);
             }
             log::warn!("create tray preview window failed: {}", err);
             None
         }
+    }
+}
+
+fn tray_preview_window_size() -> Size {
+    LogicalSize::new(TRAY_PREVIEW_WIDTH, TRAY_PREVIEW_HEIGHT).into()
+}
+
+fn apply_tray_preview_window_size(window: &tauri::WebviewWindow) {
+    let size = tray_preview_window_size();
+    if let Err(err) = window.set_min_size(None::<Size>) {
+        log::warn!("clear tray preview min size failed: {}", err);
+    }
+    if let Err(err) = window.set_max_size(None::<Size>) {
+        log::warn!("clear tray preview max size failed: {}", err);
+    }
+    if let Err(err) = window.set_size(size) {
+        log::warn!("set tray preview size failed: {}", err);
+    }
+    if let Err(err) = window.set_min_size(Some(size)) {
+        log::warn!("set tray preview min size failed: {}", err);
+    }
+    if let Err(err) = window.set_max_size(Some(size)) {
+        log::warn!("set tray preview max size failed: {}", err);
     }
 }
 

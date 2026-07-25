@@ -354,6 +354,7 @@ pub struct ApiKeySummary {
     pub rotation_strategy: String,
     pub aggregate_api_id: Option<String>,
     pub account_plan_filter: Option<String>,
+    pub account_group_filter: Option<String>,
     pub aggregate_api_url: Option<String>,
     pub quota_limit_tokens: Option<i64>,
     pub client_type: String,
@@ -1710,6 +1711,23 @@ pub struct DashboardDailyUsagePoint {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DashboardUsageSeriesPoint {
+    pub bucket_start_ts: i64,
+    pub bucket_end_ts: i64,
+    pub usage: DashboardTokenUsageResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardModelUsageSeries {
+    pub model: String,
+    pub usage: DashboardTokenUsageResult,
+    #[serde(default)]
+    pub points: Vec<DashboardUsageSeriesPoint>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DashboardUserUsageSummary {
     pub user_id: String,
     pub username: Option<String>,
@@ -1733,6 +1751,10 @@ pub struct DashboardSourceUsageSummary {
     pub range_usage: DashboardTokenUsageResult,
 }
 
+fn default_dashboard_series_bucket_seconds() -> i64 {
+    86_400
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardAdminUsageSummaryResult {
@@ -1743,6 +1765,12 @@ pub struct DashboardAdminUsageSummaryResult {
     pub today_usage: DashboardTokenUsageResult,
     #[serde(default)]
     pub daily_usage: Vec<DashboardDailyUsagePoint>,
+    #[serde(default = "default_dashboard_series_bucket_seconds")]
+    pub series_bucket_seconds: i64,
+    #[serde(default)]
+    pub series_usage: Vec<DashboardUsageSeriesPoint>,
+    #[serde(default)]
+    pub model_usage: Vec<DashboardModelUsageSeries>,
     #[serde(default)]
     pub users: Vec<DashboardUserUsageSummary>,
     #[serde(default)]

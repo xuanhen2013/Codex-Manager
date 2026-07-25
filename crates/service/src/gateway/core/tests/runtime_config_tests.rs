@@ -71,7 +71,66 @@ impl Drop for EnvGuard {
     }
 }
 
+struct RuntimeConfigReloadGuard;
+
+impl Drop for RuntimeConfigReloadGuard {
+    fn drop(&mut self) {
+        let _ = std::panic::catch_unwind(reload_from_env);
+    }
+}
+
 static RUNTIME_CONFIG_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn sse_keepalive_enabled_defaults_true_and_honors_runtime_updates() {
+    let _lock = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_env = EnvGuard::clear(ENV_SSE_KEEPALIVE_ENABLED);
+    let _interval_env = EnvGuard::clear(ENV_SSE_KEEPALIVE_INTERVAL_MS);
+
+    reload_from_env();
+    assert!(current_sse_keepalive_enabled());
+    assert!(!sse_keepalive_enabled_is_env_overridden());
+    assert!(!sse_keepalive_interval_is_env_overridden());
+
+    assert!(!set_sse_keepalive_enabled(false));
+    assert!(!current_sse_keepalive_enabled());
+    assert_eq!(set_sse_keepalive_interval_ms(41), Ok(41));
+    assert_eq!(current_sse_keepalive_interval_ms(), 41);
+    assert!(std::env::var_os(ENV_SSE_KEEPALIVE_ENABLED).is_none());
+    assert!(std::env::var_os(ENV_SSE_KEEPALIVE_INTERVAL_MS).is_none());
+}
+
+#[test]
+fn sse_keepalive_env_overrides_runtime_updates_and_interval_validation_still_applies() {
+    let _lock = crate::test_env_guard();
+    let _reload_guard = RuntimeConfigReloadGuard;
+    let _enabled_env = EnvGuard::set(ENV_SSE_KEEPALIVE_ENABLED, "off");
+    let _interval_env = EnvGuard::set(ENV_SSE_KEEPALIVE_INTERVAL_MS, "23");
+
+    reload_from_env();
+    assert!(!current_sse_keepalive_enabled());
+    assert_eq!(current_sse_keepalive_interval_ms(), 23);
+    assert!(sse_keepalive_enabled_is_env_overridden());
+    assert!(sse_keepalive_interval_is_env_overridden());
+
+    assert_eq!(
+        set_sse_keepalive_interval_ms(0),
+        Err("SSE keepalive interval must be greater than 0".to_string())
+    );
+    assert!(!set_sse_keepalive_enabled(true));
+    assert_eq!(set_sse_keepalive_interval_ms(41), Ok(23));
+    assert!(!current_sse_keepalive_enabled());
+    assert_eq!(current_sse_keepalive_interval_ms(), 23);
+    assert_eq!(
+        std::env::var(ENV_SSE_KEEPALIVE_ENABLED).as_deref(),
+        Ok("off")
+    );
+    assert_eq!(
+        std::env::var(ENV_SSE_KEEPALIVE_INTERVAL_MS).as_deref(),
+        Ok("23")
+    );
+}
 
 /// 函数 `reload_from_env_updates_timeout_and_proxy`
 ///

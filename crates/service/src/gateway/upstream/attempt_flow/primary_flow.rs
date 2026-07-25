@@ -11,7 +11,7 @@ use super::transport::UpstreamRequestContext;
 pub(in crate::gateway::upstream) enum PrimaryFlowDecision {
     Continue {
         upstream: GatewayUpstreamResponse,
-        auth_token: String,
+        authorization: PrimaryAuthorization,
     },
     RespondUpstream(GatewayUpstreamResponse),
     Failover,
@@ -19,6 +19,15 @@ pub(in crate::gateway::upstream) enum PrimaryFlowDecision {
         status_code: u16,
         message: String,
     },
+}
+
+#[derive(Debug, Clone)]
+pub(in crate::gateway::upstream) struct PrimaryAuthorization {
+    pub(in crate::gateway::upstream) value: String,
+    pub(in crate::gateway::upstream) task_id: Option<String>,
+    pub(in crate::gateway::upstream) uses_agent_identity: bool,
+    pub(in crate::gateway::upstream) is_fedramp: bool,
+    pub(in crate::gateway::upstream) account_scope_id: Option<String>,
 }
 
 /// 函数 `resolve_chatgpt_primary_bearer`
@@ -39,6 +48,55 @@ fn resolve_chatgpt_primary_bearer(token: &Token) -> Option<String> {
     } else {
         Some(access.to_string())
     }
+}
+
+fn resolve_chatgpt_primary_authorization(
+    storage: &Storage,
+    client: &reqwest::blocking::Client,
+    account: &Account,
+    token: &Token,
+) -> Result<(PrimaryAuthorization, &'static str), String> {
+    match crate::agent_identity::resolve_or_bootstrap_account_agent_identity_authorization(
+        storage, client, account, token,
+    ) {
+        Ok(Some(resolved)) => {
+            return Ok((
+                PrimaryAuthorization {
+                    value: resolved.value,
+                    task_id: Some(resolved.task_id),
+                    uses_agent_identity: true,
+                    is_fedramp: resolved.is_fedramp,
+                    account_scope_id: resolved.account_scope_id,
+                },
+                "agent_identity",
+            ));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            if token.access_token.trim().is_empty() {
+                return Err(err);
+            }
+            log::warn!(
+                "event=gateway_agent_identity_resolution_failed account_id={} error={}",
+                account.id,
+                err
+            );
+        }
+    }
+    resolve_chatgpt_primary_bearer(token)
+        .map(|access_token| {
+            (
+                PrimaryAuthorization {
+                    value: access_token,
+                    task_id: None,
+                    uses_agent_identity: false,
+                    is_fedramp: false,
+                    account_scope_id: None,
+                },
+                "access_token",
+            )
+        })
+        .ok_or_else(|| "missing chatgpt access token".to_string())
 }
 
 /// 函数 `run_primary_upstream_flow`
@@ -77,16 +135,16 @@ pub(in crate::gateway::upstream) fn run_primary_upstream_flow<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let (auth_token, token_source) =
-        if let Some(access_token) = resolve_chatgpt_primary_bearer(token) {
-            (access_token, "access_token")
-        } else {
-            let err = "missing chatgpt access token";
-            log_gateway_result(Some(primary_url), 401, Some(err));
-            return PrimaryFlowDecision::Terminal {
-                status_code: 401,
-                message: err.to_string(),
-            };
+    let (authorization, token_source) =
+        match resolve_chatgpt_primary_authorization(storage, client, account, token) {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                log_gateway_result(Some(primary_url), 401, Some(err.as_str()));
+                return PrimaryFlowDecision::Terminal {
+                    status_code: 401,
+                    message: err,
+                };
+            }
         };
     if debug {
         log::debug!(
@@ -103,12 +161,12 @@ where
         method,
         primary_url,
         request_deadline,
-        request_ctx,
+        request_ctx.with_fedramp(authorization.is_fedramp),
         incoming_headers,
         body,
         is_stream,
-        auth_token.as_str(),
-        account,
+        authorization.value.as_str(),
+        &account_with_authorization_scope(account, &authorization),
         strip_session_affinity,
         has_more_candidates,
         &mut log_gateway_result,
@@ -141,7 +199,7 @@ where
         token,
         strip_session_affinity,
         debug,
-        allow_openai_fallback,
+        allow_openai_fallback && !authorization.uses_agent_identity,
         status,
         upstream.headers().get(CONTENT_TYPE),
         has_more_candidates,
@@ -149,7 +207,7 @@ where
     ) {
         FallbackBranchResult::NotTriggered => PrimaryFlowDecision::Continue {
             upstream,
-            auth_token,
+            authorization,
         },
         FallbackBranchResult::RespondUpstream(resp) => PrimaryFlowDecision::RespondUpstream(resp),
         FallbackBranchResult::Failover => PrimaryFlowDecision::Failover,
@@ -161,6 +219,23 @@ where
             message,
         },
     }
+}
+
+pub(super) fn account_with_authorization_scope(
+    account: &Account,
+    authorization: &PrimaryAuthorization,
+) -> Account {
+    let mut account = account.clone();
+    if let Some(scope) = authorization
+        .account_scope_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())
+    {
+        account.chatgpt_account_id = Some(scope.to_string());
+        account.workspace_id = Some(scope.to_string());
+    }
+    account
 }
 
 #[cfg(test)]

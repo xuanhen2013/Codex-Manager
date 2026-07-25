@@ -10,6 +10,8 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   "本地模型目录是唯一运行时真相源；价格、路由和指令策略会原子保存。":
     "The local model catalog is the only runtime source of truth; prices, routes, and the instructions policy are saved atomically.",
   重新读取: "Reload",
+  模型目录已重新读取: "Model catalog reloaded",
+  读取模型失败: "Failed to read models",
   "从本地 JSON 导入": "Import local JSON",
   "导出到本地 Codex 缓存": "Export to local Codex cache",
   "导出中...": "Exporting...",
@@ -17,6 +19,8 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   总数: "Total",
   已启用: "Enabled",
   已禁用: "Disabled",
+  隐藏且启用: "Hidden and enabled",
+  隐藏且禁用: "Hidden and disabled",
   内置模型: "Built-in models",
   自定义模型: "Custom models",
   价格缺失: "Price missing",
@@ -42,6 +46,14 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   路由: "Routes",
   状态: "Status",
   操作: "Actions",
+  模型状态: "Model state",
+  "模型状态操作 {slug}": "Change model state for {slug}",
+  显示并启用: "Visible and enabled",
+  显示但禁用: "Visible but disabled",
+  隐藏但启用: "Hidden but enabled",
+  隐藏并禁用: "Hidden and disabled",
+  恢复并启用: "Restore and enable",
+  恢复显示但保持禁用: "Restore visibility and keep disabled",
   内置: "Built-in",
   自定义: "Custom",
   隐藏: "Hidden",
@@ -53,6 +65,7 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   "选择模型 {slug}": "Select model {slug}",
   "编辑模型 {slug}": "Edit model {slug}",
   "禁用模型 {slug}": "Disable model {slug}",
+  "隐藏模型 {slug}": "Hide model {slug}",
   "删除模型 {slug}": "Delete model {slug}",
   编辑模型: "Edit model",
   删除模型: "Delete model",
@@ -60,13 +73,24 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
     "Builtin model {slug} will be disabled; its data will not be deleted.",
   "内置模型 {slug} 将被禁用，数据不会删除。":
     "Built-in model {slug} will be disabled; its data will not be deleted.",
+  "内置模型 {slug} 将被隐藏并禁用，数据不会删除。":
+    "Built-in model {slug} will be hidden and disabled; its data will not be deleted.",
   "确定要永久删除自定义模型 {slug} 吗？":
     "Permanently delete custom model {slug}?",
   "将处理 {count} 个模型：{builtin} 个 builtin 会被禁用，其余 custom 会被删除。":
     "Process {count} models: {builtin} builtin models will be disabled and the custom models will be deleted.",
   "将处理 {count} 个模型：{builtin} 个内置模型会被禁用，其余自定义模型会被删除。":
     "Process {count} models: {builtin} built-in models will be disabled and the custom models will be deleted.",
+  "将处理 {count} 个模型：{builtin} 个内置模型会被隐藏并禁用，其余自定义模型会被删除。":
+    "Process {count} models: {builtin} built-in models will be hidden and disabled, and the custom models will be deleted.",
   批量分配路由: "Assign routes",
+  筛选模型: "Filter models",
+  批量修改状态: "Set status in bulk",
+  "批量修改模型状态 ({count})": "Set model status in bulk ({count})",
+  设置选中模型状态: "Set selected models to",
+  批量更新模型状态: "Update model status in bulk",
+  批量更新模型状态失败: "Failed to update model status in bulk",
+  "已更新 {count} 个模型的状态": "Updated the status of {count} models",
   批量分配模型路由: "Assign model routes in bulk",
   "已选择 {count} 个模型；每条路由的上游模型名会自动使用对应模型标识。":
     "Selected {count} models. Each route automatically uses the corresponding model slug as its upstream model name.",
@@ -106,9 +130,30 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
     "Small, fast, and cost-efficient model for simpler coding tasks.",
   "针对专业工作和长时间运行智能体优化的模型。":
     "Optimized for professional work and long-running agents.",
+  "先进的图像生成和编辑模型。":
+    "State-of-the-art image generation and editing model.",
   "用于 Codex 自动审批审查的模型。":
     "Automatic approval review model for Codex.",
   "已删除 {count} 个模型": "Deleted {count} models",
+  "已隐藏内置模型 {slug}": "Hidden built-in model {slug}",
+  "已删除自定义模型 {slug}": "Deleted custom model {slug}",
+  更新模型状态: "Update model state",
+  更新模型状态失败: "Failed to update model state",
+  "模型 {slug} 已隐藏但保持启用":
+    "Model {slug} is hidden but remains enabled",
+  "模型 {slug} 已隐藏并禁用": "Model {slug} is hidden and disabled",
+  "模型 {slug} 已恢复并启用": "Model {slug} was restored and enabled",
+  "模型 {slug} 已启用并显示": "Model {slug} is enabled and visible",
+  "模型 {slug} 已恢复显示但保持禁用":
+    "Model {slug} was restored to visible but remains disabled",
+  "模型 {slug} 已禁用但保留显示":
+    "Model {slug} is disabled but remains visible",
+  "已隐藏 {count} 个内置模型": "Hidden {count} built-in models",
+  "已删除 {count} 个自定义模型": "Deleted {count} custom models",
+  "已隐藏 {hidden} 个内置模型，并删除 {deleted} 个自定义模型":
+    "Hidden {hidden} built-in models and deleted {deleted} custom models",
+  "批量处理完成：隐藏{hidden}个，删除{deleted}个，失败{failed}个":
+    "Batch processing completed: {hidden} hidden, {deleted} deleted, {failed} failed",
   "批量删除完成：成功{success}个，失败{failed}个":
     "Batch deletion completed: {success} succeeded, {failed} failed",
   批量删除失败: "Batch deletion failed",
@@ -116,6 +161,8 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
     "Supports model catalog exports and Codex catalog JSON; every imported item becomes a custom model.",
   "本地 JSON 文件": "Local JSON file",
   冲突策略: "Conflict strategy",
+  保留现有模型: "Keep existing models",
+  替换自定义模型: "Replace custom models",
   预览导入: "Preview import",
   "处理中...": "Processing...",
   新增: "Added",

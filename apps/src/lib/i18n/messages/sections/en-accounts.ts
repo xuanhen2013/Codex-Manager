@@ -3,23 +3,6 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
-  "主动额度重置": "Manual quota reset",
-  "每次重置会消耗 1 次可用次数，并立即重置当前 Codex 额度窗口。":
-    "Each reset consumes one available credit and immediately resets the current Codex quota windows.",
-  "可用重置次数": "Available resets",
-  "查询中...": "Loading...",
-  "重置次数查询失败": "Failed to load reset credits",
-  "重置次数过期时间": "Reset credit expiry",
-  "第 {index} 次": "Reset {index}",
-  "重置额度": "Reset quota",
-  "重置中...": "Resetting...",
-  "确认重置额度": "Confirm quota reset",
-  "此操作会消耗 1 次主动重置次数，并立即重置账号 {name} 的 Codex 额度。":
-    "This consumes one manual reset and immediately resets the Codex quota for {name}.",
-  "消耗 1 次并重置": "Consume 1 and reset",
-  "额度已重置": "Quota reset successfully",
-  "额度重置失败": "Quota reset failed",
-  "额度重置成功，但刷新部分数据失败": "Quota reset succeeded, but some data failed to refresh",
   "边缘中继": "Edge relay",
   "代理设置": "Proxy settings",
   "分": "min",
@@ -162,6 +145,8 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "速度测试": "Speed Test",
   "未配置": "Not configured",
   "刷新": "Refresh",
+  "5 小时和 7 天额度已重置": "5-hour and 7-day quotas reset",
+  "5 小时和 7 天额度重置券": "5-hour and 7-day quota reset credit",
   "5h 容量覆盖（Token）": "5h capacity override (tokens)",
   "7d 容量覆盖（Token）": "7d capacity override (tokens)",
   "AT/RT 刷新中...": "Refreshing AT/RT...",
@@ -223,6 +208,11 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "用量刷新失败，请查看后台日志": "Usage refresh failed. Check backend logs.",
   "用量限制": "Usage limit",
   "留空使用计划模板": "Leave blank to use the plan template",
+  账号分组: "Account group",
+  未分组: "Ungrouped",
+  "例如：团队 A": "For example: Team A",
+  "的名称、分组、标签、备注、排序与额度池配置。":
+    "'s name, group, tags, notes, sort order, and quota pool configuration.",
   "的名称、标签、备注、排序与额度池配置。":
     "'s name, tags, notes, sort order, and quota pool configuration.",
   "确认清理": "Confirm cleanup",
@@ -244,5 +234,38 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "额度容量必须是大于 0 的数字，留空表示未覆盖":
     "Quota capacity must be a number greater than 0. Leave blank for no override.",
   "额度已耗尽": "Quota exhausted",
+  "额度已重置，但最新用量同步失败，请稍后手动刷新":
+    "Quota was reset, but the latest usage could not be synced. Refresh it manually later.",
+  "重置 5h + 7d": "Reset 5h + 7d",
+  "重置 5 小时和 7 天额度，可用 {count} 次":
+    "Reset 5-hour and 7-day quotas, {count} available",
+  "重置 5 小时和 7 天额度，次数待核对":
+    "Reset 5-hour and 7-day quotas, availability pending",
+  "重置当前 5 小时和 7 天额度": "Reset current 5-hour and 7-day quotas",
+  "重置券记录": "Reset credit history",
+  "重置请求未完成，请稍后重试": "The reset was not completed. Try again later.",
+  "此操作会消耗 1 次重置券，并同时恢复当前 5 小时和 7 天额度。提交成功后无法撤销。":
+    "This consumes one reset credit and restores both the current 5-hour and 7-day quotas. A successful reset cannot be undone.",
+  "消耗 1 次并重置": "Use 1 credit and reset",
+  "正在核对可用次数...": "Checking available credits...",
+  "正在重置...": "Resetting...",
+  "重新核对": "Check again",
+  "目标账号": "Target account",
+  "可用次数": "Available",
+  "可消耗一次重置券，同时恢复当前 5 小时和 7 天额度":
+    "Use one reset credit to restore both the current 5-hour and 7-day quotas",
+  "当前没有可用重置券，可查看发放记录":
+    "No reset credits are currently available. You can still review the history.",
+  "打开后实时核对可用次数和发放记录":
+    "Open to verify the available credits and issuance history in real time",
+  "最近一张将在 {time} 到期": "Next credit expires {time}",
+  "到期：{time}": "Expires: {time}",
+  "时间未知": "Time unknown",
+  "可用": "Available",
+  "已使用": "Used",
+  "已过期": "Expired",
+  "暂无重置券记录": "No reset credit history",
+  "无法读取重置券详情，请重新核对。":
+    "Reset credit details could not be loaded. Check again.",
   "预计删除": "Estimated delete",
 };

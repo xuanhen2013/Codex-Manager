@@ -40,12 +40,22 @@ export interface QuotaGuardSettings {
   allowAllLowQuotaFallback: boolean;
 }
 
-export interface AppSettings {
+export interface GatewayTransportValues {
+  sseKeepaliveEnabled: boolean;
+  sseKeepaliveIntervalMs: number;
+  upstreamStreamTimeoutMs: number;
+  upstreamTotalTimeoutMs: number;
+}
+
+export type GatewayTransportPatch = Partial<GatewayTransportValues>;
+
+export interface AppSettings extends GatewayTransportValues {
   updateAutoCheck: boolean;
   autoStartEnabled: boolean;
   autoStartSupported: boolean;
   closeToTrayOnClose: boolean;
   closeToTraySupported: boolean;
+  keepWindowUiMounted: boolean;
   lowTransparency: boolean;
   lightweightModeOnCloseToTray: boolean;
   codexCliGuideDismissed: boolean;
@@ -82,9 +92,6 @@ export interface AppSettings {
   authorServerRecommendations: SponsorLinkItem[];
   upstreamProxyUrl: string;
   upstreamProxyBypassHosts: string;
-  upstreamStreamTimeoutMs: number;
-  upstreamTotalTimeoutMs: number;
-  sseKeepaliveIntervalMs: number;
   backgroundTasks: BackgroundTaskSettings;
   runtimeTimeZone: RuntimeTimeZone;
   envOverrides: Record<string, string>;

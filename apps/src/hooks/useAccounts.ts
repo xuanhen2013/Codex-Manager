@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { accountClient } from "@/lib/api/account-client";
+import { accountClient, type AccountUsageRefreshResult } from "@/lib/api/account-client";
 import { CODEX_PROFILE_CANDIDATES_QUERY_KEY } from "@/lib/api/codex-profile-client";
 import { attachUsagesToAccounts } from "@/lib/api/normalize";
 import { serviceClient } from "@/lib/api/service-client";
@@ -242,7 +242,10 @@ export function useAccounts() {
   const startupSnapshot =
     startupSnapshotQuery.data ||
     queryClient.getQueryData<StartupSnapshot>(startupSnapshotQueryKey);
-  const startupAccounts = startupSnapshot?.accounts || [];
+  const startupAccounts = useMemo(
+    () => startupSnapshot?.accounts ?? [],
+    [startupSnapshot?.accounts],
+  );
   const startupUsages = startupSnapshot?.usageSnapshots || [];
   const hasStartupAccountSnapshot = startupAccounts.length > 0;
   const startupAccountList = useMemo(
@@ -580,27 +583,50 @@ export function useAccounts() {
 
   const refreshAccountMutation = useMutation({
     mutationFn: (accountId: string) => accountClient.refreshUsage(accountId),
-    onSuccess: () => {
+    onSuccess: (result: AccountUsageRefreshResult) => {
+      if (!result.ok || result.total === 0 || result.processed === 0) {
+        toast.warning(
+          result.message
+            ? t("账号用量刷新未执行：{message}", { message: result.message })
+            : t("当前没有可刷新的账号"),
+        );
+        return;
+      }
       toast.success(t("账号用量已刷新"));
     },
     onError: (error: unknown) => {
       toast.error(`${t("刷新失败")}: ${formatUsageRefreshErrorMessage(error, t)}`);
     },
     onSettled: async () => {
-      await invalidateUsageData();
+      await invalidateAccountData();
     },
   });
 
   const refreshAllMutation = useMutation({
     mutationFn: () => accountClient.refreshUsage(),
-    onSuccess: () => {
-      toast.success(t("账号用量已刷新"));
+    onSuccess: (result: AccountUsageRefreshResult) => {
+      if (!result.ok || result.total === 0 || result.processed === 0) {
+        toast.warning(
+          result.message
+            ? t("账号用量刷新未执行：{message}", { message: result.message })
+            : t("当前没有可刷新的账号"),
+        );
+        return;
+      }
+      toast.success(
+        result.processed >= result.total
+          ? t("账号用量已刷新")
+          : t("账号用量已刷新：{processed}/{total}", {
+              processed: result.processed,
+              total: result.total,
+            }),
+      );
     },
     onError: (error: unknown) => {
       toast.error(`${t("刷新失败")}: ${formatUsageRefreshErrorMessage(error, t)}`);
     },
     onSettled: async () => {
-      await invalidateUsageData();
+      await invalidateAccountData();
     },
   });
 
@@ -735,6 +761,7 @@ export function useAccounts() {
     mutationFn: ({
       accountId,
       label,
+      groupName,
       note,
       tags,
       sort,
@@ -743,6 +770,7 @@ export function useAccounts() {
     }: {
       accountId: string;
       label?: string | null;
+      groupName?: string | null;
       note?: string | null;
       tags?: string[] | string | null;
       sort?: number | null;
@@ -751,6 +779,7 @@ export function useAccounts() {
     }) =>
       accountClient.updateProfile(accountId, {
         label,
+        groupName,
         note,
         tags,
         sort,
@@ -823,7 +852,9 @@ export function useAccounts() {
         toast.info(t("已取消导入"));
         return;
       }
-      queueImportedUsageRefresh(result.importedAccountIds);
+      queueImportedUsageRefresh(
+        result.usageRefreshAccountIds ?? result.importedAccountIds
+      );
       await invalidateAccountData();
       toast.success(buildImportSummaryMessage(result, t));
     },
@@ -839,7 +870,9 @@ export function useAccounts() {
         toast.info(t("已取消导入"));
         return;
       }
-      queueImportedUsageRefresh(result.importedAccountIds);
+      queueImportedUsageRefresh(
+        result.usageRefreshAccountIds ?? result.importedAccountIds
+      );
       await invalidateAccountData();
       toast.success(buildImportSummaryMessage(result, t));
     },
@@ -1099,6 +1132,7 @@ export function useAccounts() {
       accountId: string,
       params: {
         label?: string | null;
+        groupName?: string | null;
         note?: string | null;
         tags?: string[] | string | null;
         sort?: number | null;

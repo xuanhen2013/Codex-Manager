@@ -74,6 +74,26 @@ function integer(value: string, minimum?: number): number | null {
   return parsed;
 }
 
+function aggregateApiDisplayName(
+  api: AggregateApi | undefined,
+  t: (message: string) => string,
+): string {
+  return api?.supplierName?.trim() || t("未命名聚合 API");
+}
+
+function aggregateRouteSourceLabel(
+  sourceId: string,
+  aggregateApis: AggregateApi[],
+  t: (message: string) => string,
+): string {
+  const normalizedId = sourceId.trim();
+  if (!normalizedId) return t("选择聚合 API");
+  const api = aggregateApis.find((item) => item.id === normalizedId);
+  return `${t("聚合 API")}：${
+    api ? aggregateApiDisplayName(api, t) : t("未知聚合 API")
+  }`;
+}
+
 export function BatchModelRoutesModal({
   open,
   onOpenChange,
@@ -155,8 +175,18 @@ export function BatchModelRoutesModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card p-0 sm:max-w-[820px]">
-        <div className="max-h-[78vh] space-y-5 overflow-y-auto p-5">
+      <DialogContent
+        className="glass-card flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0"
+        style={{
+          width: "min(1230px, calc(100vw - 2rem))",
+          maxWidth: "min(1230px, calc(100vw - 2rem))",
+        }}
+      >
+        <div
+          data-testid="batch-route-dialog-body"
+          className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 [scrollbar-color:var(--border)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent"
+          style={{ scrollbarGutter: "stable" }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <GitBranch className="h-5 w-5 text-primary" />
@@ -242,9 +272,9 @@ export function BatchModelRoutesModal({
             ) : (
               routes.map((route, index) => (
                 <Card key={route.key} size="sm">
-                  <CardContent className="grid items-end gap-3 md:grid-cols-[170px_minmax(0,1fr)_110px_110px_auto]">
-                    <div className="space-y-2">
-                      <Label htmlFor={`batch-route-kind-${index}`}>
+                  <CardContent className="flex flex-wrap items-end gap-3">
+                    <div className="min-w-[132px] flex-[0.8_1_150px] space-y-2">
+                      <Label className="leading-5" htmlFor={`batch-route-kind-${index}`}>
                         {t("来源类型")}
                       </Label>
                       <Select
@@ -264,7 +294,7 @@ export function BatchModelRoutesModal({
                       >
                         <SelectTrigger
                           id={`batch-route-kind-${index}`}
-                          className="w-full"
+                          className="w-full min-w-0"
                           aria-label={t("来源类型")}
                         >
                           <SelectValue>
@@ -282,8 +312,8 @@ export function BatchModelRoutesModal({
                       </Select>
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor={`batch-route-source-${index}`}>
+                    <div className="min-w-[180px] flex-[1.45_1_240px] space-y-2">
+                      <Label className="leading-5" htmlFor={`batch-route-source-${index}`}>
                         {t("来源")}
                       </Label>
                       {route.sourceKind === "aggregate_api" && aggregateApis.length > 0 ? (
@@ -295,16 +325,24 @@ export function BatchModelRoutesModal({
                         >
                           <SelectTrigger
                             id={`batch-route-source-${index}`}
-                            className="w-full"
+                            className="w-full min-w-0"
                             aria-label={t("来源")}
                           >
-                            <SelectValue placeholder={t("选择聚合 API")} />
+                            <SelectValue placeholder={t("选择聚合 API")}>
+                              {(value) =>
+                                aggregateRouteSourceLabel(
+                                  String(value || ""),
+                                  aggregateApis,
+                                  t,
+                                )
+                              }
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             <SelectGroup>
                               {aggregateApis.map((api) => (
                                 <SelectItem key={api.id} value={api.id}>
-                                  {api.supplierName || api.id}
+                                  {t("聚合 API")}：{aggregateApiDisplayName(api, t)}
                                 </SelectItem>
                               ))}
                             </SelectGroup>
@@ -313,7 +351,11 @@ export function BatchModelRoutesModal({
                       ) : (
                         <Input
                           id={`batch-route-source-${index}`}
-                          value={route.sourceId}
+                          value={
+                            route.sourceKind === "account_pool"
+                              ? t("默认账号池")
+                              : route.sourceId
+                          }
                           disabled={route.sourceKind === "account_pool"}
                           placeholder={t("聚合 API ID")}
                           onChange={(event) =>
@@ -323,8 +365,8 @@ export function BatchModelRoutesModal({
                       )}
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor={`batch-route-priority-${index}`}>
+                    <div className="min-w-[92px] flex-[0.55_1_108px] space-y-2">
+                      <Label className="leading-5" htmlFor={`batch-route-priority-${index}`}>
                         {t("优先级")}
                       </Label>
                       <Input
@@ -337,8 +379,8 @@ export function BatchModelRoutesModal({
                       />
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor={`batch-route-weight-${index}`}>
+                    <div className="min-w-[92px] flex-[0.55_1_108px] space-y-2">
+                      <Label className="leading-5" htmlFor={`batch-route-weight-${index}`}>
                         {t("权重")}
                       </Label>
                       <Input
@@ -356,6 +398,7 @@ export function BatchModelRoutesModal({
                       type="button"
                       variant="ghost"
                       size="icon"
+                      className="ml-auto flex-none"
                       aria-label={t("删除第 {index} 条批量路由", { index: index + 1 })}
                       onClick={() =>
                         setRoutes((current) =>
@@ -374,8 +417,8 @@ export function BatchModelRoutesModal({
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
 
-        <div className="border-t border-border/50 px-5 py-3">
-          <DialogFooter>
+        <div className="shrink-0 border-t border-border/50 px-5 py-3">
+          <DialogFooter className="mx-0 mb-0 rounded-none border-0 bg-transparent p-0">
             <DialogClose
               className={buttonVariants({ variant: "ghost" })}
               type="button"

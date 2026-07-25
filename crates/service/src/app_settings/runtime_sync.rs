@@ -12,6 +12,7 @@ use super::{
     APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_QUOTA_GUARD_KEY,
     APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+    APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
     APP_SETTING_GATEWAY_THREAD_AWARE_ACCOUNT_DISTRIBUTION_ENABLED_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_PROXY_BYPASS_HOSTS_KEY,
@@ -257,6 +258,11 @@ pub fn sync_runtime_settings_from_storage() {
             } else {
                 log::warn!("parse persisted sse keepalive interval failed: {raw}");
             }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_SSE_KEEPALIVE_ENABLED") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_SSE_KEEPALIVE_ENABLED_KEY) {
+            gateway::set_sse_keepalive_enabled(super::parse_bool_with_default(raw, true));
         }
     }
     if !any_process_env_has_value(&[

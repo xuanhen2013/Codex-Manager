@@ -186,7 +186,7 @@ pub(crate) fn respond_with_upstream(
     fallback_model: Option<&str>,
     request_started_at: std::time::Instant,
 ) -> Result<UpstreamResponseBridgeResult, String> {
-    let keepalive_frame = resolve_stream_keepalive_frame(response_adapter, request_path);
+    let keepalive_frame = SseKeepAliveFrame::Comment;
     let passthrough_sse_protocol =
         passthrough_sse_protocol.unwrap_or(PassthroughSseProtocol::Generic);
     let upstream_meta = upstream_response_metadata(upstream.headers());
@@ -912,7 +912,7 @@ pub(crate) fn respond_with_stream_upstream(
     fallback_model: Option<&str>,
     request_started_at: std::time::Instant,
 ) -> Result<UpstreamResponseBridgeResult, String> {
-    let keepalive_frame = resolve_stream_keepalive_frame(response_adapter, request_path);
+    let keepalive_frame = SseKeepAliveFrame::Comment;
     let upstream_meta = upstream_response_metadata(upstream.headers());
     let upstream_request_id = upstream_meta.request_id;
     let upstream_cf_ray = upstream_meta.cf_ray;
@@ -1600,43 +1600,6 @@ pub(crate) fn respond_with_stream_upstream(
         | ResponseAdapter::GeminiCliJson
         | ResponseAdapter::GeminiSse
         | ResponseAdapter::GeminiCliSse => unreachable!(),
-    }
-}
-
-/// 函数 `resolve_stream_keepalive_frame`
-///
-/// 作者: gaohongshun
-///
-/// 时间: 2026-04-02
-///
-/// # 参数
-/// - response_adapter: 参数 response_adapter
-/// - request_path: 参数 request_path
-///
-/// # 返回
-/// 返回函数执行结果
-fn resolve_stream_keepalive_frame(
-    response_adapter: ResponseAdapter,
-    request_path: &str,
-) -> SseKeepAliveFrame {
-    match response_adapter {
-        ResponseAdapter::Passthrough => {
-            if request_path.starts_with("/v1/responses") {
-                SseKeepAliveFrame::OpenAIResponses
-            } else {
-                SseKeepAliveFrame::Comment
-            }
-        }
-        ResponseAdapter::AnthropicMessagesFromResponses
-        | ResponseAdapter::ResponsesFromAnthropicMessages
-        | ResponseAdapter::ChatCompletionsFromResponses
-        | ResponseAdapter::CompactFromChatCompletions
-        | ResponseAdapter::ImagesB64JsonFromResponses
-        | ResponseAdapter::ImagesUrlFromResponses
-        | ResponseAdapter::GeminiJson
-        | ResponseAdapter::GeminiCliJson
-        | ResponseAdapter::GeminiSse
-        | ResponseAdapter::GeminiCliSse => SseKeepAliveFrame::Comment,
     }
 }
 

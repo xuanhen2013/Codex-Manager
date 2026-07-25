@@ -10,6 +10,7 @@ use super::super::support::outcome::{decide_upstream_outcome, UpstreamOutcomeDec
 use super::super::support::retry::{retry_with_alternate_path, AltPathRetryResult};
 use super::super::GatewayUpstreamResponse;
 use super::fallback_branch::{handle_openai_fallback_branch, FallbackBranchResult};
+use super::primary_flow::PrimaryAuthorization;
 use super::stateless_retry::{retry_stateless_then_optional_alt, StatelessRetryResult};
 use super::transport::UpstreamRequestContext;
 
@@ -335,6 +336,13 @@ pub(in crate::gateway::upstream) enum PostRetryFlowDecision {
     RespondUpstream(GatewayUpstreamResponse),
 }
 
+fn allow_openai_fallback_for_authorization(
+    allow_openai_fallback: bool,
+    authorization: &PrimaryAuthorization,
+) -> bool {
+    allow_openai_fallback && !authorization.uses_agent_identity
+}
+
 /// 函数 `process_upstream_post_retry_flow`
 ///
 /// 作者: gaohongshun
@@ -360,7 +368,7 @@ pub(in crate::gateway::upstream) fn process_upstream_post_retry_flow<F>(
     incoming_headers: &super::super::super::IncomingHeaderSnapshot,
     body: &Bytes,
     is_stream: bool,
-    auth_token: &str,
+    authorization: &PrimaryAuthorization,
     account: &Account,
     token: &mut Token,
     upstream_fallback_base: Option<&str>,
@@ -375,8 +383,100 @@ pub(in crate::gateway::upstream) fn process_upstream_post_retry_flow<F>(
 where
     F: FnMut(Option<&str>, u16, Option<&str>),
 {
-    let mut current_auth_token = auth_token.to_string();
+    let scoped_account =
+        super::primary_flow::account_with_authorization_scope(account, authorization);
+    let account = &scoped_account;
+    let mut current_auth_token = authorization.value.clone();
+    let mut current_request_ctx = request_ctx.with_fedramp(authorization.is_fedramp);
     let mut status = upstream.status();
+
+    if status.as_u16() == 401 && authorization.uses_agent_identity {
+        let buffered = upstream.into_buffered();
+        let (response_body, rebuilt_upstream) = match buffered {
+            Ok(buffered) => buffered,
+            Err(err) => {
+                log::warn!(
+                    "event=gateway_agent_identity_unauthorized_body_read_failed path={} account_id={} err={}",
+                    path,
+                    account.id,
+                    err
+                );
+                return PostRetryFlowDecision::Terminal {
+                    status_code: 502,
+                    message: err,
+                };
+            }
+        };
+        upstream = rebuilt_upstream;
+        if crate::agent_identity::is_agent_identity_task_invalid_response(
+            status.as_u16(),
+            response_body.as_ref(),
+        ) {
+            if let Some(failed_task_id) = authorization.task_id.as_deref() {
+                match crate::agent_identity::recover_account_agent_identity_authorization(
+                    storage,
+                    client,
+                    account,
+                    token,
+                    failed_task_id,
+                ) {
+                    Ok(Some(recovered)) => {
+                        current_auth_token = recovered.value;
+                        current_request_ctx = request_ctx.with_fedramp(recovered.is_fedramp);
+                        if debug {
+                            log::warn!(
+                                "event=gateway_agent_identity_task_recovery_retry path={} account_id={} recovery=success",
+                                path,
+                                account.id
+                            );
+                        }
+                        match super::transport::send_upstream_request(
+                            client,
+                            method,
+                            url,
+                            request_deadline,
+                            current_request_ctx,
+                            incoming_headers,
+                            body,
+                            is_stream,
+                            current_auth_token.as_str(),
+                            account,
+                            strip_session_affinity,
+                        ) {
+                            Ok(response) => {
+                                upstream = response;
+                                status = upstream.status();
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "event=gateway_agent_identity_task_recovery_retry_error path={} status=502 account_id={} err={}",
+                                    path,
+                                    account.id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        log::warn!(
+                            "event=gateway_agent_identity_task_recovery_missing_identity path={} account_id={}",
+                            path,
+                            account.id
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "event=gateway_agent_identity_task_recovery_failed path={} account_id={} err={}",
+                            path,
+                            account.id,
+                            err
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let mut upstream_content_type = upstream.headers().get(reqwest::header::CONTENT_TYPE);
     let mut upstream_cf_ray = first_header_value(upstream.headers(), "cf-ray");
     if !status.is_success() {
@@ -405,7 +505,7 @@ where
         return PostRetryFlowDecision::Failover;
     }
 
-    if status.as_u16() == 401 {
+    if status.as_u16() == 401 && !authorization.uses_agent_identity {
         match try_refresh_chatgpt_access_token(storage, upstream_base, account, token) {
             Ok(Some(refreshed_auth_token)) => {
                 current_auth_token = refreshed_auth_token;
@@ -421,7 +521,7 @@ where
                     method,
                     url,
                     request_deadline,
-                    request_ctx,
+                    current_request_ctx,
                     incoming_headers,
                     body,
                     is_stream,
@@ -467,7 +567,7 @@ where
             upstream_base,
             url,
             request_deadline,
-            request_ctx,
+            current_request_ctx,
             incoming_headers,
             body,
             is_stream,
@@ -489,7 +589,7 @@ where
             method,
             Some(alt_url),
             request_deadline,
-            request_ctx,
+            current_request_ctx,
             incoming_headers,
             body,
             is_stream,
@@ -528,7 +628,7 @@ where
         method,
         url,
         request_deadline,
-        request_ctx,
+        current_request_ctx,
         incoming_headers,
         body,
         is_stream,
@@ -560,7 +660,7 @@ where
             upstream_base,
             url,
             request_deadline,
-            request_ctx,
+            current_request_ctx,
             incoming_headers,
             body,
             is_stream,
@@ -597,7 +697,7 @@ where
             url,
             url_alt,
             request_deadline,
-            request_ctx,
+            current_request_ctx,
             incoming_headers,
             body,
             is_stream,
@@ -646,7 +746,7 @@ where
             token,
             strip_session_affinity,
             debug,
-            allow_openai_fallback,
+            allow_openai_fallback_for_authorization(allow_openai_fallback, authorization),
             status,
             upstream_content_type,
             has_more_candidates,

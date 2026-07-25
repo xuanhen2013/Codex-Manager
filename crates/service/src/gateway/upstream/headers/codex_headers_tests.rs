@@ -9,6 +9,8 @@ use crate::gateway::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CODEXMANAGER_DB_PATH_ENV: &str = "CODEXMANAGER_DB_PATH";
+const CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL_ENV: &str =
+    "CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL";
 
 struct RuntimeEnvGuard {
     name: &'static str,
@@ -127,6 +129,7 @@ fn build_codex_upstream_headers_keeps_final_affinity_shape() {
 
     let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
         auth_token: "token-123",
+        is_fedramp: true,
         chatgpt_account_id: Some("account-123"),
         incoming_user_agent: None,
         incoming_originator: None,
@@ -153,6 +156,7 @@ fn build_codex_upstream_headers_keeps_final_affinity_shape() {
         header_value(&headers, "Authorization"),
         Some("Bearer token-123")
     );
+    assert_eq!(header_value(&headers, "x-openai-fedramp"), Some("true"));
     assert_eq!(
         header_value(&headers, "ChatGPT-Account-ID"),
         Some("account-123")
@@ -222,6 +226,47 @@ fn build_codex_upstream_headers_keeps_final_affinity_shape() {
     );
 }
 
+#[test]
+fn build_codex_upstream_headers_omits_responses_lite_when_image_tool_is_auto_injected() {
+    let _guard = crate::test_env_guard();
+    let _inject_guard = RuntimeEnvGuard::set(CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL_ENV, "1");
+    let passthrough = vec![(
+        "x-openai-internal-codex-responses-lite".to_string(),
+        "true".to_string(),
+    )];
+
+    let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
+        auth_token: "token-123",
+        is_fedramp: false,
+        chatgpt_account_id: Some("account-123"),
+        incoming_user_agent: None,
+        incoming_originator: None,
+        preserve_client_identity: false,
+        incoming_session_id: None,
+        incoming_window_id: None,
+        incoming_client_request_id: None,
+        incoming_subagent: None,
+        incoming_beta_features: None,
+        incoming_turn_metadata: None,
+        incoming_parent_thread_id: None,
+        incoming_responsesapi_include_timing_metrics: None,
+        incoming_inference_call_id: None,
+        incoming_oai_attestation: None,
+        passthrough_codex_headers: passthrough.as_slice(),
+        fallback_session_id: None,
+        incoming_turn_state: None,
+        include_turn_state: true,
+        strip_session_affinity: false,
+        has_body: true,
+    });
+
+    assert_eq!(
+        header_value(&headers, "x-openai-internal-codex-responses-lite"),
+        None
+    );
+    assert_eq!(header_value(&headers, "x-openai-fedramp"), None);
+}
+
 /// 函数 `build_codex_upstream_headers_clears_turn_state_when_affinity_diverges`
 ///
 /// 作者: gaohongshun
@@ -245,6 +290,7 @@ fn build_codex_upstream_headers_clears_turn_state_when_affinity_diverges() {
 
     let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
         auth_token: "token-456",
+        is_fedramp: false,
         chatgpt_account_id: None,
         incoming_user_agent: None,
         incoming_originator: None,
@@ -315,6 +361,7 @@ fn build_codex_compact_upstream_headers_use_session_fallback_only() {
 
     let headers = build_codex_compact_upstream_headers(CodexCompactUpstreamHeaderInput {
         auth_token: "token-789",
+        is_fedramp: true,
         chatgpt_account_id: Some("account-compact"),
         installation_id: Some("install-compact-internal"),
         incoming_user_agent: None,
@@ -333,6 +380,7 @@ fn build_codex_compact_upstream_headers_use_session_fallback_only() {
     });
 
     assert_eq!(header_value(&headers, "Accept"), Some("application/json"));
+    assert_eq!(header_value(&headers, "x-openai-fedramp"), Some("true"));
     assert_eq!(
         header_value(&headers, "ChatGPT-Account-ID"),
         Some("account-compact")
@@ -383,6 +431,7 @@ fn build_codex_upstream_headers_rebuilds_mismatched_window_id_from_session() {
 
     let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
         auth_token: "token-window-fix",
+        is_fedramp: false,
         chatgpt_account_id: None,
         incoming_user_agent: None,
         incoming_originator: None,
@@ -421,6 +470,7 @@ fn build_codex_upstream_headers_prefers_incoming_codex_identity() {
 
     let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
         auth_token: "token-ident",
+        is_fedramp: false,
         chatgpt_account_id: None,
         incoming_user_agent: Some("codex_sdk_ts/1.2.3 (Windows 11; x86_64) node"),
         incoming_originator: Some("codex_sdk_ts"),
@@ -458,6 +508,7 @@ fn build_codex_upstream_headers_preserves_non_codex_identity_for_compat_routes()
 
     let headers = build_codex_upstream_headers(CodexUpstreamHeaderInput {
         auth_token: "token-compat",
+        is_fedramp: false,
         chatgpt_account_id: None,
         incoming_user_agent: Some("gemini-cli/0.1.14 (Windows 11; x86_64)"),
         incoming_originator: Some("gemini_cli"),
@@ -492,6 +543,7 @@ fn build_codex_compact_upstream_headers_omits_thread_id_when_missing() {
     let _guard = crate::test_env_guard();
     let headers = build_codex_compact_upstream_headers(CodexCompactUpstreamHeaderInput {
         auth_token: "token-thread-missing",
+        is_fedramp: false,
         chatgpt_account_id: None,
         installation_id: None,
         incoming_user_agent: None,
