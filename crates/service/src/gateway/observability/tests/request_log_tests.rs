@@ -77,7 +77,7 @@ fn successful_request_log_touches_key_and_records_v2_snapshot() {
 }
 
 #[test]
-fn missing_usage_uses_deterministic_nonzero_input_estimate() {
+fn missing_usage_keeps_estimate_diagnostic_only() {
     let estimate = super::estimate_input_tokens_from_body(br#"{"input":"hello world"}"#);
     assert!(estimate > 0);
     assert_eq!(
@@ -88,13 +88,193 @@ fn missing_usage_uses_deterministic_nonzero_input_estimate() {
         estimated_input_tokens: Some(estimate),
         ..Default::default()
     });
-    assert_eq!(usage.usage_source, "estimated");
-    assert_eq!(usage.input_tokens, estimate);
+    assert_eq!(usage.usage_source, "unavailable");
+    assert!(!usage.billable);
+    assert_eq!(usage.input_tokens, 0);
     assert_eq!(usage.output_tokens, 0);
 }
 
 #[test]
-fn actual_usage_clamps_cached_tokens_to_total_input() {
+fn failed_request_without_actual_usage_is_not_added_to_token_or_cost_usage() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let key = test_api_key("key-failed-estimate");
+    storage.insert_api_key(&key).expect("insert api key");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-failed-estimate"),
+            original_path: Some("/v1/responses"),
+            adapted_path: Some("/v1/responses"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        Some(&key.id),
+        None,
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(502),
+        super::RequestLogUsage {
+            estimated_input_tokens: Some(250_000),
+            ..Default::default()
+        },
+        Some("upstream server error"),
+        Some(10),
+    );
+
+    assert!(storage
+        .get_charge_snapshot_v2(1)
+        .expect("read charge snapshot")
+        .is_none());
+    let logs = storage
+        .list_request_logs(None, 10)
+        .expect("read request logs");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].input_tokens, None);
+    assert_eq!(logs[0].total_tokens, None);
+    assert_eq!(logs[0].estimated_cost_usd, None);
+    let usage = storage
+        .summarize_request_logs_between(0, i64::MAX)
+        .expect("summarize request usage");
+    assert_eq!(usage.input_tokens, 0);
+    assert_eq!(usage.output_tokens, 0);
+    assert_eq!(usage.estimated_cost_usd, 0.0);
+}
+
+#[test]
+fn failed_request_with_actual_usage_keeps_real_usage_for_statistics() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let key = test_api_key("key-failed-actual");
+    storage.insert_api_key(&key).expect("insert api key");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-failed-actual"),
+            original_path: Some("/v1/responses"),
+            adapted_path: Some("/v1/responses"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        Some(&key.id),
+        None,
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(502),
+        super::RequestLogUsage {
+            input_tokens: Some(100),
+            cached_input_tokens: Some(40),
+            output_tokens: Some(10),
+            total_tokens: Some(110),
+            ..Default::default()
+        },
+        Some("upstream server error after usage"),
+        Some(10),
+    );
+
+    let snapshot = storage
+        .get_charge_snapshot_v2(1)
+        .expect("read charge snapshot")
+        .expect("actual usage snapshot");
+    assert_eq!(snapshot.usage_source, "actual");
+    assert_eq!(snapshot.input_tokens, 100);
+    assert_eq!(snapshot.cached_input_tokens, 40);
+    assert_eq!(snapshot.output_tokens, 10);
+    let logs = storage
+        .list_request_logs(None, 10)
+        .expect("read request logs");
+    assert_eq!(logs[0].total_tokens, Some(110));
+    assert!(logs[0].estimated_cost_usd.unwrap_or(0.0) > 0.0);
+}
+
+#[test]
+fn client_cancelled_request_without_actual_usage_is_not_charged() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-cancelled-estimate"),
+            original_path: Some("/v1/responses"),
+            adapted_path: Some("/v1/responses"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        None,
+        None,
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(499),
+        super::RequestLogUsage {
+            estimated_input_tokens: Some(90_000),
+            ..Default::default()
+        },
+        Some("client disconnected"),
+        Some(10),
+    );
+
+    assert!(storage
+        .get_charge_snapshot_v2(1)
+        .expect("read charge snapshot")
+        .is_none());
+}
+
+#[test]
+fn successful_request_without_actual_usage_is_kept_as_zero_usage() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-success-no-usage"),
+            original_path: Some("/v1/responses"),
+            adapted_path: Some("/v1/responses"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        None,
+        None,
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(200),
+        super::RequestLogUsage {
+            estimated_input_tokens: Some(40_000),
+            ..Default::default()
+        },
+        None,
+        Some(10),
+    );
+
+    let logs = storage
+        .list_request_logs(None, 10)
+        .expect("read request logs");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].total_tokens, None);
+    assert_eq!(logs[0].estimated_cost_usd, None);
+    assert!(storage
+        .get_charge_snapshot_v2(1)
+        .expect("read charge snapshot")
+        .is_none());
+}
+
+#[test]
+fn cached_tokens_larger_than_total_input_are_not_billable() {
     let usage = super::resolve_charge_usage(super::RequestLogUsage {
         input_tokens: Some(10),
         cached_input_tokens: Some(20),
@@ -105,6 +285,58 @@ fn actual_usage_clamps_cached_tokens_to_total_input() {
     assert_eq!(usage.input_tokens, 10);
     assert_eq!(usage.cached_input_tokens, 10);
     assert_eq!(usage.output_tokens, 3);
+    assert_eq!(usage.quality, "inconsistent");
+    assert!(!usage.billable);
+}
+
+#[test]
+fn independent_cache_tokens_are_canonicalized_into_total_input() {
+    let usage = super::resolve_charge_usage(super::RequestLogUsage {
+        input_tokens: Some(60),
+        cached_input_tokens: Some(40),
+        cache_creation_input_tokens: Some(20),
+        output_tokens: Some(10),
+        cache_tokens_are_subset: Some(false),
+        ..Default::default()
+    });
+    assert_eq!(usage.usage_source, "actual");
+    assert_eq!(usage.input_tokens, 120);
+    assert_eq!(usage.cached_input_tokens, 40);
+    assert_eq!(usage.cache_creation_input_tokens, 20);
+    assert_eq!(usage.output_tokens, 10);
+    assert_eq!(usage.total_tokens, 130);
+    assert_eq!(usage.quality, "complete");
+    assert!(usage.billable);
+}
+
+#[test]
+fn adapter_synthesized_zero_usage_is_not_authoritative() {
+    let usage = super::resolve_charge_usage(super::RequestLogUsage {
+        input_tokens: Some(0),
+        cached_input_tokens: Some(0),
+        output_tokens: Some(0),
+        total_tokens: Some(0),
+        reasoning_output_tokens: Some(0),
+        usage_authoritative: Some(false),
+        ..Default::default()
+    });
+    assert_eq!(usage.usage_source, "unavailable");
+    assert!(!usage.billable);
+}
+
+#[test]
+fn total_only_actual_usage_is_reported_but_not_billable() {
+    let usage = super::resolve_charge_usage(super::RequestLogUsage {
+        total_tokens: Some(110),
+        usage_authoritative: Some(true),
+        ..Default::default()
+    });
+    assert_eq!(usage.usage_source, "actual");
+    assert_eq!(usage.input_tokens, 0);
+    assert_eq!(usage.output_tokens, 0);
+    assert_eq!(usage.total_tokens, 110);
+    assert_eq!(usage.quality, "unclassified");
+    assert!(!usage.billable);
 }
 
 #[test]

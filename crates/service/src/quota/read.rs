@@ -66,8 +66,9 @@ impl AggregateBalanceUsdSummary {
     }
 }
 
-fn token_total(input: i64, cached: i64, output: i64) -> i64 {
-    input.saturating_sub(cached).saturating_add(output).max(0)
+fn token_total(input: i64, _cached: i64, output: i64) -> i64 {
+    // Cached input is a pricing subset, not a second total-token dimension.
+    input.saturating_add(output).max(0)
 }
 
 fn parse_quota_source_balance_snapshot(api: &AggregateApiQuotaSourceSummary) -> BalanceSnapshot {

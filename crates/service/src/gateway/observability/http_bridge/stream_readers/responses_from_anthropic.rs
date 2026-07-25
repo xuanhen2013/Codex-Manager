@@ -28,9 +28,11 @@ struct ResponsesFromAnthropicState {
     output_text: String,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_creation_input_tokens: i64,
     output_tokens: i64,
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
+    usage_authoritative: bool,
     stop_reason: String,
     current_tool: Option<PendingToolUse>,
     completed_tools: Vec<Value>,
@@ -223,6 +225,7 @@ impl ResponsesFromAnthropicSseReader {
     }
 
     fn capture_usage(&mut self, usage: &Map<String, Value>) {
+        self.state.usage_authoritative |= usage_map_has_token_signal(usage);
         if let Some(value) = usage_i64(usage, &["input_tokens", "prompt_tokens"]) {
             self.state.input_tokens = value;
         }
@@ -236,6 +239,9 @@ impl ResponsesFromAnthropicSseReader {
             ],
         ) {
             self.state.cached_input_tokens = value;
+        }
+        if let Some(value) = usage_i64(usage, &["cache_creation_input_tokens"]) {
+            self.state.cache_creation_input_tokens = value;
         }
         if let Some(value) = usage_i64(usage, &["output_tokens", "completion_tokens"]) {
             self.state.output_tokens = value;
@@ -252,7 +258,11 @@ impl ResponsesFromAnthropicSseReader {
         }
         self.state.total_tokens = usage_i64(usage, &["total_tokens"]).or_else(|| {
             Some(
-                self.state.input_tokens + self.state.cached_input_tokens + self.state.output_tokens,
+                self.state
+                    .input_tokens
+                    .saturating_add(self.state.cached_input_tokens)
+                    .saturating_add(self.state.cache_creation_input_tokens)
+                    .saturating_add(self.state.output_tokens),
             )
         });
     }
@@ -490,9 +500,12 @@ impl ResponsesFromAnthropicSseReader {
         if let Ok(mut usage) = self.usage_collector.lock() {
             usage.input_tokens = Some(self.state.input_tokens);
             usage.cached_input_tokens = Some(self.state.cached_input_tokens);
+            usage.cache_creation_input_tokens = Some(self.state.cache_creation_input_tokens);
             usage.output_tokens = Some(self.state.output_tokens);
             usage.total_tokens = self.state.total_tokens;
             usage.reasoning_output_tokens = Some(self.state.reasoning_output_tokens);
+            usage.authoritative |= self.state.usage_authoritative;
+            usage.cache_tokens_are_subset = Some(false);
             if !self.state.output_text.trim().is_empty() {
                 usage.output_text = Some(self.state.output_text.clone());
             }
@@ -531,13 +544,18 @@ impl ResponsesFromAnthropicSseReader {
     }
 
     fn usage_payload(&self) -> Value {
+        let input_tokens = self
+            .state
+            .input_tokens
+            .saturating_add(self.state.cached_input_tokens)
+            .saturating_add(self.state.cache_creation_input_tokens);
         json!({
-            "input_tokens": self.state.input_tokens,
+            "input_tokens": input_tokens,
             "output_tokens": self.state.output_tokens,
             "total_tokens": self
                 .state
                 .total_tokens
-                .unwrap_or(self.state.input_tokens + self.state.output_tokens),
+                .unwrap_or(input_tokens.saturating_add(self.state.output_tokens)),
             "input_tokens_details": { "cached_tokens": self.state.cached_input_tokens },
             "output_tokens_details": { "reasoning_tokens": self.state.reasoning_output_tokens },
         })
@@ -557,6 +575,38 @@ impl ResponsesFromAnthropicSseReader {
     fn model(&self) -> String {
         self.state.model.clone().unwrap_or_default()
     }
+}
+
+fn usage_map_has_token_signal(usage: &Map<String, Value>) -> bool {
+    [
+        "input_tokens",
+        "prompt_tokens",
+        "output_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "cached_input_tokens",
+        "reasoning_output_tokens",
+    ]
+    .iter()
+    .any(|key| usage.contains_key(*key))
+        || usage
+            .get("input_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("cached_tokens"))
+        || usage
+            .get("prompt_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("cached_tokens"))
+        || usage
+            .get("output_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("reasoning_tokens"))
+        || usage
+            .get("completion_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("reasoning_tokens"))
 }
 
 impl Read for ResponsesFromAnthropicSseReader {

@@ -1496,9 +1496,12 @@ pub(in super::super) fn proxy_aggregate_request(
                 RequestLogUsage {
                     input_tokens: usage.input_tokens,
                     cached_input_tokens: usage.cached_input_tokens,
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens,
                     output_tokens: usage.output_tokens,
                     total_tokens: usage.total_tokens,
                     reasoning_output_tokens: usage.reasoning_output_tokens,
+                    usage_authoritative: Some(usage.authoritative),
+                    cache_tokens_are_subset: usage.cache_tokens_are_subset,
                     first_response_ms: usage.first_response_ms,
                     estimated_input_tokens: Some(estimated_input_tokens),
                 },

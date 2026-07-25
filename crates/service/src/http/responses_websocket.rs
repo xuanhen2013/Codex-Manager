@@ -2136,6 +2136,36 @@ fn parse_ws_usage(value: &Value) -> crate::gateway::RequestLogUsage {
         .and_then(|response| response.get("usage"))
         .and_then(Value::as_object);
     let usage = response_usage.or(top_usage);
+    let usage_authoritative = usage.is_some_and(|map| {
+        [
+            "input_tokens",
+            "prompt_tokens",
+            "output_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "cache_creation_input_tokens",
+            "reasoning_output_tokens",
+        ]
+        .iter()
+        .any(|key| map.contains_key(*key))
+            || map
+                .get("input_tokens_details")
+                .and_then(Value::as_object)
+                .is_some_and(|details| details.contains_key("cached_tokens"))
+            || map
+                .get("prompt_tokens_details")
+                .and_then(Value::as_object)
+                .is_some_and(|details| details.contains_key("cached_tokens"))
+            || map
+                .get("output_tokens_details")
+                .and_then(Value::as_object)
+                .is_some_and(|details| details.contains_key("reasoning_tokens"))
+            || map
+                .get("completion_tokens_details")
+                .and_then(Value::as_object)
+                .is_some_and(|details| details.contains_key("reasoning_tokens"))
+    });
     crate::gateway::RequestLogUsage {
         input_tokens: usage
             .and_then(|map| map.get("input_tokens"))
@@ -2160,6 +2190,9 @@ fn parse_ws_usage(value: &Value) -> crate::gateway::RequestLogUsage {
                     .and_then(|map| map.get("cached_input_tokens"))
                     .and_then(Value::as_i64)
             }),
+        cache_creation_input_tokens: usage
+            .and_then(|map| map.get("cache_creation_input_tokens"))
+            .and_then(Value::as_i64),
         output_tokens: usage
             .and_then(|map| map.get("output_tokens"))
             .and_then(Value::as_i64)
@@ -2186,6 +2219,8 @@ fn parse_ws_usage(value: &Value) -> crate::gateway::RequestLogUsage {
                     .and_then(|map| map.get("reasoning_output_tokens"))
                     .and_then(Value::as_i64)
             }),
+        usage_authoritative: Some(usage_authoritative),
+        cache_tokens_are_subset: Some(true),
         first_response_ms: None,
         estimated_input_tokens: None,
     }

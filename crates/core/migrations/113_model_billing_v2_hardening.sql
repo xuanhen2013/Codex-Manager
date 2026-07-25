@@ -36,12 +36,25 @@ CREATE TABLE request_charge_snapshots (
   cached_input_tokens INTEGER NOT NULL CHECK (
     cached_input_tokens >= 0 AND cached_input_tokens <= input_tokens
   ),
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (
+    cache_creation_input_tokens >= 0
+    AND cached_input_tokens + cache_creation_input_tokens <= input_tokens
+  ),
   output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+  reasoning_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (
+    reasoning_output_tokens >= 0 AND reasoning_output_tokens <= output_tokens
+  ),
+  unclassified_tokens INTEGER NOT NULL DEFAULT 0 CHECK (unclassified_tokens >= 0),
   input_microusd_per_1m INTEGER NOT NULL CHECK (input_microusd_per_1m >= 0),
   cached_input_microusd_per_1m INTEGER NOT NULL CHECK (
     cached_input_microusd_per_1m >= 0
   ),
+  cache_creation_microusd_per_1m INTEGER NOT NULL DEFAULT 0 CHECK (
+    cache_creation_microusd_per_1m >= 0
+  ),
   output_microusd_per_1m INTEGER NOT NULL CHECK (output_microusd_per_1m >= 0),
+  usage_quality TEXT NOT NULL DEFAULT 'complete'
+    CHECK (usage_quality IN ('complete', 'inconsistent', 'unclassified')),
   rate_multiplier_millis INTEGER NOT NULL CHECK (rate_multiplier_millis >= 0),
   base_cost_microusd INTEGER NOT NULL CHECK (base_cost_microusd >= 0),
   charged_cost_microusd INTEGER NOT NULL CHECK (charged_cost_microusd >= 0),
@@ -51,16 +64,18 @@ CREATE TABLE request_charge_snapshots (
 
 INSERT INTO request_charge_snapshots(
   request_log_id, model_id, model_slug, tier_min_input_tokens, usage_source,
-  input_tokens, cached_input_tokens, output_tokens, input_microusd_per_1m,
-  cached_input_microusd_per_1m, output_microusd_per_1m,
+  input_tokens, cached_input_tokens, cache_creation_input_tokens, output_tokens,
+  reasoning_output_tokens, unclassified_tokens, input_microusd_per_1m,
+  cached_input_microusd_per_1m, cache_creation_microusd_per_1m,
+  output_microusd_per_1m, usage_quality,
   rate_multiplier_millis, base_cost_microusd, charged_cost_microusd,
   currency, created_at
 )
 SELECT
   request_log_id, model_id, model_slug, tier_min_input_tokens, usage_source,
-  input_tokens, MIN(cached_input_tokens, input_tokens), output_tokens,
-  input_microusd_per_1m, cached_input_microusd_per_1m,
-  output_microusd_per_1m, rate_multiplier_millis, base_cost_microusd,
+  input_tokens, MIN(cached_input_tokens, input_tokens), 0, output_tokens,
+  0, 0, input_microusd_per_1m, cached_input_microusd_per_1m,
+  0, output_microusd_per_1m, 'complete', rate_multiplier_millis, base_cost_microusd,
   charged_cost_microusd, currency, created_at
 FROM request_charge_snapshots_112;
 

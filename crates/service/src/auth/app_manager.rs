@@ -803,6 +803,9 @@ pub fn record_request_charge_v2(
     if model.is_empty() {
         return Err("model_slug_required".to_string());
     }
+    if usage_source != "actual" {
+        return Err("usage_source_not_billable_without_actual_usage".to_string());
+    }
     let now = now_ts();
     let mut wallet_id = None;
     let mut api_key_id = None;

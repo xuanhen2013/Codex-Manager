@@ -30,6 +30,7 @@ struct AnthropicSseState {
     output_tokens: i64,
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
+    usage_authoritative: bool,
     output_text: String,
     emitted_text_to_client: bool,
     stop_reason: Option<&'static str>,
@@ -394,6 +395,7 @@ impl AnthropicSseReader {
                 self.state.model = Some(model.to_string());
             }
             if let Some(usage) = response.get("usage").and_then(Value::as_object) {
+                self.state.usage_authoritative |= usage_map_has_token_signal(usage);
                 self.state.input_tokens = usage
                     .get("input_tokens")
                     .and_then(Value::as_i64)
@@ -571,6 +573,8 @@ impl AnthropicSseReader {
             usage.output_tokens = Some(self.state.output_tokens.max(0));
             usage.total_tokens = self.state.total_tokens.map(|value| value.max(0));
             usage.reasoning_output_tokens = Some(self.state.reasoning_output_tokens.max(0));
+            usage.authoritative |= self.state.usage_authoritative;
+            usage.cache_tokens_are_subset = Some(true);
             if !self.state.output_text.trim().is_empty() {
                 usage.output_text = Some(self.state.output_text.clone());
             }
@@ -599,6 +603,35 @@ impl AnthropicSseReader {
         append_sse_event(&mut out, "message_stop", &json!({ "type": "message_stop" }));
         out.into_bytes()
     }
+}
+
+fn usage_map_has_token_signal(usage: &Map<String, Value>) -> bool {
+    [
+        "input_tokens",
+        "prompt_tokens",
+        "output_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "reasoning_output_tokens",
+    ]
+    .iter()
+    .any(|key| usage.contains_key(*key))
+        || usage
+            .get("input_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("cached_tokens"))
+        || usage
+            .get("prompt_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("cached_tokens"))
+        || usage
+            .get("output_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("reasoning_tokens"))
+        || usage
+            .get("completion_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("reasoning_tokens"))
 }
 
 impl Read for AnthropicSseReader {

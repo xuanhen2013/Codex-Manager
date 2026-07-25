@@ -38,33 +38,39 @@ pub(super) fn retention_cutoff(now: i64, days: i64) -> Option<i64> {
 
 fn token_total_sql_expr() -> &'static str {
     "CASE
+        WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL
+             OR unclassified_tokens IS NOT NULL THEN
+            CASE
+                WHEN IFNULL(input_tokens, 0) > 0 THEN input_tokens ELSE 0
+            END + CASE
+                WHEN IFNULL(output_tokens, 0) > 0 THEN output_tokens ELSE 0
+            END + CASE
+                WHEN IFNULL(unclassified_tokens, 0) > 0 THEN unclassified_tokens ELSE 0
+            END
         WHEN total_tokens IS NOT NULL THEN
             CASE WHEN total_tokens > 0 THEN total_tokens ELSE 0 END
-        ELSE
-            CASE
-                WHEN IFNULL(input_tokens, 0) - IFNULL(cached_input_tokens, 0) + IFNULL(output_tokens, 0) > 0
-                    THEN IFNULL(input_tokens, 0) - IFNULL(cached_input_tokens, 0) + IFNULL(output_tokens, 0)
-                ELSE 0
-            END
+        ELSE 0
      END"
 }
 
 const TOKEN_ROLLUP_COLUMNS: &str = "
     IFNULL(SUM(IFNULL(t.input_tokens, 0)), 0) AS input_tokens,
     IFNULL(SUM(IFNULL(t.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+    IFNULL(SUM(IFNULL(t.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
     IFNULL(SUM(IFNULL(t.output_tokens, 0)), 0) AS output_tokens,
     IFNULL(SUM(IFNULL(t.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+    IFNULL(SUM(IFNULL(t.unclassified_tokens, 0)), 0) AS unclassified_tokens,
     IFNULL(
         SUM(
             CASE
+                WHEN t.input_tokens IS NOT NULL OR t.output_tokens IS NOT NULL
+                     OR t.unclassified_tokens IS NOT NULL THEN
+                    CASE WHEN IFNULL(t.input_tokens, 0) > 0 THEN t.input_tokens ELSE 0 END
+                    + CASE WHEN IFNULL(t.output_tokens, 0) > 0 THEN t.output_tokens ELSE 0 END
+                    + CASE WHEN IFNULL(t.unclassified_tokens, 0) > 0 THEN t.unclassified_tokens ELSE 0 END
                 WHEN t.total_tokens IS NOT NULL THEN
                     CASE WHEN t.total_tokens > 0 THEN t.total_tokens ELSE 0 END
-                ELSE
-                    CASE
-                        WHEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0) > 0
-                            THEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0)
-                        ELSE 0
-                    END
+                ELSE 0
             END
         ),
         0
@@ -77,8 +83,10 @@ const TOKEN_ROLLUP_COLUMNS: &str = "
 const HOURLY_ROLLUP_COLUMNS: &str = "
     IFNULL(SUM(IFNULL(h.input_tokens, 0)), 0) AS input_tokens,
     IFNULL(SUM(IFNULL(h.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+    IFNULL(SUM(IFNULL(h.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
     IFNULL(SUM(IFNULL(h.output_tokens, 0)), 0) AS output_tokens,
     IFNULL(SUM(IFNULL(h.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+    IFNULL(SUM(IFNULL(h.unclassified_tokens, 0)), 0) AS unclassified_tokens,
     IFNULL(SUM(IFNULL(h.total_tokens, 0)), 0) AS total_tokens,
     IFNULL(SUM(IFNULL(h.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd,
     IFNULL(SUM(IFNULL(h.request_count, 0)), 0) AS request_count,
@@ -88,13 +96,18 @@ const HOURLY_ROLLUP_COLUMNS: &str = "
 const COMBINED_ROLLUP_COLUMNS: &str = "
     IFNULL(SUM(IFNULL(input_tokens, 0)), 0) AS input_tokens,
     IFNULL(SUM(IFNULL(cached_input_tokens, 0)), 0) AS cached_input_tokens,
+    IFNULL(SUM(IFNULL(cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
     IFNULL(SUM(IFNULL(output_tokens, 0)), 0) AS output_tokens,
     IFNULL(SUM(IFNULL(reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+    IFNULL(SUM(IFNULL(unclassified_tokens, 0)), 0) AS unclassified_tokens,
     IFNULL(SUM(IFNULL(total_tokens, 0)), 0) AS total_tokens,
     IFNULL(SUM(IFNULL(estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd,
     IFNULL(SUM(IFNULL(request_count, 0)), 0) AS request_count,
     IFNULL(SUM(IFNULL(success_count, 0)), 0) AS success_count,
     IFNULL(SUM(IFNULL(error_count, 0)), 0) AS error_count";
+
+const ACTUAL_USAGE_SOURCE_PREDICATE: &str =
+    "COALESCE(NULLIF(TRIM(t.usage_source), ''), 'actual') = 'actual'";
 
 const USER_OWNER_EXPR: &str = "COALESCE(
     (
@@ -121,13 +134,15 @@ fn token_usage_rollup_from_row(row: &Row<'_>, offset: usize) -> Result<TokenUsag
     Ok(TokenUsageRollup {
         input_tokens: row.get::<_, i64>(offset)?.max(0),
         cached_input_tokens: row.get::<_, i64>(offset + 1)?.max(0),
-        output_tokens: row.get::<_, i64>(offset + 2)?.max(0),
-        reasoning_output_tokens: row.get::<_, i64>(offset + 3)?.max(0),
-        total_tokens: row.get::<_, i64>(offset + 4)?.max(0),
-        estimated_cost_usd: row.get::<_, f64>(offset + 5)?.max(0.0),
-        request_count: row.get::<_, i64>(offset + 6)?.max(0),
-        success_count: row.get::<_, i64>(offset + 7)?.max(0),
-        error_count: row.get::<_, i64>(offset + 8)?.max(0),
+        cache_creation_input_tokens: row.get::<_, i64>(offset + 2)?.max(0),
+        output_tokens: row.get::<_, i64>(offset + 3)?.max(0),
+        reasoning_output_tokens: row.get::<_, i64>(offset + 4)?.max(0),
+        unclassified_tokens: row.get::<_, i64>(offset + 5)?.max(0),
+        total_tokens: row.get::<_, i64>(offset + 6)?.max(0),
+        estimated_cost_usd: row.get::<_, f64>(offset + 7)?.max(0.0),
+        request_count: row.get::<_, i64>(offset + 8)?.max(0),
+        success_count: row.get::<_, i64>(offset + 9)?.max(0),
+        error_count: row.get::<_, i64>(offset + 10)?.max(0),
     })
 }
 
@@ -145,8 +160,10 @@ fn empty_request_log_today_summary() -> RequestLogTodaySummary {
     RequestLogTodaySummary {
         input_tokens: 0,
         cached_input_tokens: 0,
+        cache_creation_input_tokens: 0,
         output_tokens: 0,
         reasoning_output_tokens: 0,
+        unclassified_tokens: 0,
         estimated_cost_usd: 0.0,
     }
 }
@@ -155,9 +172,11 @@ fn request_log_today_summary_from_row(row: &Row<'_>) -> Result<RequestLogTodaySu
     Ok(RequestLogTodaySummary {
         input_tokens: row.get(0)?,
         cached_input_tokens: row.get(1)?,
-        output_tokens: row.get(2)?,
-        reasoning_output_tokens: row.get(3)?,
-        estimated_cost_usd: row.get(4)?,
+        cache_creation_input_tokens: row.get(2)?,
+        output_tokens: row.get(3)?,
+        reasoning_output_tokens: row.get(4)?,
+        unclassified_tokens: row.get(5)?,
+        estimated_cost_usd: row.get(6)?,
     })
 }
 
@@ -185,17 +204,22 @@ fn request_log_today_summary_sql(
             SELECT
                 IFNULL(SUM(IFNULL(s.input_tokens, 0)), 0) AS input_tokens,
                 IFNULL(SUM(IFNULL(s.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+                IFNULL(SUM(IFNULL(s.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
                 IFNULL(SUM(IFNULL(s.output_tokens, 0)), 0) AS output_tokens,
                 IFNULL(SUM(IFNULL(s.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+                IFNULL(SUM(IFNULL(s.unclassified_tokens, 0)), 0) AS unclassified_tokens,
                 IFNULL(SUM(IFNULL(s.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
             FROM request_token_stats s
-            WHERE s.created_at >= ? AND s.created_at < ?{raw_key_clause}
+            WHERE s.created_at >= ? AND s.created_at < ?
+              AND COALESCE(NULLIF(TRIM(s.usage_source), ''), 'actual') = 'actual'{raw_key_clause}
             UNION ALL
             SELECT
                 IFNULL(SUM(IFNULL(h.input_tokens, 0)), 0) AS input_tokens,
                 IFNULL(SUM(IFNULL(h.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+                IFNULL(SUM(IFNULL(h.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
                 IFNULL(SUM(IFNULL(h.output_tokens, 0)), 0) AS output_tokens,
                 IFNULL(SUM(IFNULL(h.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+                IFNULL(SUM(IFNULL(h.unclassified_tokens, 0)), 0) AS unclassified_tokens,
                 IFNULL(SUM(IFNULL(h.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
             FROM request_token_stat_hourly_rollups h
             WHERE h.bucket_start >= ? AND h.bucket_end <= ?{hourly_key_clause}
@@ -203,8 +227,10 @@ fn request_log_today_summary_sql(
          SELECT
             IFNULL(SUM(input_tokens), 0),
             IFNULL(SUM(cached_input_tokens), 0),
+            IFNULL(SUM(cache_creation_input_tokens), 0),
             IFNULL(SUM(output_tokens), 0),
             IFNULL(SUM(reasoning_output_tokens), 0),
+            IFNULL(SUM(unclassified_tokens), 0),
             IFNULL(SUM(estimated_cost_usd), 0.0)
          FROM combined"
     )
@@ -416,8 +442,10 @@ fn request_token_stats_by_model_sql(combined_selects: &str, limit_clause: &str) 
             s.normalized_model,
             IFNULL(SUM(s.input_tokens), 0) AS input_tokens,
             IFNULL(SUM(s.cached_input_tokens), 0) AS cached_input_tokens,
+            IFNULL(SUM(s.cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
             IFNULL(SUM(s.output_tokens), 0) AS output_tokens,
             IFNULL(SUM(s.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(s.unclassified_tokens), 0) AS unclassified_tokens,
             IFNULL(SUM(IFNULL(s.total_tokens, 0)), 0) AS total_tokens,
             IFNULL(SUM(s.estimated_cost_usd), 0.0) AS estimated_cost_usd
          FROM combined s
@@ -516,6 +544,7 @@ fn raw_token_rollup_select(
          LEFT JOIN request_logs r ON r.id = t.request_log_id
          {owner_joins}
          WHERE {where_clause}
+           AND {ACTUAL_USAGE_SOURCE_PREDICATE}
          {group_by}"
     )
 }
@@ -539,12 +568,15 @@ fn raw_key_usage_select(select_prefix: &str, where_clause: &str, group_by: &str)
             COALESCE(NULLIF(TRIM(t.model), ''), 'unknown') AS normalized_model,
             IFNULL(SUM(IFNULL(t.input_tokens, 0)), 0) AS input_tokens,
             IFNULL(SUM(IFNULL(t.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+            IFNULL(SUM(IFNULL(t.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
             IFNULL(SUM(IFNULL(t.output_tokens, 0)), 0) AS output_tokens,
             IFNULL(SUM(IFNULL(t.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(IFNULL(t.unclassified_tokens, 0)), 0) AS unclassified_tokens,
             IFNULL(SUM({token_total}), 0) AS total_tokens,
             IFNULL(SUM(IFNULL(t.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
          FROM request_token_stats t
          WHERE {where_clause}
+           AND {ACTUAL_USAGE_SOURCE_PREDICATE}
          {group_by}",
         token_total = token_total_sql_expr(),
     )
@@ -558,8 +590,10 @@ fn hourly_key_usage_select(select_prefix: &str, where_clause: &str, group_by: &s
             COALESCE(NULLIF(TRIM(h.model), ''), 'unknown') AS normalized_model,
             IFNULL(SUM(IFNULL(h.input_tokens, 0)), 0) AS input_tokens,
             IFNULL(SUM(IFNULL(h.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+            IFNULL(SUM(IFNULL(h.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
             IFNULL(SUM(IFNULL(h.output_tokens, 0)), 0) AS output_tokens,
             IFNULL(SUM(IFNULL(h.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(IFNULL(h.unclassified_tokens, 0)), 0) AS unclassified_tokens,
             IFNULL(SUM(IFNULL(h.total_tokens, 0)), 0) AS total_tokens,
             IFNULL(SUM(IFNULL(h.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
          FROM request_token_stat_hourly_rollups h
@@ -576,8 +610,10 @@ fn legacy_key_usage_select(select_prefix: &str, where_clause: &str, group_by: &s
             COALESCE(NULLIF(TRIM(r.model), ''), 'unknown') AS normalized_model,
             IFNULL(SUM(IFNULL(r.input_tokens, 0)), 0) AS input_tokens,
             IFNULL(SUM(IFNULL(r.cached_input_tokens, 0)), 0) AS cached_input_tokens,
+            IFNULL(SUM(IFNULL(r.cache_creation_input_tokens, 0)), 0) AS cache_creation_input_tokens,
             IFNULL(SUM(IFNULL(r.output_tokens, 0)), 0) AS output_tokens,
             IFNULL(SUM(IFNULL(r.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+            IFNULL(SUM(IFNULL(r.unclassified_tokens, 0)), 0) AS unclassified_tokens,
             IFNULL(SUM(IFNULL(r.total_tokens, 0)), 0) AS total_tokens,
             IFNULL(SUM(IFNULL(r.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
          FROM request_token_stat_rollups r
@@ -628,10 +664,12 @@ fn map_token_usage_summary(row: &Row<'_>) -> Result<TokenUsageSummary> {
         model: row.get(0)?,
         input_tokens: row.get::<_, i64>(1)?.max(0),
         cached_input_tokens: row.get::<_, i64>(2)?.max(0),
-        output_tokens: row.get::<_, i64>(3)?.max(0),
-        reasoning_output_tokens: row.get::<_, i64>(4)?.max(0),
-        total_tokens: row.get::<_, i64>(5)?.max(0),
-        estimated_cost_usd: row.get::<_, f64>(6)?.max(0.0),
+        cache_creation_input_tokens: row.get::<_, i64>(3)?.max(0),
+        output_tokens: row.get::<_, i64>(4)?.max(0),
+        reasoning_output_tokens: row.get::<_, i64>(5)?.max(0),
+        unclassified_tokens: row.get::<_, i64>(6)?.max(0),
+        total_tokens: row.get::<_, i64>(7)?.max(0),
+        estimated_cost_usd: row.get::<_, f64>(8)?.max(0.0),
     })
 }
 
@@ -641,10 +679,12 @@ fn map_api_key_model_token_usage_summary(row: &Row<'_>) -> Result<ApiKeyModelTok
         model: row.get(1)?,
         input_tokens: row.get::<_, i64>(2)?.max(0),
         cached_input_tokens: row.get::<_, i64>(3)?.max(0),
-        output_tokens: row.get::<_, i64>(4)?.max(0),
-        reasoning_output_tokens: row.get::<_, i64>(5)?.max(0),
-        total_tokens: row.get::<_, i64>(6)?.max(0),
-        estimated_cost_usd: row.get::<_, f64>(7)?.max(0.0),
+        cache_creation_input_tokens: row.get::<_, i64>(4)?.max(0),
+        output_tokens: row.get::<_, i64>(5)?.max(0),
+        reasoning_output_tokens: row.get::<_, i64>(6)?.max(0),
+        unclassified_tokens: row.get::<_, i64>(7)?.max(0),
+        total_tokens: row.get::<_, i64>(8)?.max(0),
+        estimated_cost_usd: row.get::<_, f64>(9)?.max(0.0),
     })
 }
 
@@ -662,12 +702,31 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn insert_request_token_stat(&self, stat: &RequestTokenStat) -> Result<()> {
+        let has_authoritative_tokens = stat.input_tokens.is_some()
+            || stat.cached_input_tokens.is_some()
+            || stat.cache_creation_input_tokens.is_some()
+            || stat.output_tokens.is_some()
+            || stat.total_tokens.is_some()
+            || stat.reasoning_output_tokens.is_some()
+            || stat.unclassified_tokens.is_some();
+        let usage_source = match stat.usage_source.trim() {
+            "actual" | "estimated" | "unavailable" => stat.usage_source.trim(),
+            _ if has_authoritative_tokens => "actual",
+            _ => "unavailable",
+        };
+        let usage_quality = match stat.usage_quality.trim() {
+            "complete" | "inconsistent" | "unclassified" => stat.usage_quality.trim(),
+            _ if usage_source == "actual" => "complete",
+            _ => "unclassified",
+        };
         self.conn.execute(
             "INSERT INTO request_token_stats (
                 request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
-                input_tokens, cached_input_tokens, output_tokens, total_tokens, reasoning_output_tokens,
-                estimated_cost_usd, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                input_tokens, cached_input_tokens, cache_creation_input_tokens, output_tokens,
+                total_tokens, reasoning_output_tokens, unclassified_tokens, estimated_cost_usd,
+                usage_source, usage_quality, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                       ?13, ?14, ?15, ?16, ?17)",
             (
                 stat.request_log_id,
                 &stat.key_id,
@@ -677,10 +736,14 @@ impl Storage {
                 &stat.actual_source_id,
                 stat.input_tokens,
                 stat.cached_input_tokens,
+                stat.cache_creation_input_tokens,
                 stat.output_tokens,
                 stat.total_tokens,
                 stat.reasoning_output_tokens,
+                stat.unclassified_tokens,
                 stat.estimated_cost_usd,
+                usage_source,
+                usage_quality,
                 stat.created_at,
             ),
         )?;
@@ -742,9 +805,9 @@ impl Storage {
             &format!(
                 "INSERT INTO request_token_stat_hourly_rollups (
                     bucket_start, bucket_end, key_id, account_id, model, actual_source_kind, actual_source_id,
-                    owner_user_id, input_tokens, cached_input_tokens, output_tokens, total_tokens,
-                    reasoning_output_tokens, estimated_cost_usd, request_count, success_count,
-                    error_count, updated_at
+                    owner_user_id, input_tokens, cached_input_tokens, cache_creation_input_tokens,
+                    output_tokens, total_tokens, reasoning_output_tokens, unclassified_tokens,
+                    estimated_cost_usd, request_count, success_count, error_count, updated_at
                  )
                  SELECT
                     CAST(t.created_at / {HOUR_SECONDS} AS INTEGER) * {HOUR_SECONDS},
@@ -757,9 +820,11 @@ impl Storage {
                     COALESCE({USER_OWNER_EXPR}, ''),
                     IFNULL(SUM(CASE WHEN t.input_tokens > 0 THEN t.input_tokens ELSE 0 END), 0),
                     IFNULL(SUM(CASE WHEN t.cached_input_tokens > 0 THEN t.cached_input_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.cache_creation_input_tokens > 0 THEN t.cache_creation_input_tokens ELSE 0 END), 0),
                     IFNULL(SUM(CASE WHEN t.output_tokens > 0 THEN t.output_tokens ELSE 0 END), 0),
                     IFNULL(SUM({token_total}), 0),
                     IFNULL(SUM(CASE WHEN t.reasoning_output_tokens > 0 THEN t.reasoning_output_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.unclassified_tokens > 0 THEN t.unclassified_tokens ELSE 0 END), 0),
                     IFNULL(SUM(CASE WHEN t.estimated_cost_usd > 0 THEN t.estimated_cost_usd ELSE 0 END), 0.0),
                     COUNT(DISTINCT t.request_log_id),
                     COUNT(DISTINCT CASE WHEN r.status_code >= 200 AND r.status_code <= 299 THEN t.request_log_id END),
@@ -769,6 +834,7 @@ impl Storage {
                  LEFT JOIN request_logs r ON r.id = t.request_log_id
                  {USER_OWNER_JOINS}
                  WHERE t.created_at < ?1
+                   AND {ACTUAL_USAGE_SOURCE_PREDICATE}
                  GROUP BY
                     CAST(t.created_at / {HOUR_SECONDS} AS INTEGER) * {HOUR_SECONDS},
                     COALESCE(NULLIF(TRIM(t.key_id), ''), ''),
@@ -786,9 +852,11 @@ impl Storage {
                     END,
                     input_tokens = request_token_stat_hourly_rollups.input_tokens + excluded.input_tokens,
                     cached_input_tokens = request_token_stat_hourly_rollups.cached_input_tokens + excluded.cached_input_tokens,
+                    cache_creation_input_tokens = request_token_stat_hourly_rollups.cache_creation_input_tokens + excluded.cache_creation_input_tokens,
                     output_tokens = request_token_stat_hourly_rollups.output_tokens + excluded.output_tokens,
                     total_tokens = request_token_stat_hourly_rollups.total_tokens + excluded.total_tokens,
                     reasoning_output_tokens = request_token_stat_hourly_rollups.reasoning_output_tokens + excluded.reasoning_output_tokens,
+                    unclassified_tokens = request_token_stat_hourly_rollups.unclassified_tokens + excluded.unclassified_tokens,
                     estimated_cost_usd = request_token_stat_hourly_rollups.estimated_cost_usd + excluded.estimated_cost_usd,
                     request_count = request_token_stat_hourly_rollups.request_count + excluded.request_count,
                     success_count = request_token_stat_hourly_rollups.success_count + excluded.success_count,
@@ -1588,10 +1656,14 @@ impl Storage {
                 actual_source_id TEXT,
                 input_tokens INTEGER,
                 cached_input_tokens INTEGER,
+                cache_creation_input_tokens INTEGER,
                 output_tokens INTEGER,
                 total_tokens INTEGER,
                 reasoning_output_tokens INTEGER,
+                unclassified_tokens INTEGER,
                 estimated_cost_usd REAL,
+                usage_source TEXT NOT NULL DEFAULT 'actual',
+                usage_quality TEXT NOT NULL DEFAULT 'complete',
                 created_at INTEGER NOT NULL
             )",
             [],
@@ -1634,6 +1706,42 @@ impl Storage {
         self.ensure_column("request_token_stats", "total_tokens", "INTEGER")?;
         self.ensure_column("request_token_stats", "actual_source_kind", "TEXT")?;
         self.ensure_column("request_token_stats", "actual_source_id", "TEXT")?;
+        self.ensure_column(
+            "request_token_stats",
+            "cache_creation_input_tokens",
+            "INTEGER",
+        )?;
+        self.ensure_column("request_token_stats", "unclassified_tokens", "INTEGER")?;
+        self.ensure_column(
+            "request_token_stats",
+            "usage_source",
+            "TEXT NOT NULL DEFAULT 'actual'",
+        )?;
+        self.conn.execute(
+            "UPDATE request_token_stats
+             SET usage_source='actual'
+             WHERE usage_source IS NULL
+                OR TRIM(usage_source)=''
+                OR usage_source NOT IN ('actual','estimated','unavailable')",
+            [],
+        )?;
+        self.ensure_column(
+            "request_token_stats",
+            "usage_quality",
+            "TEXT NOT NULL DEFAULT 'complete'",
+        )?;
+        self.conn.execute(
+            "UPDATE request_token_stats
+             SET usage_quality=CASE
+                 WHEN usage_source='actual' THEN 'complete'
+                 ELSE 'unclassified'
+             END
+             WHERE usage_quality IS NULL
+                OR TRIM(usage_quality)=''
+                OR usage_quality NOT IN ('complete','inconsistent','unclassified')
+                OR usage_source<>'actual'",
+            [],
+        )?;
         if self.has_column("request_logs", "actual_source_kind")?
             && self.has_column("request_logs", "actual_source_id")?
         {
@@ -1677,9 +1785,11 @@ impl Storage {
                 model TEXT NOT NULL DEFAULT '',
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
                 reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+                unclassified_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
                 source_rows INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL,
@@ -1709,9 +1819,11 @@ impl Storage {
                 owner_user_id TEXT NOT NULL DEFAULT '',
                 input_tokens INTEGER NOT NULL DEFAULT 0,
                 cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
                 output_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
                 reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+                unclassified_tokens INTEGER NOT NULL DEFAULT 0,
                 estimated_cost_usd REAL NOT NULL DEFAULT 0.0,
                 request_count INTEGER NOT NULL DEFAULT 0,
                 success_count INTEGER NOT NULL DEFAULT 0,
@@ -1722,6 +1834,21 @@ impl Storage {
             [],
         )?;
         self.ensure_column("request_token_stat_hourly_rollups", "bucket_end", "INTEGER")?;
+        for table in [
+            "request_token_stat_rollups",
+            "request_token_stat_hourly_rollups",
+        ] {
+            self.ensure_column(
+                table,
+                "cache_creation_input_tokens",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            self.ensure_column(
+                table,
+                "unclassified_tokens",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+        }
         self.conn.execute(
             "UPDATE request_token_stat_hourly_rollups
              SET bucket_end = bucket_start + 3600
@@ -1763,13 +1890,14 @@ impl Storage {
             let backfill_sql = format!(
                 "INSERT OR IGNORE INTO request_token_stats (
                     request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
-                    input_tokens, cached_input_tokens, output_tokens, total_tokens, reasoning_output_tokens,
-                    estimated_cost_usd, created_at
+                    input_tokens, cached_input_tokens, cache_creation_input_tokens, output_tokens,
+                    total_tokens, reasoning_output_tokens, unclassified_tokens, estimated_cost_usd,
+                    usage_source, usage_quality, created_at
                  )
                  SELECT
                     id, key_id, account_id, model, {actual_source_kind_expr}, {actual_source_id_expr},
-                    input_tokens, cached_input_tokens, output_tokens, NULL, reasoning_output_tokens,
-                    estimated_cost_usd, created_at
+                    input_tokens, cached_input_tokens, 0, output_tokens, NULL, reasoning_output_tokens,
+                    0, estimated_cost_usd, 'actual', 'complete', created_at
                  FROM request_logs
                  WHERE input_tokens IS NOT NULL
                     OR cached_input_tokens IS NOT NULL

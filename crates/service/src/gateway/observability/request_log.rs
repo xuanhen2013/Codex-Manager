@@ -9,9 +9,20 @@ static API_KEY_LAST_USED_TOUCH_CACHE: OnceLock<Mutex<HashMap<String, i64>>> = On
 pub(crate) struct RequestLogUsage {
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
+    /// `Some(false)` is used by adapters that synthesized zero-valued fields
+    /// without receiving provider usage. `None` preserves legacy direct callers
+    /// where the presence of token fields is the usage signal.
+    pub usage_authoritative: Option<bool>,
+    /// Whether cached_input_tokens are included in input_tokens. `None` keeps
+    /// the historical OpenAI-style subset interpretation.
+    pub cache_tokens_are_subset: Option<bool>,
+    /// Whether reasoning_output_tokens are already included in output_tokens.
+    /// Gemini-style usage reports may expose reasoning as an independent bucket.
+    pub reasoning_tokens_are_subset: Option<bool>,
     pub first_response_ms: Option<i64>,
     pub estimated_input_tokens: Option<i64>,
 }
@@ -19,9 +30,14 @@ pub(crate) struct RequestLogUsage {
 #[derive(Debug, Clone, Copy)]
 struct ResolvedChargeUsage {
     usage_source: &'static str,
+    billable: bool,
+    quality: &'static str,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_creation_input_tokens: i64,
     output_tokens: i64,
+    reasoning_output_tokens: i64,
+    unclassified_tokens: i64,
     total_tokens: i64,
 }
 
@@ -72,40 +88,117 @@ pub(crate) fn estimate_input_tokens_from_body(body: &[u8]) -> i64 {
 }
 
 fn resolve_charge_usage(usage: RequestLogUsage) -> ResolvedChargeUsage {
-    let has_actual_usage = usage.input_tokens.is_some()
+    let has_bucket_fields = usage.input_tokens.is_some()
         || usage.cached_input_tokens.is_some()
+        || usage.cache_creation_input_tokens.is_some()
         || usage.output_tokens.is_some()
-        || usage.total_tokens.is_some();
+        || usage.reasoning_output_tokens.is_some();
+    let has_token_fields = has_bucket_fields || usage.total_tokens.is_some();
+    let has_actual_usage = usage.usage_authoritative.unwrap_or(has_token_fields) && has_token_fields;
     if !has_actual_usage {
-        let input_tokens = usage.estimated_input_tokens.unwrap_or(1).max(1);
         return ResolvedChargeUsage {
-            usage_source: "estimated",
-            input_tokens,
+            usage_source: "unavailable",
+            billable: false,
+            quality: "unclassified",
+            input_tokens: 0,
             cached_input_tokens: 0,
+            cache_creation_input_tokens: 0,
             output_tokens: 0,
-            total_tokens: input_tokens,
+            reasoning_output_tokens: 0,
+            unclassified_tokens: 0,
+            total_tokens: 0,
         };
     }
-    let output_tokens = usage.output_tokens.unwrap_or(0).max(0);
-    let cached_input_tokens = usage.cached_input_tokens.unwrap_or(0).max(0);
-    let input_tokens = usage
-        .input_tokens
-        .map(|value| value.max(0))
-        .or_else(|| {
-            usage
-                .total_tokens
-                .map(|total| total.max(0).saturating_sub(output_tokens))
-        })
-        .unwrap_or(cached_input_tokens);
+
+    let raw_input_tokens = normalize_token(usage.input_tokens);
+    let raw_cached_input_tokens = normalize_token(usage.cached_input_tokens);
+    let raw_cache_creation_input_tokens = normalize_token(usage.cache_creation_input_tokens);
+    let raw_output_tokens = normalize_token(usage.output_tokens);
+    let raw_total_tokens = normalize_token(usage.total_tokens);
+    let raw_reasoning_tokens = normalize_token(usage.reasoning_output_tokens);
+    let cache_tokens_are_subset = usage.cache_tokens_are_subset.unwrap_or(true);
+    let reasoning_tokens_are_subset = usage.reasoning_tokens_are_subset.unwrap_or(true);
+    let mut inconsistent = [
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.output_tokens,
+        usage.total_tokens,
+        usage.reasoning_output_tokens,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| value < 0);
+
+    let mut raw_input_or_uncached_tokens = raw_input_tokens.unwrap_or(0);
+    let cached_input_tokens = raw_cached_input_tokens.unwrap_or(0);
+    let cache_creation_input_tokens = raw_cache_creation_input_tokens.unwrap_or(0);
+    let reasoning_output_tokens = raw_reasoning_tokens.unwrap_or(0);
+
+    let input_tokens = if cache_tokens_are_subset {
+        if raw_input_tokens.is_none() {
+            raw_input_or_uncached_tokens =
+                cached_input_tokens.saturating_add(cache_creation_input_tokens);
+        }
+        if cached_input_tokens.saturating_add(cache_creation_input_tokens) > raw_input_or_uncached_tokens
+        {
+            inconsistent = true;
+            raw_input_or_uncached_tokens.max(
+                cached_input_tokens.saturating_add(cache_creation_input_tokens),
+            )
+        } else {
+            raw_input_or_uncached_tokens
+        }
+    } else {
+        // Anthropic-style usage reports uncached input and cache reads as
+        // independent buckets. Convert it to the canonical total-input form
+        // used by the integer price formula, while retaining cache reads for
+        // the discounted rate.
+        raw_input_or_uncached_tokens
+            .saturating_add(cached_input_tokens)
+            .saturating_add(cache_creation_input_tokens)
+    };
+
+    let mut output_tokens = raw_output_tokens.unwrap_or(0);
+    if raw_output_tokens.is_none() {
+        output_tokens = reasoning_output_tokens;
+    }
+    if reasoning_tokens_are_subset && reasoning_output_tokens > output_tokens {
+        inconsistent = true;
+    }
+    if !reasoning_tokens_are_subset {
+        output_tokens = output_tokens.saturating_add(reasoning_output_tokens);
+    }
+    let cached_input_tokens = cached_input_tokens.min(input_tokens);
+    let cache_creation_input_tokens = cache_creation_input_tokens
+        .min(input_tokens.saturating_sub(cached_input_tokens));
+    let computed_total = input_tokens.saturating_add(output_tokens);
+    let total_tokens = raw_total_tokens.unwrap_or(computed_total);
+    if total_tokens < computed_total {
+        inconsistent = true;
+    }
+    let unclassified_tokens = total_tokens.saturating_sub(computed_total);
+    let quality = if inconsistent {
+        "inconsistent"
+    } else if unclassified_tokens > 0 {
+        "unclassified"
+    } else {
+        "complete"
+    };
     ResolvedChargeUsage {
         usage_source: "actual",
+        // A total-only or internally contradictory response remains visible in
+        // usage reports, but cannot safely determine the priced input/output
+        // buckets. Undercharging is preferable to inventing a bucket.
+        billable: !inconsistent && has_bucket_fields,
         input_tokens,
-        cached_input_tokens: cached_input_tokens.min(input_tokens),
+        cached_input_tokens,
+        cache_creation_input_tokens,
+        quality,
         output_tokens,
-        total_tokens: usage
-            .total_tokens
-            .map(|value| value.max(0))
-            .unwrap_or_else(|| input_tokens.saturating_add(output_tokens)),
+        reasoning_output_tokens,
+        unclassified_tokens,
+        total_tokens: total_tokens.max(computed_total),
     }
 }
 
@@ -342,23 +435,38 @@ pub(crate) fn write_request_log_with_attempts(
     let raw_cached_input_tokens = normalize_token(usage.cached_input_tokens);
     let raw_output_tokens = normalize_token(usage.output_tokens);
     let raw_total_tokens = normalize_token(usage.total_tokens);
+    let diagnostic_input_estimate = normalize_token(usage.estimated_input_tokens).unwrap_or(0);
     let charge_usage = resolve_charge_usage(usage);
     let inference_path = is_inference_path(request_path);
-    let use_charge_usage =
-        inference_path && (charge_usage.usage_source == "actual" || upstream_url.is_some());
-    let input_tokens = use_charge_usage
-        .then_some(charge_usage.input_tokens)
-        .or(raw_input_tokens);
-    let cached_input_tokens = use_charge_usage
-        .then_some(charge_usage.cached_input_tokens)
-        .or(raw_cached_input_tokens);
-    let output_tokens = use_charge_usage
-        .then_some(charge_usage.output_tokens)
-        .or(raw_output_tokens);
-    let total_tokens = use_charge_usage
-        .then_some(charge_usage.total_tokens)
-        .or(raw_total_tokens);
-    let reasoning_output_tokens = normalize_token(usage.reasoning_output_tokens);
+    let has_actual_usage = charge_usage.usage_source == "actual";
+    // An input-size estimate is useful for diagnosing an upstream failure, but
+    // it is not authoritative usage and must never enter billing statistics.
+    let use_charge_usage = inference_path && has_actual_usage;
+    let input_tokens = if inference_path {
+        use_charge_usage.then_some(charge_usage.input_tokens)
+    } else {
+        raw_input_tokens
+    };
+    let cached_input_tokens = if inference_path {
+        use_charge_usage.then_some(charge_usage.cached_input_tokens)
+    } else {
+        raw_cached_input_tokens
+    };
+    let output_tokens = if inference_path {
+        use_charge_usage.then_some(charge_usage.output_tokens)
+    } else {
+        raw_output_tokens
+    };
+    let total_tokens = if inference_path {
+        use_charge_usage.then_some(charge_usage.total_tokens)
+    } else {
+        raw_total_tokens
+    };
+    let reasoning_output_tokens = if inference_path && !has_actual_usage {
+        None
+    } else {
+        normalize_token(usage.reasoning_output_tokens)
+    };
     let duration_ms = normalize_duration_ms(duration_ms);
     let first_response_ms = usage.first_response_ms.map(|value| value.max(0));
     let created_at = now_ts();
@@ -417,15 +525,15 @@ pub(crate) fn write_request_log_with_attempts(
     let success = status_code
         .map(|status| (200..300).contains(&status))
         .unwrap_or(false);
-    if inference_path && upstream_url.is_some() && charge_usage.usage_source == "estimated" {
+    if inference_path && upstream_url.is_some() && !has_actual_usage {
         log::warn!(
-            "event=gateway_token_usage_estimated path={} status={} account_id={} key_id={} model={} input_tokens={}",
+            "event=gateway_token_usage_unavailable path={} status={} account_id={} key_id={} model={} estimated_input_tokens={}",
             request_path,
             status_code.unwrap_or(0),
             account_id.unwrap_or("-"),
             key_id.unwrap_or("-"),
             model.unwrap_or("-"),
-            charge_usage.input_tokens,
+            diagnostic_input_estimate,
         );
     }
     // 记录请求最终结果（而非内部重试明细），保证 UI 一次请求只展示一条记录。
@@ -531,18 +639,22 @@ pub(crate) fn write_request_log_with_attempts(
         touch_api_key_last_used_after_success(storage, key_id, created_at);
     }
 
-    if inference_path && upstream_url.is_some() {
+    if inference_path && upstream_url.is_some() && has_actual_usage && charge_usage.billable {
         if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
             let raw_usage_json = serde_json::to_string(&serde_json::json!({
                 "model": model,
                 "usageSource": charge_usage.usage_source,
+                "usageQuality": charge_usage.quality,
                 "inputTokens": charge_usage.input_tokens,
                 "cachedInputTokens": charge_usage.cached_input_tokens,
+                "cacheCreationInputTokens": charge_usage.cache_creation_input_tokens,
                 "outputTokens": charge_usage.output_tokens,
                 "totalTokens": charge_usage.total_tokens,
                 "reasoningOutputTokens": reasoning_output_tokens,
             }))
             .ok();
+            // Preserve the existing wallet policy for failed requests, while
+            // making the recorded usage authoritative and non-estimated.
             let charge_wallet = success || status_code == Some(499);
             if let Err(err) = crate::auth::app_manager::record_request_charge_v2(
                 storage,

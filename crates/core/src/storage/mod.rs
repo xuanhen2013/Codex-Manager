@@ -853,10 +853,14 @@ pub struct RequestTokenStat {
     pub actual_source_id: Option<String>,
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
+    pub unclassified_tokens: Option<i64>,
     pub estimated_cost_usd: Option<f64>,
+    pub usage_source: String,
+    pub usage_quality: String,
     pub created_at: i64,
 }
 
@@ -864,8 +868,10 @@ pub struct RequestTokenStat {
 pub struct RequestLogTodaySummary {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
+    pub unclassified_tokens: i64,
     pub estimated_cost_usd: f64,
 }
 
@@ -890,8 +896,10 @@ pub struct TokenUsageSummary {
     pub model: String,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
+    pub unclassified_tokens: i64,
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
 }
@@ -902,8 +910,10 @@ pub struct ApiKeyModelTokenUsageSummary {
     pub model: String,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
+    pub unclassified_tokens: i64,
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
 }
@@ -919,8 +929,10 @@ pub struct MemberDashboardUsageBreakdownSnapshot {
 pub struct TokenUsageRollup {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
+    pub unclassified_tokens: i64,
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
     pub request_count: i64,
@@ -2273,6 +2285,8 @@ impl Storage {
         self.ensure_proxy_history_tables()?;
         self.ensure_quota_pool_tables()?;
         self.ensure_account_manager_tables()?;
+        self.apply_canonical_token_accounting_migration()?;
+        self.apply_actual_usage_billing_migration()?;
         self.seed_missing_builtin_models_v2()?;
         Ok(())
     }

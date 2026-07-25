@@ -143,49 +143,31 @@ impl Storage {
 
 fn api_key_total_token_usage_sql() -> &'static str {
     "WITH selected_stats AS (
-        SELECT
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            total_tokens
+        SELECT CASE
+            WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN
+                CASE WHEN IFNULL(input_tokens, 0) > 0 THEN input_tokens ELSE 0 END
+                + CASE WHEN IFNULL(output_tokens, 0) > 0 THEN output_tokens ELSE 0 END
+            WHEN total_tokens IS NOT NULL THEN
+                CASE WHEN total_tokens > 0 THEN total_tokens ELSE 0 END
+            ELSE 0
+        END AS total_tokens
         FROM request_token_stats
         WHERE key_id = ?1
           AND TRIM(key_id) <> ''
+          AND COALESCE(NULLIF(TRIM(usage_source), ''), 'actual') = 'actual'
         UNION ALL
-        SELECT
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            total_tokens
+        SELECT CASE WHEN IFNULL(total_tokens, 0) > 0 THEN total_tokens ELSE 0 END AS total_tokens
         FROM request_token_stat_hourly_rollups
         WHERE key_id = ?1
           AND TRIM(key_id) <> ''
         UNION ALL
-        SELECT
-            input_tokens,
-            cached_input_tokens,
-            output_tokens,
-            total_tokens
+        SELECT CASE WHEN IFNULL(total_tokens, 0) > 0 THEN total_tokens ELSE 0 END AS total_tokens
         FROM request_token_stat_rollups
         WHERE key_id = ?1
           AND TRIM(key_id) <> ''
      )
      SELECT
-        IFNULL(
-            SUM(
-                CASE
-                    WHEN total_tokens IS NOT NULL THEN
-                        CASE WHEN total_tokens > 0 THEN total_tokens ELSE 0 END
-                    ELSE
-                        CASE
-                            WHEN IFNULL(input_tokens, 0) - IFNULL(cached_input_tokens, 0) + IFNULL(output_tokens, 0) > 0
-                                THEN IFNULL(input_tokens, 0) - IFNULL(cached_input_tokens, 0) + IFNULL(output_tokens, 0)
-                            ELSE 0
-                        END
-                END
-            ),
-            0
-        ) AS total_tokens
+        IFNULL(SUM(total_tokens), 0) AS total_tokens
      FROM selected_stats"
 }
 
@@ -261,7 +243,10 @@ fn api_key_usage_cte_sql(include_cost: bool, scope: ApiKeyUsageScope) -> String 
     let raw_from = api_key_usage_from_sql("request_token_stats", "s", scope);
     let hourly_from = api_key_usage_from_sql("request_token_stat_hourly_rollups", "h", scope);
     let legacy_from = api_key_usage_from_sql("request_token_stat_rollups", "r", scope);
-    let raw_where = api_key_usage_where_sql("s", scope);
+    let raw_where = format!(
+        "{} AND COALESCE(NULLIF(TRIM(s.usage_source), ''), 'actual') = 'actual'",
+        api_key_usage_where_sql("s", scope)
+    );
     let hourly_where = api_key_usage_where_sql("h", scope);
     let legacy_where = api_key_usage_where_sql("r", scope);
     let hourly_cost_select = rollup_cost_select.replace("{rollup_alias}", "h");
@@ -276,14 +261,15 @@ fn api_key_usage_cte_sql(include_cost: bool, scope: ApiKeyUsageScope) -> String 
                     SELECT
                         s.key_id AS key_id,
                         CASE
+                            WHEN s.input_tokens IS NOT NULL OR s.output_tokens IS NOT NULL THEN
+                                CASE
+                                    WHEN IFNULL(s.input_tokens, 0) > 0 THEN s.input_tokens ELSE 0
+                                END + CASE
+                                    WHEN IFNULL(s.output_tokens, 0) > 0 THEN s.output_tokens ELSE 0
+                                END
                             WHEN s.total_tokens IS NOT NULL THEN
                                 CASE WHEN s.total_tokens > 0 THEN s.total_tokens ELSE 0 END
-                            ELSE
-                                CASE
-                                    WHEN IFNULL(s.input_tokens, 0) - IFNULL(s.cached_input_tokens, 0) + IFNULL(s.output_tokens, 0) > 0
-                                        THEN IFNULL(s.input_tokens, 0) - IFNULL(s.cached_input_tokens, 0) + IFNULL(s.output_tokens, 0)
-                                    ELSE 0
-                                END
+                            ELSE 0
                         END AS total_tokens{raw_cost_select}
                     FROM {raw_from}
                     WHERE {raw_where}

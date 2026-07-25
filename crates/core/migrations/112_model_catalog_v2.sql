@@ -36,6 +36,7 @@ CREATE TABLE model_prices (
   currency TEXT NOT NULL DEFAULT 'USD' CHECK (currency = 'USD'),
   input_microusd_per_1m INTEGER,
   cached_input_microusd_per_1m INTEGER,
+  cache_creation_microusd_per_1m INTEGER,
   output_microusd_per_1m INTEGER,
   price_status TEXT NOT NULL
     CHECK (price_status IN ('official', 'estimated', 'custom', 'missing')),
@@ -44,16 +45,19 @@ CREATE TABLE model_prices (
   updated_at INTEGER NOT NULL,
   CHECK (input_microusd_per_1m IS NULL OR input_microusd_per_1m >= 0),
   CHECK (cached_input_microusd_per_1m IS NULL OR cached_input_microusd_per_1m >= 0),
+  CHECK (cache_creation_microusd_per_1m IS NULL OR cache_creation_microusd_per_1m >= 0),
   CHECK (output_microusd_per_1m IS NULL OR output_microusd_per_1m >= 0),
   CHECK (
     (price_status = 'missing'
       AND input_microusd_per_1m IS NULL
       AND cached_input_microusd_per_1m IS NULL
+      AND cache_creation_microusd_per_1m IS NULL
       AND output_microusd_per_1m IS NULL)
     OR
     (price_status <> 'missing'
       AND input_microusd_per_1m IS NOT NULL
       AND cached_input_microusd_per_1m IS NOT NULL
+      AND cache_creation_microusd_per_1m IS NOT NULL
       AND output_microusd_per_1m IS NOT NULL)
   )
 );
@@ -63,6 +67,8 @@ CREATE TABLE model_price_tiers (
   min_input_tokens INTEGER NOT NULL CHECK (min_input_tokens >= 0),
   input_microusd_per_1m INTEGER NOT NULL CHECK (input_microusd_per_1m >= 0),
   cached_input_microusd_per_1m INTEGER NOT NULL CHECK (cached_input_microusd_per_1m >= 0),
+  cache_creation_microusd_per_1m INTEGER NOT NULL DEFAULT 0
+    CHECK (cache_creation_microusd_per_1m >= 0),
   output_microusd_per_1m INTEGER NOT NULL CHECK (output_microusd_per_1m >= 0),
   PRIMARY KEY (model_id, min_input_tokens)
 );
@@ -110,10 +116,16 @@ CREATE TABLE request_charge_snapshots (
   usage_source TEXT NOT NULL CHECK (usage_source IN ('actual', 'estimated')),
   input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
   cached_input_tokens INTEGER NOT NULL CHECK (cached_input_tokens >= 0),
+  cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (cache_creation_input_tokens >= 0),
   output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+  reasoning_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (reasoning_output_tokens >= 0),
+  unclassified_tokens INTEGER NOT NULL DEFAULT 0 CHECK (unclassified_tokens >= 0),
   input_microusd_per_1m INTEGER NOT NULL CHECK (input_microusd_per_1m >= 0),
   cached_input_microusd_per_1m INTEGER NOT NULL CHECK (cached_input_microusd_per_1m >= 0),
+  cache_creation_microusd_per_1m INTEGER NOT NULL DEFAULT 0 CHECK (cache_creation_microusd_per_1m >= 0),
   output_microusd_per_1m INTEGER NOT NULL CHECK (output_microusd_per_1m >= 0),
+  usage_quality TEXT NOT NULL DEFAULT 'complete'
+    CHECK (usage_quality IN ('complete', 'inconsistent', 'unclassified')),
   rate_multiplier_millis INTEGER NOT NULL CHECK (rate_multiplier_millis > 0),
   base_cost_microusd INTEGER NOT NULL CHECK (base_cost_microusd >= 0),
   charged_cost_microusd INTEGER NOT NULL CHECK (charged_cost_microusd >= 0),

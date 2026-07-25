@@ -14,9 +14,17 @@ const STREAM_INCOMPLETE_FALLBACK_MESSAGE: &str = "连接中断（可能是网络
 pub(crate) struct UpstreamResponseUsage {
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_creation_input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
+    // True only when a provider response contained a recognized usage bucket.
+    // Readers may synthesize zero-valued fields to complete an adapter response;
+    // those fields must not become billable usage by accident.
+    pub authoritative: bool,
+    // OpenAI/Gemini expose cached input as a subset of input_tokens. Anthropic
+    // reports cache reads independently, so its adapter sets this to false.
+    pub cache_tokens_are_subset: Option<bool>,
     pub first_response_ms: Option<i64>,
     pub output_text: Option<String>,
 }
@@ -116,6 +124,9 @@ pub(in super::super) fn merge_usage(
     if source.cached_input_tokens.is_some() {
         target.cached_input_tokens = source.cached_input_tokens;
     }
+    if source.cache_creation_input_tokens.is_some() {
+        target.cache_creation_input_tokens = source.cache_creation_input_tokens;
+    }
     if source.output_tokens.is_some() {
         target.output_tokens = source.output_tokens;
     }
@@ -124,6 +135,10 @@ pub(in super::super) fn merge_usage(
     }
     if source.reasoning_output_tokens.is_some() {
         target.reasoning_output_tokens = source.reasoning_output_tokens;
+    }
+    target.authoritative |= source.authoritative;
+    if source.cache_tokens_are_subset.is_some() {
+        target.cache_tokens_are_subset = source.cache_tokens_are_subset;
     }
     if target.first_response_ms.is_none() {
         target.first_response_ms = source.first_response_ms;
@@ -148,6 +163,7 @@ pub(in super::super) fn merge_usage(
 pub(in super::super) fn usage_has_signal(usage: &UpstreamResponseUsage) -> bool {
     usage.input_tokens.is_some()
         || usage.cached_input_tokens.is_some()
+        || usage.cache_creation_input_tokens.is_some()
         || usage.output_tokens.is_some()
         || usage.total_tokens.is_some()
         || usage.reasoning_output_tokens.is_some()
@@ -192,6 +208,10 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
                 .and_then(|details| details.get("cached_tokens"))
                 .and_then(Value::as_i64)
         });
+    let cache_creation_input_tokens = usage.and_then(|map| {
+        map.get("cache_creation_input_tokens")
+            .and_then(Value::as_i64)
+    });
     let reasoning_output_tokens = usage
         .and_then(|map| map.get("output_tokens_details"))
         .and_then(Value::as_object)
@@ -210,9 +230,24 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
     UpstreamResponseUsage {
         input_tokens,
         cached_input_tokens,
+        cache_creation_input_tokens,
         output_tokens,
         total_tokens,
         reasoning_output_tokens,
+        authoritative: input_tokens.is_some()
+            || cached_input_tokens.is_some()
+            || cache_creation_input_tokens.is_some()
+            || output_tokens.is_some()
+            || total_tokens.is_some()
+            || reasoning_output_tokens.is_some(),
+        cache_tokens_are_subset: Some(
+            usage
+                .map(|map| {
+                    !map.contains_key("cache_read_input_tokens")
+                        && !map.contains_key("cache_creation_input_tokens")
+                })
+                .unwrap_or(true),
+        ),
         first_response_ms: None,
         output_text: None,
     }

@@ -87,13 +87,14 @@ fn map_today_summary(summary: RequestLogTodaySummary) -> RequestLogTodaySummaryR
     let cached_input_tokens = summary.cached_input_tokens.max(0);
     let output_tokens = summary.output_tokens.max(0);
     let reasoning_output_tokens = summary.reasoning_output_tokens.max(0);
-    let non_cached_input_tokens = input_tokens.saturating_sub(cached_input_tokens);
     RequestLogTodaySummaryResult {
         input_tokens,
         cached_input_tokens,
         output_tokens,
         reasoning_output_tokens,
-        today_tokens: non_cached_input_tokens.saturating_add(output_tokens),
+        // Cached input is a subset of input_tokens for this response shape;
+        // it changes the price bucket, not the canonical token total.
+        today_tokens: input_tokens.saturating_add(output_tokens),
         estimated_cost: summary.estimated_cost_usd.max(0.0),
     }
 }

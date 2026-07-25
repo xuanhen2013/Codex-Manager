@@ -284,8 +284,11 @@ impl Storage {
                 "INSERT INTO request_token_stats (
                     request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
                     input_tokens, cached_input_tokens, output_tokens, total_tokens, reasoning_output_tokens,
-                    estimated_cost_usd, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    estimated_cost_usd, usage_source, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                           CASE WHEN ?7 IS NULL AND ?8 IS NULL AND ?9 IS NULL AND ?10 IS NULL
+                                      AND ?11 IS NULL THEN 'unavailable' ELSE 'actual' END,
+                           ?13)",
                 (
                     request_log_id,
                     &stat.key_id,
@@ -1082,17 +1085,23 @@ fn request_log_summary_sql(filters: &RequestLogSqlFilters) -> String {
             IFNULL(SUM(CASE WHEN IFNULL(r.status_code, 0) >= 400 OR TRIM(IFNULL(r.error, '')) <> '' THEN 1 ELSE 0 END), 0),
             IFNULL(SUM(
                 CASE
+                    WHEN COALESCE(NULLIF(TRIM(t.usage_source), ''), 'actual') <> 'actual' THEN 0
+                    WHEN t.input_tokens IS NOT NULL OR t.output_tokens IS NOT NULL THEN
+                        CASE
+                            WHEN IFNULL(t.input_tokens, 0) > 0 THEN t.input_tokens ELSE 0
+                        END + CASE
+                            WHEN IFNULL(t.output_tokens, 0) > 0 THEN t.output_tokens ELSE 0
+                        END
                     WHEN t.total_tokens IS NOT NULL THEN
                         CASE WHEN t.total_tokens > 0 THEN t.total_tokens ELSE 0 END
-                    ELSE
-                        CASE
-                            WHEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0) > 0
-                                THEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0)
-                            ELSE 0
-                        END
+                    ELSE 0
                 END
             ), 0),
-            IFNULL(SUM(IFNULL(t.estimated_cost_usd, 0.0)), 0.0)
+            IFNULL(SUM(CASE
+                WHEN COALESCE(NULLIF(TRIM(t.usage_source), ''), 'actual') = 'actual'
+                    THEN IFNULL(t.estimated_cost_usd, 0.0)
+                ELSE 0.0
+            END), 0.0)
          FROM request_logs r
          {account_join}
          LEFT JOIN request_token_stats t ON t.request_log_id = r.id

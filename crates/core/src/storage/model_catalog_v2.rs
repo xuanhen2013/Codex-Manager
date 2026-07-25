@@ -52,6 +52,8 @@ pub struct ModelPriceV2 {
     #[serde(default)]
     pub cached_input_microusd_per_1m: Option<i64>,
     #[serde(default)]
+    pub cache_creation_microusd_per_1m: Option<i64>,
+    #[serde(default)]
     pub output_microusd_per_1m: Option<i64>,
 }
 
@@ -206,6 +208,7 @@ fn validate_price(model: &ManagedModelV2) -> Result<()> {
     let rates = [
         price.input_microusd_per_1m,
         price.cached_input_microusd_per_1m,
+        price.cache_creation_microusd_per_1m,
         price.output_microusd_per_1m,
     ];
     if rates.iter().flatten().any(|rate| *rate < 0) {
@@ -228,7 +231,7 @@ fn validate_price(model: &ManagedModelV2) -> Result<()> {
     }
     if rates.iter().any(Option::is_none) {
         return Err(rusqlite::Error::InvalidParameterName(
-            "priced model requires input, cached input, and output rates".to_string(),
+            "priced model requires input, cache read, cache creation, and output rates".to_string(),
         ));
     }
     let base = model
@@ -242,6 +245,8 @@ fn validate_price(model: &ManagedModelV2) -> Result<()> {
         })?;
     if Some(base.input_microusd_per_1m) != price.input_microusd_per_1m
         || Some(base.cached_input_microusd_per_1m) != price.cached_input_microusd_per_1m
+        || Some(base.cache_creation_microusd_per_1m)
+            != price.cache_creation_microusd_per_1m
         || Some(base.output_microusd_per_1m) != price.output_microusd_per_1m
     {
         return Err(rusqlite::Error::InvalidParameterName(
@@ -253,6 +258,7 @@ fn validate_price(model: &ManagedModelV2) -> Result<()> {
         if tier.min_input_tokens < 0
             || tier.input_microusd_per_1m < 0
             || tier.cached_input_microusd_per_1m < 0
+            || tier.cache_creation_microusd_per_1m < 0
             || tier.output_microusd_per_1m < 0
             || !thresholds.insert(tier.min_input_tokens)
         {
@@ -346,7 +352,8 @@ fn map_model(conn: &Connection, row: &rusqlite::Row<'_>) -> Result<ManagedModelV
             price_source: row.get(24)?,
             input_microusd_per_1m: row.get(25)?,
             cached_input_microusd_per_1m: row.get(26)?,
-            output_microusd_per_1m: row.get(27)?,
+            cache_creation_microusd_per_1m: row.get(27)?,
+            output_microusd_per_1m: row.get(28)?,
         },
         price_tiers: Vec::new(),
         routes: Vec::new(),
@@ -364,13 +371,13 @@ const MODEL_SELECT: &str = "SELECT
     m.max_context_window,m.default_reasoning_effort,m.capabilities_json,
     m.instructions_mode,m.instructions_text,m.builtin_revision,m.user_edited,m.created_at,m.updated_at,
     p.price_status,p.price_source,p.input_microusd_per_1m,p.cached_input_microusd_per_1m,
-    p.output_microusd_per_1m
+    p.cache_creation_microusd_per_1m,p.output_microusd_per_1m
   FROM models m JOIN model_prices p ON p.model_id=m.id";
 
 fn list_tiers(conn: &Connection, model_id: &str) -> Result<Vec<ModelPriceTierV2>> {
     let mut stmt = conn.prepare(
         "SELECT min_input_tokens,input_microusd_per_1m,cached_input_microusd_per_1m,
-                output_microusd_per_1m
+                cache_creation_microusd_per_1m,output_microusd_per_1m
          FROM model_price_tiers WHERE model_id=?1 ORDER BY min_input_tokens ASC",
     )?;
     stmt.query_map([model_id], |row| {
@@ -378,7 +385,8 @@ fn list_tiers(conn: &Connection, model_id: &str) -> Result<Vec<ModelPriceTierV2>
             min_input_tokens: row.get(0)?,
             input_microusd_per_1m: row.get(1)?,
             cached_input_microusd_per_1m: row.get(2)?,
-            output_microusd_per_1m: row.get(3)?,
+            cache_creation_microusd_per_1m: row.get(3)?,
+            output_microusd_per_1m: row.get(4)?,
         })
     })?
     .collect()
@@ -472,12 +480,14 @@ fn insert_seed(
     conn.execute(
         "INSERT OR IGNORE INTO model_prices (
            model_id,currency,input_microusd_per_1m,cached_input_microusd_per_1m,
-           output_microusd_per_1m,price_status,price_source,created_at,updated_at
-         ) VALUES (?1,'USD',?2,?3,?4,?5,?6,?7,?7)",
+           cache_creation_microusd_per_1m,output_microusd_per_1m,
+           price_status,price_source,created_at,updated_at
+         ) VALUES (?1,'USD',?2,?3,?4,?5,?6,?7,?8,?8)",
         params![
             id,
             base.map(|tier| tier.input_microusd_per_1m),
             base.map(|tier| tier.cached_input_microusd_per_1m),
+            base.map(|tier| tier.cache_creation_microusd_per_1m),
             base.map(|tier| tier.output_microusd_per_1m),
             seed.price_status,
             seed.price_source,
@@ -488,13 +498,15 @@ fn insert_seed(
         conn.execute(
             "INSERT OR IGNORE INTO model_price_tiers (
                model_id,min_input_tokens,input_microusd_per_1m,
-               cached_input_microusd_per_1m,output_microusd_per_1m
-             ) VALUES (?1,?2,?3,?4,?5)",
+               cached_input_microusd_per_1m,cache_creation_microusd_per_1m,
+               output_microusd_per_1m
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
             params![
                 id,
                 tier.min_input_tokens,
                 tier.input_microusd_per_1m,
                 tier.cached_input_microusd_per_1m,
+                tier.cache_creation_microusd_per_1m,
                 tier.output_microusd_per_1m
             ],
         )?;
@@ -939,10 +951,12 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
     )?;
     tx.execute(
         "INSERT INTO model_prices(model_id,currency,input_microusd_per_1m,
-           cached_input_microusd_per_1m,output_microusd_per_1m,price_status,price_source,
-           created_at,updated_at) VALUES(?1,'USD',?2,?3,?4,?5,?6,?7,?8)
+           cached_input_microusd_per_1m,cache_creation_microusd_per_1m,
+           output_microusd_per_1m,price_status,price_source,
+           created_at,updated_at) VALUES(?1,'USD',?2,?3,?4,?5,?6,?7,?8,?9)
          ON CONFLICT(model_id) DO UPDATE SET input_microusd_per_1m=excluded.input_microusd_per_1m,
            cached_input_microusd_per_1m=excluded.cached_input_microusd_per_1m,
+           cache_creation_microusd_per_1m=excluded.cache_creation_microusd_per_1m,
            output_microusd_per_1m=excluded.output_microusd_per_1m,
            price_status=excluded.price_status,price_source=excluded.price_source,
            updated_at=excluded.updated_at",
@@ -950,6 +964,7 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
             id,
             model.price.input_microusd_per_1m,
             model.price.cached_input_microusd_per_1m,
+            model.price.cache_creation_microusd_per_1m,
             model.price.output_microusd_per_1m,
             model.price.price_status,
             model.price.price_source,
@@ -961,12 +976,14 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
     for tier in &model.price_tiers {
         tx.execute(
             "INSERT INTO model_price_tiers(model_id,min_input_tokens,input_microusd_per_1m,
-            cached_input_microusd_per_1m,output_microusd_per_1m) VALUES(?1,?2,?3,?4,?5)",
+            cached_input_microusd_per_1m,cache_creation_microusd_per_1m,
+            output_microusd_per_1m) VALUES(?1,?2,?3,?4,?5,?6)",
             params![
                 id,
                 tier.min_input_tokens,
                 tier.input_microusd_per_1m,
                 tier.cached_input_microusd_per_1m,
+                tier.cache_creation_microusd_per_1m,
                 tier.output_microusd_per_1m
             ],
         )?;

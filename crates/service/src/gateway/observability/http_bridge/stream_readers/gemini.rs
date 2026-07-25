@@ -33,6 +33,7 @@ struct GeminiSseState {
     output_tokens: i64,
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
+    usage_authoritative: bool,
     output_text: String,
     reasoning_text: String,
     reasoning_encrypted_content: Option<String>,
@@ -471,6 +472,7 @@ impl GeminiSseReader {
                 self.state.created_at = Some(created_at);
             }
             if let Some(usage) = response.get("usage").and_then(Value::as_object) {
+                self.state.usage_authoritative |= usage_map_has_token_signal(usage);
                 self.state.input_tokens = usage
                     .get("input_tokens")
                     .and_then(Value::as_i64)
@@ -601,6 +603,8 @@ impl GeminiSseReader {
             collector.usage.total_tokens = self.state.total_tokens.map(|value| value.max(0));
             collector.usage.reasoning_output_tokens =
                 Some(self.state.reasoning_output_tokens.max(0));
+            collector.usage.authoritative |= self.state.usage_authoritative;
+            collector.usage.cache_tokens_are_subset = Some(true);
             if !self.state.output_text.trim().is_empty() {
                 collector.usage.output_text = Some(self.state.output_text.clone());
             }
@@ -705,6 +709,27 @@ impl GeminiSseReader {
         }
         Some(json!({ "functionCall": Value::Object(function_call) }))
     }
+}
+
+fn usage_map_has_token_signal(usage: &Map<String, Value>) -> bool {
+    [
+        "input_tokens",
+        "prompt_tokens",
+        "output_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "reasoning_output_tokens",
+    ]
+    .iter()
+    .any(|key| usage.contains_key(*key))
+        || usage
+            .get("input_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("cached_tokens"))
+        || usage
+            .get("output_tokens_details")
+            .and_then(Value::as_object)
+            .is_some_and(|details| details.contains_key("reasoning_tokens"))
 }
 
 impl Read for GeminiSseReader {
