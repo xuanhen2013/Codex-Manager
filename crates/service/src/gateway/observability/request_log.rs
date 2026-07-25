@@ -71,20 +71,13 @@ pub(crate) fn estimate_input_tokens_from_body(body: &[u8]) -> i64 {
     i64::try_from(estimate.max(1)).unwrap_or(i64::MAX)
 }
 
-fn resolve_charge_usage(usage: RequestLogUsage) -> ResolvedChargeUsage {
+fn resolve_charge_usage(usage: RequestLogUsage) -> Option<ResolvedChargeUsage> {
     let has_actual_usage = usage.input_tokens.is_some()
         || usage.cached_input_tokens.is_some()
         || usage.output_tokens.is_some()
         || usage.total_tokens.is_some();
     if !has_actual_usage {
-        let input_tokens = usage.estimated_input_tokens.unwrap_or(1).max(1);
-        return ResolvedChargeUsage {
-            usage_source: "estimated",
-            input_tokens,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: input_tokens,
-        };
+        return None;
     }
     let output_tokens = usage.output_tokens.unwrap_or(0).max(0);
     let cached_input_tokens = usage.cached_input_tokens.unwrap_or(0).max(0);
@@ -97,7 +90,7 @@ fn resolve_charge_usage(usage: RequestLogUsage) -> ResolvedChargeUsage {
                 .map(|total| total.max(0).saturating_sub(output_tokens))
         })
         .unwrap_or(cached_input_tokens);
-    ResolvedChargeUsage {
+    Some(ResolvedChargeUsage {
         usage_source: "actual",
         input_tokens,
         cached_input_tokens: cached_input_tokens.min(input_tokens),
@@ -106,7 +99,7 @@ fn resolve_charge_usage(usage: RequestLogUsage) -> ResolvedChargeUsage {
             .total_tokens
             .map(|value| value.max(0))
             .unwrap_or_else(|| input_tokens.saturating_add(output_tokens)),
-    }
+    })
 }
 
 /// 函数 `normalize_duration_ms`
@@ -344,20 +337,27 @@ pub(crate) fn write_request_log_with_attempts(
     let raw_total_tokens = normalize_token(usage.total_tokens);
     let charge_usage = resolve_charge_usage(usage);
     let inference_path = is_inference_path(request_path);
-    let use_charge_usage =
-        inference_path && (charge_usage.usage_source == "actual" || upstream_url.is_some());
-    let input_tokens = use_charge_usage
-        .then_some(charge_usage.input_tokens)
-        .or(raw_input_tokens);
-    let cached_input_tokens = use_charge_usage
-        .then_some(charge_usage.cached_input_tokens)
-        .or(raw_cached_input_tokens);
-    let output_tokens = use_charge_usage
-        .then_some(charge_usage.output_tokens)
-        .or(raw_output_tokens);
-    let total_tokens = use_charge_usage
-        .then_some(charge_usage.total_tokens)
-        .or(raw_total_tokens);
+    let use_charge_usage = inference_path && charge_usage.is_some();
+    let input_tokens = if use_charge_usage {
+        charge_usage.map(|usage| usage.input_tokens)
+    } else {
+        raw_input_tokens
+    };
+    let cached_input_tokens = if use_charge_usage {
+        charge_usage.map(|usage| usage.cached_input_tokens)
+    } else {
+        raw_cached_input_tokens
+    };
+    let output_tokens = if use_charge_usage {
+        charge_usage.map(|usage| usage.output_tokens)
+    } else {
+        raw_output_tokens
+    };
+    let total_tokens = if use_charge_usage {
+        charge_usage.map(|usage| usage.total_tokens)
+    } else {
+        raw_total_tokens
+    };
     let reasoning_output_tokens = normalize_token(usage.reasoning_output_tokens);
     let duration_ms = normalize_duration_ms(duration_ms);
     let first_response_ms = usage.first_response_ms.map(|value| value.max(0));
@@ -417,15 +417,14 @@ pub(crate) fn write_request_log_with_attempts(
     let success = status_code
         .map(|status| (200..300).contains(&status))
         .unwrap_or(false);
-    if inference_path && upstream_url.is_some() && charge_usage.usage_source == "estimated" {
+    if inference_path && upstream_url.is_some() && charge_usage.is_none() {
         log::warn!(
-            "event=gateway_token_usage_estimated path={} status={} account_id={} key_id={} model={} input_tokens={}",
+            "event=gateway_token_usage_unavailable path={} status={} account_id={} key_id={} model={}",
             request_path,
             status_code.unwrap_or(0),
             account_id.unwrap_or("-"),
             key_id.unwrap_or("-"),
             model.unwrap_or("-"),
-            charge_usage.input_tokens,
         );
     }
     // 记录请求最终结果（而非内部重试明细），保证 UI 一次请求只展示一条记录。
@@ -532,7 +531,10 @@ pub(crate) fn write_request_log_with_attempts(
     }
 
     if inference_path && upstream_url.is_some() {
-        if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+        if let (Some(charge_usage), Some(model)) = (
+            charge_usage,
+            model.map(str::trim).filter(|value| !value.is_empty()),
+        ) {
             let raw_usage_json = serde_json::to_string(&serde_json::json!({
                 "model": model,
                 "usageSource": charge_usage.usage_source,
@@ -566,6 +568,11 @@ pub(crate) fn write_request_log_with_attempts(
                     err
                 );
             }
+        } else if model.is_some() {
+            log::debug!(
+                "event=model_catalog_v2_charge_skipped request_log_id={} reason=usage_unavailable",
+                request_log_id
+            );
         } else {
             log::warn!(
                 "event=model_catalog_v2_charge_skipped request_log_id={} reason=model_missing",

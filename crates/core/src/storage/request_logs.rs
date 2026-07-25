@@ -277,9 +277,15 @@ impl Storage {
         )?;
         let request_log_id = tx.last_insert_rowid();
 
+        // Usage 未由上游返回时，保留请求日志，但不把请求尝试写成用量或费用。
+        let has_upstream_usage = stat.input_tokens.is_some()
+            || stat.cached_input_tokens.is_some()
+            || stat.output_tokens.is_some()
+            || stat.total_tokens.is_some()
+            || stat.reasoning_output_tokens.is_some();
         // 中文注释：token 统计写入失败不应阻塞 request log 保留（例如 sqlite busy/锁竞争）。
         // 这里保持“单事务单提交”，但 stat 失败时仍 commit request log。
-        let token_stat_error = tx
+        let token_stat_error = has_upstream_usage.then(|| tx
             .execute(
                 "INSERT INTO request_token_stats (
                     request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
@@ -303,7 +309,8 @@ impl Storage {
                 ),
             )
             .err()
-            .map(|err| err.to_string());
+            .map(|err| err.to_string()))
+            .flatten();
 
         tx.commit()?;
         Ok((request_log_id, token_stat_error))

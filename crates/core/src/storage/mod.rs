@@ -2251,6 +2251,10 @@ impl Storage {
             "124_codex_skill_repositories",
             include_str!("../../migrations/124_codex_skill_repositories.sql"),
         )?;
+        self.apply_sql_migration(
+            "125_authoritative_usage_billing",
+            include_str!("../../migrations/125_authoritative_usage_billing.sql"),
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;
         self.ensure_aggregate_apis_table()?;

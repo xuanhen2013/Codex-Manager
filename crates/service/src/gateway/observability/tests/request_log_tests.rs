@@ -77,20 +77,44 @@ fn successful_request_log_touches_key_and_records_v2_snapshot() {
 }
 
 #[test]
-fn missing_usage_uses_deterministic_nonzero_input_estimate() {
-    let estimate = super::estimate_input_tokens_from_body(br#"{"input":"hello world"}"#);
-    assert!(estimate > 0);
-    assert_eq!(
-        estimate,
-        super::estimate_input_tokens_from_body(br#"{"input":"hello world"}"#)
+fn missing_usage_is_not_estimated_or_billed() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    assert!(super::resolve_charge_usage(super::RequestLogUsage::default()).is_none());
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-no-upstream-usage"),
+            ..Default::default()
+        },
+        Some("key-no-upstream-usage"),
+        Some("account-no-upstream-usage"),
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(502),
+        super::RequestLogUsage {
+            estimated_input_tokens: Some(3_580_000),
+            ..Default::default()
+        },
+        Some("upstream unavailable"),
+        Some(10),
     );
-    let usage = super::resolve_charge_usage(super::RequestLogUsage {
-        estimated_input_tokens: Some(estimate),
-        ..Default::default()
-    });
-    assert_eq!(usage.usage_source, "estimated");
-    assert_eq!(usage.input_tokens, estimate);
-    assert_eq!(usage.output_tokens, 0);
+
+    let logs = storage.list_request_logs(None, 10).expect("read request logs");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].estimated_cost_usd, None);
+    assert!(storage
+        .summarize_request_token_stats_by_key()
+        .expect("summarize token stats")
+        .is_empty());
+    assert!(storage
+        .get_charge_snapshot_v2(1)
+        .expect("read snapshot")
+        .is_none());
 }
 
 #[test]
@@ -101,6 +125,7 @@ fn actual_usage_clamps_cached_tokens_to_total_input() {
         output_tokens: Some(3),
         ..Default::default()
     });
+    let usage = usage.expect("upstream usage");
     assert_eq!(usage.usage_source, "actual");
     assert_eq!(usage.input_tokens, 10);
     assert_eq!(usage.cached_input_tokens, 10);

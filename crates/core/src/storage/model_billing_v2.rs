@@ -254,11 +254,6 @@ impl Storage {
         &self,
         input: &ChargeSnapshotInputV2,
     ) -> Result<ChargeSnapshotV2> {
-        if !matches!(input.usage_source.as_str(), "actual" | "estimated") {
-            return Err(rusqlite::Error::InvalidParameterName(
-                "usage_source must be actual or estimated".to_string(),
-            ));
-        }
         let tx = self.conn.unchecked_transaction()?;
         if let Some(existing) = tx
             .query_row(
@@ -276,6 +271,11 @@ impl Storage {
             )?;
             tx.commit()?;
             return Ok(existing);
+        }
+        if input.usage_source != "actual" {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "usage_source must be actual".to_string(),
+            ));
         }
         let price_status: Option<String> = tx
             .query_row(
@@ -414,6 +414,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::RequestTokenStat;
 
     #[test]
     fn integer_formula_charges_cached_subset_once() {
@@ -516,7 +517,7 @@ mod tests {
         let input = ChargeSnapshotInputV2 {
             request_log_id,
             model_slug: "gpt-5.4-mini".into(),
-            usage_source: "estimated".into(),
+            usage_source: "actual".into(),
             input_tokens: 100,
             cached_input_tokens: 0,
             output_tokens: 0,
@@ -549,6 +550,175 @@ mod tests {
             )
             .unwrap();
         assert_eq!(balance, 0);
+    }
+
+    #[test]
+    fn estimated_usage_cannot_create_a_charge_snapshot() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        storage
+            .conn
+            .execute(
+                "INSERT INTO request_logs(request_path,method,created_at) VALUES('/v1/responses','POST',1)",
+                [],
+            )
+            .unwrap();
+        let request_log_id = storage.conn.last_insert_rowid();
+        let error = storage
+            .record_charge_snapshot_v2(&ChargeSnapshotInputV2 {
+                request_log_id,
+                model_slug: "gpt-5.4-mini".into(),
+                usage_source: "estimated".into(),
+                input_tokens: 100,
+                rate_multiplier_millis: 1_000,
+                ..Default::default()
+            })
+            .expect_err("estimated usage must not be billed");
+        assert!(error.to_string().contains("usage_source must be actual"));
+        assert!(storage.get_charge_snapshot_v2(request_log_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn authoritative_usage_migration_removes_unbilled_estimates_from_all_stat_layers() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let insert_estimated_snapshot = |suffix: &str, created_at: i64| {
+            storage
+                .conn
+                .execute(
+                    "INSERT INTO request_logs(
+                        key_id,account_id,model,actual_source_kind,actual_source_id,
+                        request_path,method,status_code,created_at
+                     ) VALUES(?1,?2,'gpt-5.4','openai_account',?2,'/v1/responses','POST',502,?3)",
+                    params![format!("key-{suffix}"), format!("account-{suffix}"), created_at],
+                )
+                .unwrap();
+            let request_log_id = storage.conn.last_insert_rowid();
+            storage
+                .conn
+                .execute(
+                    "INSERT INTO request_charge_snapshots(
+                        request_log_id,model_id,model_slug,tier_min_input_tokens,usage_source,
+                        input_tokens,cached_input_tokens,output_tokens,
+                        input_microusd_per_1m,cached_input_microusd_per_1m,
+                        output_microusd_per_1m,rate_multiplier_millis,
+                        base_cost_microusd,charged_cost_microusd,currency,created_at
+                     ) VALUES(?1,NULL,'gpt-5.4',0,'estimated',100,0,0,1000000,100000,1000000,1000,100,100,'USD',?2)",
+                    params![request_log_id, created_at],
+                )
+                .unwrap();
+            request_log_id
+        };
+
+        let raw_log_id = insert_estimated_snapshot("raw", 3_601);
+        storage
+            .insert_request_token_stat(&RequestTokenStat {
+                request_log_id: raw_log_id,
+                key_id: Some("key-raw".into()),
+                account_id: Some("account-raw".into()),
+                model: Some("gpt-5.4".into()),
+                actual_source_kind: Some("openai_account".into()),
+                actual_source_id: Some("account-raw".into()),
+                input_tokens: Some(100),
+                cached_input_tokens: Some(0),
+                output_tokens: Some(0),
+                total_tokens: Some(100),
+                reasoning_output_tokens: Some(0),
+                estimated_cost_usd: Some(0.000_1),
+                created_at: 3_601,
+            })
+            .unwrap();
+
+        let hourly_log_id = insert_estimated_snapshot("hourly", 7_201);
+        storage
+            .conn
+            .execute(
+                "INSERT INTO request_token_stat_hourly_rollups(
+                    bucket_start,bucket_end,key_id,account_id,model,actual_source_kind,actual_source_id,
+                    owner_user_id,input_tokens,cached_input_tokens,output_tokens,total_tokens,
+                    reasoning_output_tokens,estimated_cost_usd,request_count,success_count,error_count,updated_at
+                 ) VALUES(7200,10800,'key-hourly','account-hourly','gpt-5.4','openai_account',
+                    'account-hourly','',100,0,0,100,0,0.0001,1,0,1,7201)",
+                [],
+            )
+            .unwrap();
+
+        let legacy_log_id = insert_estimated_snapshot("legacy", 10_801);
+        storage
+            .conn
+            .execute(
+                "INSERT INTO request_token_stat_rollups(
+                    key_id,account_id,model,input_tokens,cached_input_tokens,output_tokens,total_tokens,
+                    reasoning_output_tokens,estimated_cost_usd,source_rows,updated_at
+                 ) VALUES('key-legacy','account-legacy','gpt-5.4',100,0,0,100,0,0.0001,1,10801)",
+                [],
+            )
+            .unwrap();
+
+        let ledger_log_id = insert_estimated_snapshot("ledger", 14_401);
+        storage
+            .conn
+            .execute(
+                "INSERT INTO app_wallets(
+                    id,owner_kind,owner_id,balance_credit_micros,frozen_credit_micros,status,created_at,updated_at
+                 ) VALUES('wallet-estimate-archive','user','user-estimate-archive',100,0,'active',1,1)",
+                [],
+            )
+            .unwrap();
+        storage
+            .conn
+            .execute(
+                "INSERT INTO app_wallet_ledger_entries(
+                    id,wallet_id,entry_kind,amount_credit_micros,balance_after_credit_micros,
+                    request_log_id,created_at
+                 ) VALUES('ledger-estimate-archive','wallet-estimate-archive','request_charge',-100,0,?1,1)",
+                [ledger_log_id],
+            )
+            .unwrap();
+
+        storage
+            .conn
+            .execute_batch(include_str!("../../migrations/125_authoritative_usage_billing.sql"))
+            .unwrap();
+
+        let raw_stat_count: i64 = storage
+            .conn
+            .query_row("SELECT COUNT(*) FROM request_token_stats", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(raw_stat_count, 0);
+        let snapshot_ids = storage
+            .conn
+            .prepare("SELECT request_log_id FROM request_charge_snapshots ORDER BY request_log_id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(snapshot_ids, vec![ledger_log_id]);
+        let hourly: (i64, i64, i64, i64, f64, i64, i64) = storage
+            .conn
+            .query_row(
+                "SELECT input_tokens,cached_input_tokens,output_tokens,total_tokens,
+                        estimated_cost_usd,request_count,error_count
+                 FROM request_token_stat_hourly_rollups WHERE key_id='key-hourly'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+            )
+            .unwrap();
+        assert_eq!(hourly, (0, 0, 0, 0, 0.0, 0, 0));
+        let legacy: (i64, i64, i64, i64, f64, i64) = storage
+            .conn
+            .query_row(
+                "SELECT input_tokens,cached_input_tokens,output_tokens,total_tokens,
+                        estimated_cost_usd,source_rows
+                 FROM request_token_stat_rollups WHERE key_id='key-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )
+            .unwrap();
+        assert_eq!(legacy, (0, 0, 0, 0, 0.0, 0));
+        assert_eq!(storage.request_charge_ledger_entry_count().unwrap(), 1);
+        assert_ne!(hourly_log_id, legacy_log_id);
     }
 
     #[test]
