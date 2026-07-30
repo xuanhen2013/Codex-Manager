@@ -115,6 +115,31 @@ fn seed_dual_routes(storage: &Storage, aggregate_id: &str) {
 }
 
 fn insert_hybrid_key(storage: &Storage, key_id: &str, platform_key: &str, now: i64) {
+    insert_key_with_rotation(storage, key_id, platform_key, now, "hybrid_rotation");
+}
+
+fn insert_hybrid_aggregate_first_key(
+    storage: &Storage,
+    key_id: &str,
+    platform_key: &str,
+    now: i64,
+) {
+    insert_key_with_rotation(
+        storage,
+        key_id,
+        platform_key,
+        now,
+        "hybrid_aggregate_first_rotation",
+    );
+}
+
+fn insert_key_with_rotation(
+    storage: &Storage,
+    key_id: &str,
+    platform_key: &str,
+    now: i64,
+    rotation_strategy: &str,
+) {
     storage
         .insert_api_key(&ApiKey {
             id: key_id.to_string(),
@@ -122,7 +147,7 @@ fn insert_hybrid_key(storage: &Storage, key_id: &str, platform_key: &str, now: i
             model_slug: Some(MODEL.to_string()),
             reasoning_effort: None,
             service_tier: None,
-            rotation_strategy: "hybrid_rotation".to_string(),
+            rotation_strategy: rotation_strategy.to_string(),
             aggregate_api_id: None,
             account_plan_filter: None,
             aggregate_api_url: None,
@@ -392,6 +417,158 @@ fn hybrid_dual_route_prefers_active_account_for_streaming_responses() {
         aggregate_rx.try_iter().count(),
         0,
         "aggregate API must remain idle after account success"
+    );
+}
+
+#[test]
+fn hybrid_aggregate_first_dual_route_prefers_aggregate_api() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-hybrid-aggregate-first");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let (local_addr, local_rx, local_join) = start_mock_upstream_sequence_lenient(
+        vec![(200, response_json("resp_account_should_not_run"))],
+        Duration::from_secs(2),
+    );
+    let local_base = format!("http://{local_addr}/backend-api/codex");
+    let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &local_base);
+    let (aggregate_addr, aggregate_rx, aggregate_join) = start_mock_upstream_sequence_lenient(
+        vec![(200, response_json("resp_hybrid_aggregate_first"))],
+        Duration::from_secs(2),
+    );
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let now = now_ts();
+    let aggregate_id = "agg_hybrid_aggregate_first";
+    let key_id = "gk_hybrid_aggregate_first";
+    let platform_key = "pk_hybrid_aggregate_first";
+    insert_active_account(&storage, "acc_hybrid_aggregate_first", now);
+    insert_aggregate_api(&storage, aggregate_id, &aggregate_addr, "/responses", now);
+    seed_dual_routes(&storage, aggregate_id);
+    insert_hybrid_aggregate_first_key(&storage, key_id, platform_key, now);
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({
+        "model": MODEL,
+        "input": "hello",
+        "stream": false
+    });
+    let request = serde_json::to_string(&request).expect("serialize request");
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &request,
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    local_join.join().expect("join local upstream");
+    aggregate_join.join().expect("join aggregate upstream");
+
+    assert_eq!(status, 200, "gateway response: {response_body}");
+    assert!(response_body.contains("resp_hybrid_aggregate_first"));
+    assert_eq!(
+        local_rx.try_iter().count(),
+        0,
+        "account pool must remain idle after aggregate success"
+    );
+    let aggregate_requests = aggregate_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(aggregate_requests.len(), 1, "aggregate API request count");
+    let aggregate_body: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&aggregate_requests[0]))
+            .expect("parse aggregate request body");
+    assert_eq!(aggregate_body["model"], UPSTREAM_MODEL);
+
+    let log = storage
+        .list_request_logs(Some(&format!("key:={key_id}")), 10)
+        .expect("list request logs")
+        .into_iter()
+        .find(|item| item.request_path == "/v1/responses")
+        .expect("request log");
+    assert_eq!(log.status_code, Some(200));
+    assert_eq!(log.actual_source_kind.as_deref(), Some("aggregate_api"));
+    assert_eq!(log.actual_source_id.as_deref(), Some(aggregate_id));
+}
+
+#[test]
+fn hybrid_aggregate_first_falls_back_to_account_after_aggregate_failures() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-hybrid-aggregate-first-account-fallback");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let (local_addr, local_rx, local_join) = start_mock_upstream_sequence_lenient(
+        vec![(200, response_json("resp_account_after_aggregate_failure"))],
+        Duration::from_secs(2),
+    );
+    let local_base = format!("http://{local_addr}/backend-api/codex");
+    let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &local_base);
+    let (aggregate_addr, aggregate_rx, aggregate_join) = start_mock_upstream_sequence_lenient(
+        vec![
+            (502, response_json("aggregate_failure_1")),
+            (502, response_json("aggregate_failure_2")),
+            (502, response_json("aggregate_failure_3")),
+            (502, response_json("aggregate_failure_4")),
+        ],
+        Duration::from_secs(2),
+    );
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let now = now_ts();
+    let aggregate_id = "agg_hybrid_aggregate_first_fallback";
+    let key_id = "gk_hybrid_aggregate_first_fallback";
+    let platform_key = "pk_hybrid_aggregate_first_fallback";
+    insert_active_account(&storage, "acc_hybrid_aggregate_first_fallback", now);
+    insert_aggregate_api(&storage, aggregate_id, &aggregate_addr, "/responses", now);
+    seed_dual_routes(&storage, aggregate_id);
+    insert_hybrid_aggregate_first_key(&storage, key_id, platform_key, now);
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({
+        "model": MODEL,
+        "input": "hello",
+        "stream": false
+    });
+    let request = serde_json::to_string(&request).expect("serialize request");
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &request,
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    local_join.join().expect("join local upstream");
+    aggregate_join.join().expect("join aggregate upstream");
+
+    assert_eq!(status, 200, "gateway response: {response_body}");
+    assert!(response_body.contains("resp_account_after_aggregate_failure"));
+    assert_eq!(aggregate_rx.try_iter().count(), 4, "aggregate retry count");
+    let local_requests = local_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(local_requests.len(), 1, "account fallback request count");
+    let local_body: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&local_requests[0]))
+            .expect("parse account request body");
+    assert_eq!(local_body["model"], MODEL);
+
+    let log = storage
+        .list_request_logs(Some(&format!("key:={key_id}")), 10)
+        .expect("list request logs")
+        .into_iter()
+        .find(|item| item.request_path == "/v1/responses")
+        .expect("request log");
+    assert_eq!(log.status_code, Some(200));
+    assert_eq!(log.actual_source_kind.as_deref(), Some("openai_account"));
+    assert_eq!(
+        log.actual_source_id.as_deref(),
+        Some("acc_hybrid_aggregate_first_fallback")
     );
 }
 

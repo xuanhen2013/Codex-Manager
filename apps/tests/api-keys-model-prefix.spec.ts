@@ -464,6 +464,37 @@ test("api key modal can select hybrid rotation on create", async ({ page }) => {
   expect(params.customKey).toBe("sk-cm-custom-fixed");
 });
 
+test("api key modal can select aggregate-first hybrid rotation on create", async ({ page }) => {
+  const createPayloads: Record<string, unknown>[] = [];
+  await mockRuntime(page);
+  await mockApiKeyRpc(page, {
+    apiKeys: [],
+    onMethod: (method, payload) => {
+      if (method === "apikey/create") {
+        createPayloads.push(payload);
+        return { id: "key-aggregate-first", key: "cm-aggregate-first-key" };
+      }
+      return undefined;
+    },
+  });
+
+  await page.goto("/apikeys/");
+  await page.getByRole("button", { name: "创建密钥" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("账号轮转", { exact: true }).click();
+  await page.getByText("混合轮转（聚合API优先）", { exact: true }).click();
+  await expect(dialog.getByText("账号计划筛选", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("账号分组筛选", { exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "完成" }).click();
+
+  await expect.poll(() => createPayloads.length).toBe(1);
+  const params = createPayloads[0]?.params as Record<string, unknown>;
+  expect(params.rotationStrategy).toBe("hybrid_aggregate_first_rotation");
+  expect(params.accountPlanFilter).toBeNull();
+  expect(params.accountGroupFilter).toBeNull();
+});
+
 test("api key daily usage modal supports date filters on desktop and mobile", async ({
   page,
 }, testInfo) => {

@@ -17,6 +17,7 @@ pub(crate) const APP_SETTINGS_ENV_UNSUPPORTED_KEYS: &[&str] = &[
 ];
 
 pub(crate) const APP_SETTINGS_ENV_RESERVED_KEYS: &[&str] = &[
+    "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT",
     "CODEXMANAGER_SERVICE_ADDR",
     "CODEXMANAGER_WEB_ADDR",
     "CODEXMANAGER_ROUTE_STRATEGY",
@@ -48,13 +49,6 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         ENV_OVERRIDE_SCOPE_SERVICE,
         ENV_OVERRIDE_APPLY_MODE_RUNTIME,
         "200",
-    ),
-    EnvOverrideCatalogItem::new(
-        "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT",
-        "单账号最大并发",
-        ENV_OVERRIDE_SCOPE_SERVICE,
-        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
-        "0",
     ),
     EnvOverrideCatalogItem::new(
         "CODEXMANAGER_ALLOW_NON_LOOPBACK_LOGIN_ADDR",

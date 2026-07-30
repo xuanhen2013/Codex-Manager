@@ -2,7 +2,8 @@ use super::{
     exhausted_gateway_error_for_log, has_enabled_aggregate_api_route,
     has_enabled_default_account_pool_route, hybrid_route_error_message, provider_upstream_hint,
     request_deadline_for_path, resolve_aggregate_candidates_for_route, resolve_upstream_is_stream,
-    respond_when_account_candidates_empty, should_fallback_to_aggregate_after_account_exhaustion,
+    respond_when_account_candidates_empty, should_fallback_to_account_after_aggregate_failure,
+    should_fallback_to_aggregate_after_account_exhaustion,
     should_try_provider_executor_aggregate_route, validate_model_route,
 };
 use crate::gateway::upstream::executor::{
@@ -427,6 +428,36 @@ fn hybrid_dual_route_keeps_account_first_and_aggregate_fallback() {
 }
 
 #[test]
+fn hybrid_aggregate_first_dual_route_tries_aggregate_and_keeps_account_fallback() {
+    let hybrid = execution_plan(GatewayUpstreamRouteKind::HybridAggregateFirst);
+    let dual_route =
+        model_with_routes(&[("account_pool", "default"), ("aggregate_api", "agg-test")]);
+    let account_only = model_with_routes(&[("account_pool", "default")]);
+    let aggregate_only = model_with_routes(&[("aggregate_api", "agg-test")]);
+
+    assert!(should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(should_fallback_to_account_after_aggregate_failure(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(!respond_when_account_candidates_empty(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(!should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&account_only),
+    ));
+    assert!(!should_fallback_to_account_after_aggregate_failure(
+        hybrid,
+        Some(&aggregate_only),
+    ));
+}
+
+#[test]
 fn hybrid_route_error_mentions_both_pools() {
     let message = hybrid_route_error_message(
         Some("无可用账号(no available account)"),
@@ -724,6 +755,7 @@ fn model_route_validation_preserves_missing_model_default_paths() {
         GatewayUpstreamRouteKind::AccountRotation,
         GatewayUpstreamRouteKind::AggregateApi,
         GatewayUpstreamRouteKind::HybridAccountFirst,
+        GatewayUpstreamRouteKind::HybridAggregateFirst,
     ] {
         let configured_model =
             validate_model_route(&storage, "key-route", None, execution_plan(route_kind))

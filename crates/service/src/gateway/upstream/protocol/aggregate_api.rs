@@ -1043,13 +1043,19 @@ pub(in super::super) struct AggregateProxyRequest<'a> {
     pub effective_service_tier_for_log: Option<&'a str>,
     pub service_tier_source_for_log: Option<&'a str>,
     pub aggregate_api_candidates: Vec<AggregateApi>,
+    pub allow_account_fallback: bool,
     pub request_deadline: Option<Instant>,
     pub started_at: Instant,
 }
 
+pub(in super::super) enum AggregateProxyOutcome {
+    Responded,
+    FallbackToAccount { request: Request, error: String },
+}
+
 pub(in super::super) fn proxy_aggregate_request(
     params: AggregateProxyRequest<'_>,
-) -> Result<(), String> {
+) -> Result<AggregateProxyOutcome, String> {
     let AggregateProxyRequest {
         request,
         storage,
@@ -1075,6 +1081,7 @@ pub(in super::super) fn proxy_aggregate_request(
         effective_service_tier_for_log,
         service_tier_source_for_log,
         aggregate_api_candidates,
+        allow_account_fallback,
         request_deadline,
         started_at,
     } = params;
@@ -1082,6 +1089,12 @@ pub(in super::super) fn proxy_aggregate_request(
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
         let message = "aggregate api not found".to_string();
+        if allow_account_fallback {
+            return Ok(AggregateProxyOutcome::FallbackToAccount {
+                request,
+                error: message,
+            });
+        }
         super::super::super::record_gateway_request_outcome(path, 404, Some("aggregate_api"));
         super::super::super::trace_log::log_request_final(
             trace_id,
@@ -1093,7 +1106,7 @@ pub(in super::super) fn proxy_aggregate_request(
         );
         let request = request;
         respond_error(request, 404, message.as_str(), Some(trace_id));
-        return Ok(());
+        return Ok(AggregateProxyOutcome::Responded);
     }
 
     let mut request = Some(request);
@@ -1107,7 +1120,18 @@ pub(in super::super) fn proxy_aggregate_request(
 
     let total_candidates = aggregate_api_candidates.len();
     let secrets_by_candidate_id =
-        aggregate_api_secrets_by_candidate_id(storage, &aggregate_api_candidates)?;
+        match aggregate_api_secrets_by_candidate_id(storage, &aggregate_api_candidates) {
+            Ok(secrets) => secrets,
+            Err(err) if allow_account_fallback => {
+                return Ok(AggregateProxyOutcome::FallbackToAccount {
+                    request: request.take().ok_or_else(|| {
+                        "aggregate api request already consumed before account fallback".to_string()
+                    })?,
+                    error: err,
+                });
+            }
+            Err(err) => return Err(err),
+        };
     let ordered_candidates = aggregate_api_candidates
         .iter()
         .map(|candidate| (candidate.id.clone(), candidate.url.clone()))
@@ -1262,7 +1286,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     Some(started_at.elapsed().as_millis()),
                 );
                 respond_error(request, 504, message.as_str(), Some(trace_id));
-                return Ok(());
+                return Ok(AggregateProxyOutcome::Responded);
             }
 
             let mut url = base_upstream_url.clone();
@@ -1275,8 +1299,16 @@ pub(in super::super) fn proxy_aggregate_request(
                     username_name,
                     password_name,
                 } => {
-                    let parsed: UserPassSecret = serde_json::from_str(secret.trim())
-                        .map_err(|_| "invalid aggregate api secret".to_string())?;
+                    let parsed: UserPassSecret = match serde_json::from_str(secret.trim()) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            last_attempt_url = Some(url.as_str().to_string());
+                            last_attempt_supplier_name = candidate_supplier_name.clone();
+                            last_attempt_error = Some("invalid aggregate api secret".to_string());
+                            last_failure_status = 502;
+                            break;
+                        }
+                    };
                     url =
                         replace_query_param(url, username_name.as_str(), parsed.username.as_str());
                     url =
@@ -1288,7 +1320,7 @@ pub(in super::super) fn proxy_aggregate_request(
             let request_ref = request.as_ref().ok_or_else(|| {
                 "aggregate api request already consumed before upstream attempt".to_string()
             })?;
-            let builder = if bridge_responses_to_anthropic {
+            let builder = match if bridge_responses_to_anthropic {
                 build_anthropic_bridge_aggregate_api_request(
                     &client,
                     request_ref,
@@ -1300,7 +1332,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     &injected_headers,
                     request_deadline,
                     is_stream,
-                )?
+                )
             } else {
                 build_aggregate_api_request(
                     &client,
@@ -1313,7 +1345,16 @@ pub(in super::super) fn proxy_aggregate_request(
                     &injected_headers,
                     request_deadline,
                     is_stream,
-                )?
+                )
+            } {
+                Ok(builder) => builder,
+                Err(err) => {
+                    last_attempt_url = Some(url.as_str().to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 502;
+                    break;
+                }
             };
 
             let attempt_started_at = Instant::now();
@@ -1357,9 +1398,16 @@ pub(in super::super) fn proxy_aggregate_request(
                     first_upstream_header(upstream.headers(), &["x-openai-authorization-error"]);
                 let upstream_identity_error_code =
                     crate::gateway::extract_identity_error_code_from_headers(upstream.headers());
-                let upstream_body = upstream
-                    .bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
+                let upstream_body = match upstream.bytes() {
+                    Ok(body) => body,
+                    Err(err) => {
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(format!("read upstream body failed: {err}"));
+                        last_failure_status = 502;
+                        break;
+                    }
+                };
                 let message = aggregate_api_failure_message(
                     status_code,
                     upstream_body.as_ref(),
@@ -1510,7 +1558,7 @@ pub(in super::super) fn proxy_aggregate_request(
         }
 
         if succeeded {
-            return Ok(());
+            return Ok(AggregateProxyOutcome::Responded);
         }
 
         if candidate_idx + 1 < total_candidates {
@@ -1524,6 +1572,17 @@ pub(in super::super) fn proxy_aggregate_request(
     let request = request.take().ok_or_else(|| {
         "aggregate api request already consumed before failure response".to_string()
     })?;
+    if allow_account_fallback {
+        log::debug!(
+            "event=gateway_hybrid_aggregate_first_account_fallback trace_id={} aggregate_error={}",
+            trace_id,
+            message
+        );
+        return Ok(AggregateProxyOutcome::FallbackToAccount {
+            request,
+            error: message,
+        });
+    }
     super::super::super::record_gateway_request_outcome(path, status_code, Some("aggregate_api"));
     super::super::super::trace_log::log_request_final(
         trace_id,
@@ -1574,7 +1633,7 @@ pub(in super::super) fn proxy_aggregate_request(
         Some(started_at.elapsed().as_millis()),
     );
     respond_error(request, status_code, message.as_str(), Some(trace_id));
-    Ok(())
+    Ok(AggregateProxyOutcome::Responded)
 }
 
 fn aggregate_api_secrets_by_candidate_id(

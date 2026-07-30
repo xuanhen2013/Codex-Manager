@@ -286,6 +286,7 @@ export const EN_MESSAGES: MessageCatalog = {
   账号轮转: "Account rotation",
   聚合API轮转: "Aggregate API rotation",
   "混合轮转（账号优先）": "Hybrid rotation (accounts first)",
+  "混合轮转（聚合API优先）": "Hybrid rotation (aggregate APIs first)",
   "总使用 Token": "Total token usage",
   最近调用: "Last called",
   从未调用: "Never called",
@@ -750,10 +751,10 @@ export const EN_MESSAGES: MessageCatalog = {
     "Configure gateway credentials. You can bind a specific model, reasoning tier, or custom upstream.",
   "密钥名称 (可选)": "Key name (optional)",
   "例如：主机房 / 测试": "e.g. Main room / Test",
-  "账号轮转只走账号池；聚合API轮转只走聚合API；混合轮转先走账号池，账号耗尽后使用聚合API兜底。":
-    "Account rotation uses only the account pool; aggregate API rotation uses only aggregate APIs; hybrid rotation tries accounts first and falls back to aggregate APIs when accounts are exhausted.",
-  "仅对账号轮转和混合轮转生效，可限制这把平台密钥只从指定账号计划类型中选路由账号。":
-    "Applies only to account rotation and hybrid rotation. Limits this API key to routing through accounts with the selected plan type.",
+  "账号轮转只走账号池；聚合API轮转只走聚合API；混合轮转（账号优先）先走账号池，账号耗尽后使用聚合API兜底；混合轮转（聚合API优先）先走聚合API，聚合API不可用后使用账号池兜底。":
+    "Account rotation uses only the account pool; aggregate API rotation uses only aggregate APIs; hybrid rotation (accounts first) falls back to aggregate APIs when accounts are exhausted; hybrid rotation (aggregate APIs first) falls back to the account pool when aggregate APIs are unavailable.",
+  "仅对账号轮转和两种混合轮转生效，可限制这把平台密钥只从指定账号计划类型中选路由账号。":
+    "Applies only to account rotation and both hybrid rotations. Limits this API key to routing through accounts with the selected plan type.",
   "默认按路径通配：": "Path matching by default:",
   "走 Claude 语义，": "uses Claude semantics,",
   "这类路径走 Gemini 语义，其它标准路径走 Codex / OpenAI 语义。":

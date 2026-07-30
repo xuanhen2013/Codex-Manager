@@ -8,6 +8,7 @@ use super::super::local_validation::LocalValidationResult;
 use super::executor::{
     resolve_gateway_upstream_execution_plan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
 };
+use super::protocol::aggregate_api::AggregateProxyOutcome;
 use super::proxy_pipeline::candidate_executor::{
     execute_candidate_sequence, CandidateExecutionResult, CandidateExecutorParams,
 };
@@ -100,6 +101,8 @@ fn should_try_provider_executor_aggregate_route(
                     && !has_enabled_default_account_pool_route(model)
             })
         }
+        GatewayUpstreamRouteKind::HybridAggregateFirst => configured_model
+            .is_none_or(|model: &ManagedModelV2| has_enabled_aggregate_api_route(model)),
         GatewayUpstreamRouteKind::AccountRotation => false,
     }
 }
@@ -113,11 +116,21 @@ fn is_hybrid_account_first_route(
     )
 }
 
+fn is_hybrid_aggregate_first_route(
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) -> bool {
+    matches!(
+        execution_plan.route_kind,
+        GatewayUpstreamRouteKind::HybridAggregateFirst
+    )
+}
+
 fn respond_when_account_candidates_empty(
     execution_plan: super::executor::GatewayUpstreamExecutionPlan,
     configured_model: Option<&ManagedModelV2>,
 ) -> bool {
     !should_fallback_to_aggregate_after_account_exhaustion(execution_plan, configured_model)
+        && !should_fallback_to_account_after_aggregate_failure(execution_plan, configured_model)
 }
 
 fn should_fallback_to_aggregate_after_account_exhaustion(
@@ -126,6 +139,16 @@ fn should_fallback_to_aggregate_after_account_exhaustion(
 ) -> bool {
     is_hybrid_account_first_route(execution_plan)
         && configured_model.is_none_or(has_enabled_aggregate_api_route)
+}
+
+fn should_fallback_to_account_after_aggregate_failure(
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
+) -> bool {
+    is_hybrid_aggregate_first_route(execution_plan)
+        && configured_model.is_none_or(|model| {
+            has_enabled_aggregate_api_route(model) && has_enabled_default_account_pool_route(model)
+        })
 }
 
 fn low_quota_candidate_mode_for_protocol(
@@ -152,6 +175,7 @@ fn route_kind_label(value: GatewayUpstreamRouteKind) -> &'static str {
         GatewayUpstreamRouteKind::AccountRotation => "account_rotation",
         GatewayUpstreamRouteKind::AggregateApi => "aggregate_api",
         GatewayUpstreamRouteKind::HybridAccountFirst => "hybrid_account_first",
+        GatewayUpstreamRouteKind::HybridAggregateFirst => "hybrid_aggregate_first",
     }
 }
 
@@ -212,6 +236,10 @@ fn validate_model_route(
         }
         GatewayUpstreamRouteKind::AggregateApi => has_enabled_aggregate_api_route(&managed_model),
         GatewayUpstreamRouteKind::HybridAccountFirst => {
+            has_enabled_default_account_pool_route(&managed_model)
+                || has_enabled_aggregate_api_route(&managed_model)
+        }
+        GatewayUpstreamRouteKind::HybridAggregateFirst => {
             has_enabled_default_account_pool_route(&managed_model)
                 || has_enabled_aggregate_api_route(&managed_model)
         }
@@ -557,7 +585,8 @@ fn proxy_with_aggregate_candidates(
     request_deadline: Option<Instant>,
     started_at: Instant,
     aggregate_api_candidates: Vec<codexmanager_core::storage::AggregateApi>,
-) -> Result<(), String> {
+    allow_account_fallback: bool,
+) -> Result<AggregateProxyOutcome, String> {
     let mut aggregate_api_candidates = aggregate_api_candidates;
     super::protocol::aggregate_api::apply_gateway_route_strategy_to_aggregate_candidates(
         &mut aggregate_api_candidates,
@@ -600,6 +629,7 @@ fn proxy_with_aggregate_candidates(
             effective_service_tier_for_log,
             service_tier_source_for_log,
             aggregate_api_candidates,
+            allow_account_fallback,
             request_deadline,
             started_at,
         },
@@ -780,8 +810,16 @@ pub(in super::super) fn proxy_validated_request(
         }
     };
 
+    let mut request = request;
+    let mut aggregate_first_error = None;
     if should_try_provider_executor_aggregate_route(execution_plan, configured_model.as_ref()) {
-        let (aggregate_path, aggregate_body) = if is_hybrid_account_first_route(execution_plan) {
+        let aggregate_first_account_fallback = should_fallback_to_account_after_aggregate_failure(
+            execution_plan,
+            configured_model.as_ref(),
+        );
+        let (aggregate_path, aggregate_body) = if is_hybrid_account_first_route(execution_plan)
+            || is_hybrid_aggregate_first_route(execution_plan)
+        {
             (passthrough_path.as_str(), &passthrough_body)
         } else {
             (path.as_str(), &body)
@@ -792,33 +830,49 @@ pub(in super::super) fn proxy_validated_request(
             aggregate_api_id.as_deref(),
             model_for_log.as_deref(),
         ) {
-            Ok(aggregate_api_candidates) => {
-                return proxy_with_aggregate_candidates(
-                    request,
-                    &storage,
-                    trace_id.as_str(),
-                    key_id.as_str(),
-                    original_path.as_str(),
-                    aggregate_path,
-                    request_method.as_str(),
-                    &method,
-                    aggregate_body,
-                    client_is_stream,
-                    gateway_mode_for_log.as_deref(),
-                    client_model_for_log.as_deref(),
-                    model_for_log.as_deref(),
-                    model_source_for_log.as_deref(),
-                    client_reasoning_for_log.as_deref(),
-                    reasoning_for_log.as_deref(),
-                    reasoning_source_for_log.as_deref(),
-                    service_tier_for_log.as_deref(),
-                    effective_service_tier_for_log.as_deref(),
-                    service_tier_source_for_log.as_deref(),
-                    aggregate_api_id.as_deref(),
-                    request_deadline,
-                    started_at,
-                    aggregate_api_candidates,
+            Ok(aggregate_api_candidates) => match proxy_with_aggregate_candidates(
+                request,
+                &storage,
+                trace_id.as_str(),
+                key_id.as_str(),
+                original_path.as_str(),
+                aggregate_path,
+                request_method.as_str(),
+                &method,
+                aggregate_body,
+                client_is_stream,
+                gateway_mode_for_log.as_deref(),
+                client_model_for_log.as_deref(),
+                model_for_log.as_deref(),
+                model_source_for_log.as_deref(),
+                client_reasoning_for_log.as_deref(),
+                reasoning_for_log.as_deref(),
+                reasoning_source_for_log.as_deref(),
+                service_tier_for_log.as_deref(),
+                effective_service_tier_for_log.as_deref(),
+                service_tier_source_for_log.as_deref(),
+                aggregate_api_id.as_deref(),
+                request_deadline,
+                started_at,
+                aggregate_api_candidates,
+                aggregate_first_account_fallback,
+            )? {
+                AggregateProxyOutcome::Responded => return Ok(()),
+                AggregateProxyOutcome::FallbackToAccount {
+                    request: fallback_request,
+                    error,
+                } => {
+                    request = fallback_request;
+                    aggregate_first_error = Some(error);
+                }
+            },
+            Err(err) if aggregate_first_account_fallback => {
+                log::debug!(
+                    "event=gateway_hybrid_aggregate_first_candidate_resolve_failed trace_id={} err={}",
+                    trace_id,
+                    err
                 );
+                aggregate_first_error = Some(err);
             }
             Err(err) => {
                 return respond_aggregate_route_error(
@@ -869,6 +923,31 @@ pub(in super::super) fn proxy_validated_request(
             candidates,
         } => (request, candidates),
         CandidatePrecheckResult::Empty { request } => {
+            if let Some(aggregate_error) = aggregate_first_error.as_deref() {
+                return respond_hybrid_route_error(
+                    request,
+                    &storage,
+                    trace_id.as_str(),
+                    key_id.as_str(),
+                    original_path.as_str(),
+                    passthrough_path.as_str(),
+                    request_method.as_str(),
+                    super::super::ResponseAdapter::Passthrough,
+                    service_tier_for_log.as_deref(),
+                    effective_service_tier_for_log.as_deref(),
+                    service_tier_source_for_log.as_deref(),
+                    gateway_mode_for_log.as_deref(),
+                    client_model_for_log.as_deref(),
+                    model_for_log.as_deref(),
+                    model_source_for_log.as_deref(),
+                    client_reasoning_for_log.as_deref(),
+                    reasoning_for_log.as_deref(),
+                    reasoning_source_for_log.as_deref(),
+                    started_at,
+                    Some("无可用账号(no available account)"),
+                    aggregate_error.to_string(),
+                );
+            }
             match take_or_resolve_aggregate_candidates(
                 &mut prepared_hybrid_aggregate_candidates,
                 &storage,
@@ -877,7 +956,7 @@ pub(in super::super) fn proxy_validated_request(
                 model_for_log.as_deref(),
             ) {
                 Ok(aggregate_api_candidates) => {
-                    return proxy_with_aggregate_candidates(
+                    match proxy_with_aggregate_candidates(
                         request,
                         &storage,
                         trace_id.as_str(),
@@ -902,7 +981,13 @@ pub(in super::super) fn proxy_validated_request(
                         request_deadline,
                         started_at,
                         aggregate_api_candidates,
-                    );
+                        false,
+                    )? {
+                        AggregateProxyOutcome::Responded => return Ok(()),
+                        AggregateProxyOutcome::FallbackToAccount { .. } => {
+                            unreachable!("account-first hybrid aggregate fallback cannot recurse")
+                        }
+                    }
                 }
                 Err(err) => {
                     return respond_hybrid_route_error(
@@ -1078,7 +1163,7 @@ pub(in super::super) fn proxy_validated_request(
             model_for_log.as_deref(),
         ) {
             Ok(aggregate_api_candidates) => {
-                return proxy_with_aggregate_candidates(
+                match proxy_with_aggregate_candidates(
                     request,
                     &storage,
                     trace_id.as_str(),
@@ -1103,7 +1188,13 @@ pub(in super::super) fn proxy_validated_request(
                     request_deadline,
                     started_at,
                     aggregate_api_candidates,
-                );
+                    false,
+                )? {
+                    AggregateProxyOutcome::Responded => return Ok(()),
+                    AggregateProxyOutcome::FallbackToAccount { .. } => {
+                        unreachable!("account-first hybrid aggregate fallback cannot recurse")
+                    }
+                }
             }
             Err(err) => {
                 return respond_hybrid_route_error(
@@ -1131,6 +1222,32 @@ pub(in super::super) fn proxy_validated_request(
                 );
             }
         }
+    }
+
+    if let Some(aggregate_error) = aggregate_first_error {
+        return respond_hybrid_route_error(
+            request,
+            &storage,
+            trace_id.as_str(),
+            key_id.as_str(),
+            original_path.as_str(),
+            passthrough_path.as_str(),
+            request_method.as_str(),
+            super::super::ResponseAdapter::Passthrough,
+            service_tier_for_log.as_deref(),
+            effective_service_tier_for_log.as_deref(),
+            service_tier_source_for_log.as_deref(),
+            gateway_mode_for_log.as_deref(),
+            client_model_for_log.as_deref(),
+            model_for_log.as_deref(),
+            model_source_for_log.as_deref(),
+            client_reasoning_for_log.as_deref(),
+            reasoning_for_log.as_deref(),
+            reasoning_source_for_log.as_deref(),
+            started_at,
+            Some(final_error.as_str()),
+            aggregate_error,
+        );
     }
 
     context.log_final_result(

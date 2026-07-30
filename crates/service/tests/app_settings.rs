@@ -17,6 +17,7 @@ const ISOLATED_RUNTIME_ENV_KEYS: &[&str] = &[
     "CODEXMANAGER_SERVICE_ADDR",
     "CODEXMANAGER_WEB_ADDR",
     "CODEXMANAGER_ROUTE_STRATEGY",
+    "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT",
     "CODEXMANAGER_FREE_ACCOUNT_MAX_MODEL",
     "CODEXMANAGER_MODEL_FORWARD_RULES",
     "CODEXMANAGER_COMPACT_MODEL_FORWARD_RULES",
@@ -88,6 +89,7 @@ fn reset_runtime_defaults() {
         "freeAccountMaxModel": "gpt-5.2",
         "modelForwardRules": "",
         "compactModelForwardRules": "",
+        "accountMaxInflight": 0,
         "quotaGuard": {
             "enabled": true,
             "primaryMinRemainingPercent": 5,
@@ -2146,6 +2148,58 @@ fn app_settings_set_persists_env_overrides_and_exposes_catalog() {
         );
         assert!(!stored.contains_key("CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS"));
         assert!(!stored.contains_key("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS"));
+    });
+}
+
+#[test]
+fn app_settings_ignores_legacy_account_inflight_env_override() {
+    with_temp_db(|db_path| {
+        let storage = Storage::open(db_path).expect("open storage");
+        storage
+            .set_app_setting(
+                codexmanager_service::APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
+                "1",
+                now_ts(),
+            )
+            .expect("save dedicated account inflight setting");
+        storage
+            .set_app_setting(
+                codexmanager_service::APP_SETTING_ENV_OVERRIDES_KEY,
+                &json!({
+                    "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT": "0",
+                    "CODEXMANAGER_WEB_ROOT": "D:/tmp/web"
+                })
+                .to_string(),
+                now_ts(),
+            )
+            .expect("save legacy account inflight override");
+        drop(storage);
+
+        codexmanager_service::sync_runtime_settings_from_storage();
+        assert_eq!(
+            codexmanager_service::current_gateway_account_max_inflight(),
+            1,
+            "the dedicated setting must survive restart even when old advanced parameters contain 0"
+        );
+
+        let snapshot = codexmanager_service::app_settings_get().expect("read app settings");
+        assert!(snapshot
+            .get("envOverrides")
+            .and_then(|value| value.get("CODEXMANAGER_ACCOUNT_MAX_INFLIGHT"))
+            .is_none());
+        assert!(snapshot
+            .get("envOverrideCatalog")
+            .and_then(|value| value.as_array())
+            .is_some_and(|items| items.iter().all(|item| {
+                item.get("key").and_then(|value| value.as_str())
+                    != Some("CODEXMANAGER_ACCOUNT_MAX_INFLIGHT")
+            })));
+        assert!(snapshot
+            .get("envOverrideReservedKeys")
+            .and_then(|value| value.as_array())
+            .is_some_and(|items| items
+                .iter()
+                .any(|item| { item.as_str() == Some("CODEXMANAGER_ACCOUNT_MAX_INFLIGHT") })));
     });
 }
 

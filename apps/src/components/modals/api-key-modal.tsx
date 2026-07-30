@@ -78,6 +78,7 @@ const ROTATION_STRATEGY_LABELS: Record<string, string> = {
   account_rotation: "账号轮转",
   aggregate_api_rotation: "聚合API轮转",
   hybrid_rotation: "混合轮转（账号优先）",
+  hybrid_aggregate_first_rotation: "混合轮转（聚合API优先）",
 };
 
 const ACCOUNT_PLAN_FILTER_LABELS: Record<string, string> = {
@@ -172,7 +173,8 @@ export function ApiKeyModal({
   const memberOwnershipEnabled = isAdminMode && showMemberOwnership;
   const usesAccountPlanFilter =
     rotationStrategy === "account_rotation" ||
-    rotationStrategy === "hybrid_rotation";
+    rotationStrategy === "hybrid_rotation" ||
+    rotationStrategy === "hybrid_aggregate_first_rotation";
   const billableUsers = useMemo(
     () => appUsers.filter((user) => userCanOwnApiKey(user)),
     [appUsers],
@@ -494,13 +496,16 @@ export function ApiKeyModal({
                   <SelectItem value="hybrid_rotation">
                     {t("混合轮转（账号优先）")}
                   </SelectItem>
+                  <SelectItem value="hybrid_aggregate_first_rotation">
+                    {t("混合轮转（聚合API优先）")}
+                  </SelectItem>
                   </SelectGroup>
                 </SelectContent>
               </Select>
             </div>
             <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
               {t(
-                "账号轮转只走账号池；聚合API轮转只走聚合API；混合轮转先走账号池，账号耗尽后使用聚合API兜底。",
+                "账号轮转只走账号池；聚合API轮转只走聚合API；混合轮转（账号优先）先走账号池，账号耗尽后使用聚合API兜底；混合轮转（聚合API优先）先走聚合API，聚合API不可用后使用账号池兜底。",
               )}
             </p>
             </>
@@ -560,7 +565,7 @@ export function ApiKeyModal({
               </Select>
               <p className="text-[11px] text-muted-foreground">
                 {t(
-                  "仅对账号轮转和混合轮转生效，可限制这把平台密钥只从指定账号计划类型中选路由账号。",
+                  "仅对账号轮转和两种混合轮转生效，可限制这把平台密钥只从指定账号计划类型中选路由账号。",
                 )}
               </p>
             </div>

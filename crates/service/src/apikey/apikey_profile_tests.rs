@@ -3,6 +3,7 @@ use super::{
     is_gemini_generate_content_request_path, normalize_protocol_type, normalize_rotation_strategy,
     resolve_gateway_protocol_type, PROTOCOL_ANTHROPIC_NATIVE, PROTOCOL_GEMINI_NATIVE,
     PROTOCOL_OPENAI_COMPAT, ROTATION_ACCOUNT, ROTATION_AGGREGATE_API, ROTATION_HYBRID,
+    ROTATION_HYBRID_AGGREGATE_FIRST,
 };
 
 #[test]
@@ -18,6 +19,22 @@ fn normalize_rotation_strategy_accepts_hybrid_aliases() {
         assert_eq!(
             normalize_rotation_strategy(Some(value.to_string())).as_deref(),
             Ok(ROTATION_HYBRID)
+        );
+    }
+}
+
+#[test]
+fn normalize_rotation_strategy_accepts_aggregate_first_hybrid_aliases() {
+    for value in [
+        "hybrid_aggregate_first_rotation",
+        "hybrid-aggregate-first",
+        "aggregate_first_hybrid",
+        "混合轮转（聚合API优先）",
+        "聚合API优先账号兜底",
+    ] {
+        assert_eq!(
+            normalize_rotation_strategy(Some(value.to_string())).as_deref(),
+            Ok(ROTATION_HYBRID_AGGREGATE_FIRST)
         );
     }
 }
