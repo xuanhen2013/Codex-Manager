@@ -6,7 +6,6 @@ use super::execution_context::GatewayUpstreamExecutionContext;
 
 pub(super) enum FinalizeUpstreamResponseOutcome {
     Handled,
-    Failover,
 }
 
 /// 函数 `respond_terminal`
@@ -211,7 +210,9 @@ pub(super) fn finalize_upstream_response(
         path,
         Some(tool_name_restore_map),
         client_is_stream,
-        has_more_candidates,
+        // Once the bridge starts, tiny_http owns the request and it cannot be retried.
+        // Retryable stream errors are therefore gated before this function is called.
+        false,
         Some(trace_id),
         model_for_log,
         started_at,
@@ -305,9 +306,6 @@ pub(super) fn finalize_upstream_response(
         started_at.elapsed().as_millis(),
         attempted_account_ids,
     );
-    if gateway_failover {
-        return Ok(FinalizeUpstreamResponseOutcome::Failover);
-    }
     Ok(FinalizeUpstreamResponseOutcome::Handled)
 }
 
