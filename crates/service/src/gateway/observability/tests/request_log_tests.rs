@@ -95,12 +95,12 @@ fn missing_usage_is_not_estimated_or_billed() {
         Some("gpt-5.4"),
         None,
         Some("https://example.test/v1/responses"),
-        Some(502),
+        Some(200),
         super::RequestLogUsage {
             estimated_input_tokens: Some(3_580_000),
             ..Default::default()
         },
-        Some("upstream unavailable"),
+        None,
         Some(10),
     );
 
@@ -118,17 +118,73 @@ fn missing_usage_is_not_estimated_or_billed() {
 }
 
 #[test]
-fn actual_usage_clamps_cached_tokens_to_total_input() {
+fn request_log_charges_gpt56_cache_writes_at_the_configured_rate() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-gpt56-cache-write"),
+            original_path: Some("/v1/responses"),
+            adapted_path: Some("/v1/responses"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        None,
+        None,
+        "/v1/responses",
+        "POST",
+        Some("gpt-5.6-sol"),
+        None,
+        Some("https://example.test/v1/responses"),
+        Some(200),
+        super::RequestLogUsage {
+            input_tokens: Some(100),
+            cached_input_tokens: Some(40),
+            cache_write_tokens: Some(20),
+            output_tokens: Some(10),
+            total_tokens: Some(110),
+            ..Default::default()
+        },
+        None,
+        Some(10),
+    );
+
+    let snapshot = storage
+        .get_charge_snapshot_v2(1)
+        .expect("read snapshot")
+        .expect("snapshot");
+    assert_eq!(snapshot.cached_input_tokens, 40);
+    assert_eq!(snapshot.cache_write_tokens, 20);
+    assert_eq!(snapshot.cache_write_microusd_per_1m, 6_250_000);
+    assert_eq!(snapshot.base_cost_microusd, 645);
+}
+
+#[test]
+fn input_body_estimate_is_deterministic() {
+    let estimate = super::estimate_input_tokens_from_body(br#"{"input":"hello world"}"#);
+    assert!(estimate > 0);
+    assert_eq!(
+        estimate,
+        super::estimate_input_tokens_from_body(br#"{"input":"hello world"}"#)
+    );
+}
+
+#[test]
+fn actual_usage_clamps_cache_read_then_cache_write_to_total_input() {
     let usage = super::resolve_charge_usage(super::RequestLogUsage {
         input_tokens: Some(10),
-        cached_input_tokens: Some(20),
+        cached_input_tokens: Some(8),
+        cache_write_tokens: Some(20),
         output_tokens: Some(3),
         ..Default::default()
     });
     let usage = usage.expect("upstream usage");
     assert_eq!(usage.usage_source, "actual");
     assert_eq!(usage.input_tokens, 10);
-    assert_eq!(usage.cached_input_tokens, 10);
+    assert_eq!(usage.cached_input_tokens, 8);
+    assert_eq!(usage.cache_write_tokens, 2);
     assert_eq!(usage.output_tokens, 3);
 }
 

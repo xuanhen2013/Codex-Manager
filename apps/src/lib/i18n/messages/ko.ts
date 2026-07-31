@@ -7,6 +7,7 @@ import { KO_ACCOUNTS_MESSAGES } from "./sections/ko-accounts";
 import { KO_API_KEYS_MESSAGES } from "./sections/ko-api-keys";
 import { KO_AGGREGATE_API_MESSAGES } from "./sections/ko-aggregate-api";
 import { KO_DASHBOARD_MESSAGES } from "./sections/ko-dashboard";
+import { KO_DESKTOP_DIAGNOSTICS_MESSAGES } from "./sections/ko-desktop-diagnostics";
 import { KO_DYNAMIC_UI_MESSAGES } from "./sections/ko-dynamic-ui";
 import { KO_MODEL_CATALOG_MESSAGES } from "./sections/ko-model-catalog";
 import { KO_MODEL_GROUPS_MESSAGES } from "./sections/ko-model-groups";
@@ -19,6 +20,7 @@ import { KO_SKILLS_MESSAGES } from "./sections/ko-skills";
 export const KO_MESSAGES: MessageCatalog = {
   ...KO_PROJECTS_MESSAGES,
   ...KO_SKILLS_MESSAGES,
+  ...KO_DESKTOP_DIAGNOSTICS_MESSAGES,
   仪表盘: "대시보드",
   概览: "개요",
   平台接入: "플랫폼 연결",
@@ -408,6 +410,8 @@ export const KO_MESSAGES: MessageCatalog = {
   未提供: "제공 안 됨",
   上移一位: "한 칸 위로",
   下移一位: "한 칸 아래로",
+  移到顶部: "맨 위로 이동",
+  移到底部: "맨 아래로 이동",
   编辑账号信息: "계정 정보 편집",
   用量详情: "사용량 상세",
   套餐信息: "구독 정보",
@@ -461,6 +465,8 @@ export const KO_MESSAGES: MessageCatalog = {
   保存: "저장",
   清除: "지우기",
   确定: "확인",
+  首页: "첫 페이지",
+  跳至: "이동",
   "服务未连接，暂时无法":
     "서비스가 연결되지 않아 다음 작업을 수행할 수 없습니다",
   更新密钥: "키 업데이트",

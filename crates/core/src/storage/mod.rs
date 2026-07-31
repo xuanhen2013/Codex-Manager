@@ -2252,6 +2252,16 @@ impl Storage {
             "124_codex_skill_repositories",
             include_str!("../../migrations/124_codex_skill_repositories.sql"),
         )?;
+        self.apply_sql_or_compat_migration(
+            "125_request_token_stats_successful_usage",
+            include_str!("../../migrations/125_request_token_stats_successful_usage.sql"),
+            |s| s.ensure_request_token_stats_usage_included_column(),
+        )?;
+        self.apply_gpt56_current_pricing_migration()?;
+        self.apply_sql_migration(
+            "127_model_catalog_cache_write_prices",
+            include_str!("../../migrations/127_model_catalog_cache_write_prices.sql"),
+        )?;
         self.apply_sql_migration(
             "125_authoritative_usage_billing",
             include_str!("../../migrations/125_authoritative_usage_billing.sql"),

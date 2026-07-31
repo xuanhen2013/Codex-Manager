@@ -9,6 +9,7 @@ static API_KEY_LAST_USED_TOUCH_CACHE: OnceLock<Mutex<HashMap<String, i64>>> = On
 pub(crate) struct RequestLogUsage {
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
@@ -21,6 +22,7 @@ struct ResolvedChargeUsage {
     usage_source: &'static str,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_tokens: i64,
     output_tokens: i64,
     total_tokens: i64,
 }
@@ -74,6 +76,7 @@ pub(crate) fn estimate_input_tokens_from_body(body: &[u8]) -> i64 {
 fn resolve_charge_usage(usage: RequestLogUsage) -> Option<ResolvedChargeUsage> {
     let has_actual_usage = usage.input_tokens.is_some()
         || usage.cached_input_tokens.is_some()
+        || usage.cache_write_tokens.is_some()
         || usage.output_tokens.is_some()
         || usage.total_tokens.is_some();
     if !has_actual_usage {
@@ -81,6 +84,7 @@ fn resolve_charge_usage(usage: RequestLogUsage) -> Option<ResolvedChargeUsage> {
     }
     let output_tokens = usage.output_tokens.unwrap_or(0).max(0);
     let cached_input_tokens = usage.cached_input_tokens.unwrap_or(0).max(0);
+    let cache_write_tokens = usage.cache_write_tokens.unwrap_or(0).max(0);
     let input_tokens = usage
         .input_tokens
         .map(|value| value.max(0))
@@ -89,11 +93,15 @@ fn resolve_charge_usage(usage: RequestLogUsage) -> Option<ResolvedChargeUsage> {
                 .total_tokens
                 .map(|total| total.max(0).saturating_sub(output_tokens))
         })
-        .unwrap_or(cached_input_tokens);
+        .unwrap_or_else(|| cached_input_tokens.saturating_add(cache_write_tokens));
+    let cached_input_tokens = cached_input_tokens.min(input_tokens);
+    let cache_write_tokens =
+        cache_write_tokens.min(input_tokens.saturating_sub(cached_input_tokens));
     Some(ResolvedChargeUsage {
         usage_source: "actual",
         input_tokens,
-        cached_input_tokens: cached_input_tokens.min(input_tokens),
+        cached_input_tokens,
+        cache_write_tokens,
         output_tokens,
         total_tokens: usage
             .total_tokens
@@ -540,6 +548,7 @@ pub(crate) fn write_request_log_with_attempts(
                 "usageSource": charge_usage.usage_source,
                 "inputTokens": charge_usage.input_tokens,
                 "cachedInputTokens": charge_usage.cached_input_tokens,
+                "cacheWriteTokens": charge_usage.cache_write_tokens,
                 "outputTokens": charge_usage.output_tokens,
                 "totalTokens": charge_usage.total_tokens,
                 "reasoningOutputTokens": reasoning_output_tokens,
@@ -555,6 +564,7 @@ pub(crate) fn write_request_log_with_attempts(
                 charge_usage.usage_source,
                 charge_usage.input_tokens,
                 charge_usage.cached_input_tokens,
+                charge_usage.cache_write_tokens,
                 charge_usage.output_tokens,
                 raw_usage_json,
                 charge_wallet,
