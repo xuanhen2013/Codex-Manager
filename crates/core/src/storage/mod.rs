@@ -860,6 +860,16 @@ pub struct RequestTokenStat {
     pub created_at: i64,
 }
 
+impl RequestTokenStat {
+    pub fn has_actual_usage(&self) -> bool {
+        self.input_tokens.is_some()
+            || self.cached_input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.total_tokens.is_some()
+            || self.reasoning_output_tokens.is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RequestLogTodaySummary {
     pub input_tokens: i64,
@@ -2265,6 +2275,10 @@ impl Storage {
         self.apply_sql_migration(
             "125_authoritative_usage_billing",
             include_str!("../../migrations/125_authoritative_usage_billing.sql"),
+        )?;
+        self.apply_sql_migration(
+            "128_usage_included_from_actual_usage",
+            include_str!("../../migrations/128_usage_included_from_actual_usage.sql"),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

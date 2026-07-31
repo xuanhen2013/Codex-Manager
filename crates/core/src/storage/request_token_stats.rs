@@ -673,18 +673,7 @@ impl Storage {
                 estimated_cost_usd, usage_included, created_at
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                COALESCE(
-                    (
-                        SELECT CASE
-                            WHEN status_code >= 200 AND status_code <= 299 THEN 1
-                            ELSE 0
-                        END
-                        FROM request_logs
-                        WHERE id = ?1
-                    ),
-                    1
-                ),
-                ?13
+                ?13, ?14
              )",
             (
                 stat.request_log_id,
@@ -699,6 +688,7 @@ impl Storage {
                 stat.total_tokens,
                 stat.reasoning_output_tokens,
                 stat.estimated_cost_usd,
+                i64::from(stat.has_actual_usage()),
                 stat.created_at,
             ),
         )?;
@@ -1824,27 +1814,13 @@ impl Storage {
         self.conn.execute(
             "UPDATE request_token_stats
              SET usage_included = CASE
-                WHEN EXISTS (
-                    SELECT 1
-                    FROM request_logs
-                    WHERE request_logs.id = request_token_stats.request_log_id
-                      AND request_logs.status_code >= 200
-                      AND request_logs.status_code <= 299
-                ) THEN 1
+                WHEN input_tokens IS NOT NULL
+                  OR cached_input_tokens IS NOT NULL
+                  OR output_tokens IS NOT NULL
+                  OR total_tokens IS NOT NULL
+                  OR reasoning_output_tokens IS NOT NULL THEN 1
                 ELSE 0
              END",
-            [],
-        )?;
-        self.conn.execute(
-            "UPDATE request_token_stat_hourly_rollups
-             SET
-                input_tokens = 0,
-                cached_input_tokens = 0,
-                output_tokens = 0,
-                total_tokens = 0,
-                reasoning_output_tokens = 0,
-                estimated_cost_usd = 0.0
-             WHERE success_count = 0",
             [],
         )?;
         Ok(())

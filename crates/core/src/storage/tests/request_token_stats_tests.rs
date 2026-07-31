@@ -1146,7 +1146,7 @@ fn summarize_request_token_stats_between_short_circuits_empty_range() {
 }
 
 #[test]
-fn usage_rollups_exclude_499_and_502_tokens_before_and_after_compaction() {
+fn usage_rollups_include_failed_requests_with_actual_usage_before_and_after_compaction() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
 
@@ -1202,7 +1202,7 @@ fn usage_rollups_exclude_499_and_502_tokens_before_and_after_compaction() {
         .expect("query inclusion flags")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect inclusion flags");
-    assert_eq!(inclusion_flags, vec![(200, 1), (499, 0), (502, 0)]);
+    assert_eq!(inclusion_flags, vec![(200, 1), (499, 1), (502, 1)]);
 
     let query_summary = storage
         .summarize_request_token_stats_query_between(Some(0), Some(3_600))
@@ -1210,29 +1210,29 @@ fn usage_rollups_exclude_499_and_502_tokens_before_and_after_compaction() {
     assert_eq!(query_summary.count, 3);
     assert_eq!(query_summary.success_count, 1);
     assert_eq!(query_summary.error_count, 2);
-    assert_eq!(query_summary.total_tokens, 30);
-    assert_float_close(query_summary.estimated_cost_usd, 0.30);
+    assert_eq!(query_summary.total_tokens, 120);
+    assert_float_close(query_summary.estimated_cost_usd, 1.20);
 
     let today = storage
         .summarize_request_token_stats_between(0, 3_600)
         .expect("summarize today usage");
-    assert_eq!(today.input_tokens, 20);
-    assert_eq!(today.cached_input_tokens, 5);
-    assert_eq!(today.output_tokens, 10);
-    assert_eq!(today.reasoning_output_tokens, 2);
-    assert_float_close(today.estimated_cost_usd, 0.30);
+    assert_eq!(today.input_tokens, 90);
+    assert_eq!(today.cached_input_tokens, 15);
+    assert_eq!(today.output_tokens, 30);
+    assert_eq!(today.reasoning_output_tokens, 6);
+    assert_float_close(today.estimated_cost_usd, 1.20);
 
     let by_key = storage
         .summarize_request_token_stats_by_key_for_keys(&["key-success-only".to_string()])
         .expect("summarize key usage");
     assert_eq!(by_key.len(), 1);
-    assert_eq!(by_key[0].total_tokens, 30);
-    assert_float_close(by_key[0].estimated_cost_usd, 0.30);
+    assert_eq!(by_key[0].total_tokens, 120);
+    assert_float_close(by_key[0].estimated_cost_usd, 1.20);
     assert_eq!(
         storage
             .api_key_total_token_usage("key-success-only")
             .expect("summarize quota usage"),
-        30
+        120
     );
 
     storage
@@ -1245,13 +1245,13 @@ fn usage_rollups_exclude_499_and_502_tokens_before_and_after_compaction() {
     assert_eq!(compacted.count, 3);
     assert_eq!(compacted.success_count, 1);
     assert_eq!(compacted.error_count, 2);
-    assert_eq!(compacted.total_tokens, 30);
-    assert_float_close(compacted.estimated_cost_usd, 0.30);
+    assert_eq!(compacted.total_tokens, 120);
+    assert_float_close(compacted.estimated_cost_usd, 1.20);
     assert_eq!(
         storage
             .api_key_total_token_usage("key-success-only")
             .expect("summarize compacted quota usage"),
-        30
+        120
     );
 }
 

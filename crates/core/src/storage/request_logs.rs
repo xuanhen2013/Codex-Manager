@@ -278,11 +278,7 @@ impl Storage {
         let request_log_id = tx.last_insert_rowid();
 
         // Usage 未由上游返回时，保留请求日志，但不把请求尝试写成用量或费用。
-        let has_upstream_usage = stat.input_tokens.is_some()
-            || stat.cached_input_tokens.is_some()
-            || stat.output_tokens.is_some()
-            || stat.total_tokens.is_some()
-            || stat.reasoning_output_tokens.is_some();
+        let has_upstream_usage = stat.has_actual_usage();
         // 中文注释：token 统计写入失败不应阻塞 request log 保留（例如 sqlite busy/锁竞争）。
         // 这里保持“单事务单提交”，但 stat 失败时仍 commit request log。
         let token_stat_error = has_upstream_usage.then(|| tx
@@ -305,10 +301,7 @@ impl Storage {
                     stat.total_tokens,
                     stat.reasoning_output_tokens,
                     stat.estimated_cost_usd,
-                    i64::from(
-                        log.status_code
-                            .is_some_and(|status| (200..=299).contains(&status)),
-                    ),
+                    i64::from(has_upstream_usage),
                     stat.created_at,
                 ),
             )
