@@ -38,7 +38,9 @@ test("模型曲线保留原日曲线回退并提供可访问交互", async () =>
     pageSource,
     /summary\.seriesUsage\.length > 0[\s\S]*<AdminUsageTrendChart[\s\S]*<DailyTokenLineChart/,
   );
-  assert.match(chartSource, /type AdminUsageMetric = "tokens" \| "requests"/);
+  assert.match(chartSource, /type AdminUsageMetric = "tokens" \| "requests" \| "cost"/);
+  assert.match(chartSource, /usage\.estimatedCostUsd/);
+  assert.match(chartSource, /t\("预计费用"\)/);
   assert.match(chartSource, /export type AdminUsageGranularity = "day" \| "hour"/);
   assert.match(chartSource, /aria-pressed=\{granularity === value\}/);
   assert.match(chartSource, /aria-pressed=\{isSelected\}/);

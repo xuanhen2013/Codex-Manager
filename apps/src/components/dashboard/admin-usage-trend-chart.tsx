@@ -35,7 +35,7 @@ import type {
 } from "@/types";
 
 export type AdminUsageGranularity = "day" | "hour";
-type AdminUsageMetric = "tokens" | "requests";
+type AdminUsageMetric = "tokens" | "requests" | "cost";
 
 const MODEL_SERIES_COLORS = [
   "var(--usage-series-1)",
@@ -84,7 +84,19 @@ function formatBucketLabel(
 }
 
 function metricValue(usage: DashboardTokenUsage, metric: AdminUsageMetric): number {
-  return metric === "requests" ? usage.requestCount : usage.totalTokens;
+  if (metric === "requests") return usage.requestCount;
+  if (metric === "cost") return usage.estimatedCostUsd;
+  return usage.totalTokens;
+}
+
+function formatEstimatedCostUsd(value: number): string {
+  const normalized = Number.isFinite(value) ? Math.max(0, value) : 0;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: normalized > 0 && normalized < 0.01 ? 4 : 2,
+  }).format(normalized);
 }
 
 function fallbackSeries(summary: DashboardAdminUsageSummary): DashboardUsageSeriesPoint[] {
@@ -248,13 +260,16 @@ export function AdminUsageTrendChart({
     };
   }, [summary.rangeEndTs, summary.rangeStartTs, summary.seriesBucketSeconds]);
 
-  const formatMetric = (value: number) =>
-    metric === "requests"
-      ? new Intl.NumberFormat(intlLocaleFromAppLocale(locale), {
-          notation: "compact",
-          maximumFractionDigits: 1,
-        }).format(Math.max(0, value))
-      : formatCompactTokenAmount(value);
+  const formatMetric = (value: number) => {
+    if (metric === "cost") return formatEstimatedCostUsd(value);
+    if (metric === "requests") {
+      return new Intl.NumberFormat(intlLocaleFromAppLocale(locale), {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }).format(Math.max(0, value));
+    }
+    return formatCompactTokenAmount(value);
+  };
   const yAxisWidth = estimateChartYAxisWidth(
     [
       0,
@@ -346,7 +361,7 @@ export function AdminUsageTrendChart({
             role="group"
             aria-label={t("指标")}
           >
-            {(["tokens", "requests"] as const).map((value) => (
+            {(["tokens", "cost", "requests"] as const).map((value) => (
               <Button
                 key={value}
                 type="button"
@@ -356,7 +371,11 @@ export function AdminUsageTrendChart({
                 aria-pressed={metric === value}
                 onClick={() => setMetric(value)}
               >
-                {value === "tokens" ? t("Token") : t("请求数")}
+                {value === "tokens"
+                  ? t("Token")
+                  : value === "cost"
+                    ? t("预计费用")
+                    : t("请求数")}
               </Button>
             ))}
           </div>

@@ -59,8 +59,8 @@ export const EN_DASHBOARD_MESSAGES: MessageCatalog = {
     "Summarize token usage by day, member, OpenAI account, and aggregate API.",
   "按天汇总 token、费用和请求量":
     "Summarize tokens, cost, and request volume by day.",
-  "按模型查看 token 和请求趋势，支持小时粒度":
-    "Compare token and request trends by model, with hourly granularity.",
+  "按模型查看 Token、费用和请求趋势，支持小时粒度":
+    "Compare token, cost, and request trends by model, with hourly granularity.",
   按模型管理中的排序权重展示: "Shown by model management sort weight",
   "按模型管理排序展示前 8 个": "Top 8 by model management order",
   无钱包: "No wallet",
