@@ -26,6 +26,7 @@ pub(crate) fn usage_snapshot_result_from_record(snap: UsageSnapshotRecord) -> Us
         secondary_used_percent: snap.secondary_used_percent,
         secondary_window_minutes: snap.secondary_window_minutes,
         secondary_resets_at: snap.secondary_resets_at,
+        secondary_window_usage: None,
         credits_json: snap.credits_json,
         captured_at: Some(snap.captured_at),
     }

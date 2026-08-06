@@ -1,5 +1,12 @@
 import type { AvailabilityLevel } from "@/types/runtime";
 
+export interface AccountUsageWindowSummary {
+  windowStartAt: number;
+  resetsAt: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+}
+
 export interface AccountUsage {
   accountId: string;
   availabilityStatus: string;
@@ -9,6 +16,7 @@ export interface AccountUsage {
   secondaryUsedPercent: number | null;
   secondaryWindowMinutes: number | null;
   secondaryResetsAt: number | null;
+  secondaryWindowUsage: AccountUsageWindowSummary | null;
   creditsJson: string | null;
   capturedAt: number | null;
 }

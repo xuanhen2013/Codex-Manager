@@ -1498,6 +1498,47 @@ impl Storage {
         self.summarize_request_token_stats_by_sources_between(&[source_kind], start_ts, end_ts)
     }
 
+    pub fn summarize_request_token_stats_for_source_between(
+        &self,
+        source_kind: &str,
+        source_id: &str,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<TokenUsageRollup> {
+        let source_id = source_id.trim();
+        if end_ts <= start_ts || source_id.is_empty() {
+            return Ok(TokenUsageRollup::default());
+        }
+        let Some(source_id_expr) = source_id_expr(source_kind) else {
+            return Ok(TokenUsageRollup::default());
+        };
+        let Some(hourly_source_id_expr) = hourly_source_id_expr(source_kind) else {
+            return Ok(TokenUsageRollup::default());
+        };
+        let raw = raw_token_rollup_select(
+            "",
+            &format!(
+                "t.created_at >= ?1 AND t.created_at < ?2 AND {source_id_expr} = ?3"
+            ),
+            "",
+            false,
+        );
+        let hourly = hourly_token_rollup_select(
+            "",
+            &format!(
+                "{} AND {hourly_source_id_expr} = ?3",
+                hourly_rollup_range_clause()
+            ),
+            "",
+        );
+        let sql = request_token_stats_total_rollup_sql(&raw, &hourly);
+
+        self.conn
+            .query_row(&sql, params![start_ts, end_ts, source_id], |row| {
+                token_usage_rollup_from_row(row, 0)
+            })
+    }
+
     pub fn summarize_request_token_stats_by_sources_between(
         &self,
         source_kinds: &[&str],

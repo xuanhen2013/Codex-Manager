@@ -60,6 +60,12 @@ const USAGE_DETAILS = {
   secondaryUsedPercent: 23,
   secondaryWindowMinutes: 10_080,
   secondaryResetsAt: 1_900_604_800,
+  secondaryWindowUsage: {
+    windowStartAt: 1_900_000_000,
+    resetsAt: 1_900_604_800,
+    totalTokens: 8_600_000,
+    estimatedCostUsd: 12.34,
+  },
   creditsJson: JSON.stringify({
     _codexmanager_extra_rate_limits: [
       {
@@ -235,6 +241,7 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
   await page.goto("/accounts/");
 
   await expect(page.getByRole("heading", { name: "OpenAI 账号池" })).toBeVisible();
+  await expect(page.getByText("约 $12.34 / 8.6M tokens")).toBeVisible();
 
   const warmupButton = page.getByRole("button", { name: "预热" });
   await expect(warmupButton).toBeVisible();

@@ -264,8 +264,19 @@ pub struct UsageSnapshotResult {
     pub secondary_used_percent: Option<f64>,
     pub secondary_window_minutes: Option<i64>,
     pub secondary_resets_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secondary_window_usage: Option<UsageWindowUsageSummaryResult>,
     pub credits_json: Option<String>,
     pub captured_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageWindowUsageSummaryResult {
+    pub window_start_at: i64,
+    pub resets_at: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

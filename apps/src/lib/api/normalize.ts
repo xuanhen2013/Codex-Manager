@@ -279,8 +279,33 @@ export function normalizeUsageSnapshot(payload: unknown): AccountUsage | null {
     secondaryResetsAt: toNullableNumber(
       source.secondaryResetsAt ?? source.secondary_resets_at
     ),
+    secondaryWindowUsage: normalizeAccountUsageWindowSummary(
+      source.secondaryWindowUsage ?? source.secondary_window_usage
+    ),
     creditsJson: asString(source.creditsJson ?? source.credits_json) || null,
     capturedAt: toNullableNumber(source.capturedAt ?? source.captured_at),
+  };
+}
+
+function normalizeAccountUsageWindowSummary(
+  payload: unknown
+): AccountUsage["secondaryWindowUsage"] {
+  const source = asObject(payload);
+  const windowStartAt = toNullableNumber(source.windowStartAt ?? source.window_start_at);
+  const resetsAt = toNullableNumber(source.resetsAt ?? source.resets_at);
+  if (windowStartAt == null || resetsAt == null) return null;
+
+  return {
+    windowStartAt,
+    resetsAt,
+    totalTokens: Math.max(
+      0,
+      toNullableNumber(source.totalTokens ?? source.total_tokens) ?? 0
+    ),
+    estimatedCostUsd: Math.max(
+      0,
+      toNullableNumber(source.estimatedCostUsd ?? source.estimated_cost_usd) ?? 0
+    ),
   };
 }
 

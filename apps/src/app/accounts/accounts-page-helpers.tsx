@@ -5,6 +5,7 @@ import { Power, PowerOff, RefreshCw, Zap } from "lucide-react";
 import { useI18n } from "@/lib/i18n/provider";
 import { cn } from "@/lib/utils";
 import {
+  formatCompactNumber,
   formatRemainingDurationFromSeconds,
   formatTsFromSeconds,
   getExtraUsageDisplayRows,
@@ -121,6 +122,7 @@ export interface QuotaProgressProps {
   icon: LucideIcon;
   tone: "green" | "blue" | "amber";
   caption?: string;
+  usageText?: string;
   emptyText?: string;
   emptyResetText?: string;
 }
@@ -153,6 +155,7 @@ function QuotaProgress({
   icon: Icon,
   tone,
   caption,
+  usageText,
   emptyText = "--",
   emptyResetText = "未知",
 }: QuotaProgressProps) {
@@ -207,8 +210,9 @@ function QuotaProgress({
         trackClassName={palette.track}
         indicatorClassName={palette.indicator}
       />
-      <div className="text-[11px] leading-4 text-muted-foreground">
-        {t("重置")}: {formatTsFromSeconds(resetsAt, emptyResetText)}
+      <div className="flex flex-wrap gap-x-1 text-[11px] leading-4 text-muted-foreground">
+        <span>{t("重置")}: {formatTsFromSeconds(resetsAt, emptyResetText)}</span>
+        {usageText ? <span>· {usageText}</span> : null}
       </div>
     </div>
   );
@@ -283,13 +287,18 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
                     item.emptyResetText ?? t("未知"),
                   )}
                 </span>
-                <span className="block whitespace-nowrap leading-tight text-foreground/70">
-                  {formatRemainingDurationFromSeconds(
-                    item.resetsAt,
-                    item.id.endsWith("-primary") ? "hours" : "days",
-                    item.emptyResetText ?? t("未知"),
-                  )}
-                  {t("后刷新")}
+                <span className="block break-words leading-tight text-foreground/70">
+                  <span className="whitespace-nowrap">
+                    {formatRemainingDurationFromSeconds(
+                      item.resetsAt,
+                      item.id.endsWith("-primary") ? "hours" : "days",
+                      item.emptyResetText ?? t("未知"),
+                    )}
+                    {t("后刷新")}
+                  </span>
+                  {item.usageText ? (
+                    <span> · {item.usageText}</span>
+                  ) : null}
                 </span>
               </div>
             ))}
@@ -321,6 +330,7 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
                 icon={item.icon}
                 tone={item.tone}
                 caption={item.caption}
+                usageText={item.usageText}
                 emptyText={item.emptyText}
                 emptyResetText={item.emptyResetText}
               />
@@ -700,6 +710,14 @@ export function buildQuotaSummaryItems(
   const secondaryWindowOnly = isSecondaryWindowOnlyUsage(account.usage);
   const usageBuckets = getUsageDisplayBuckets(account.usage);
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
+  const secondaryWindowUsage = account.usage?.secondaryWindowUsage;
+  const secondaryUsageText = secondaryWindowUsage
+    ? `约 $${secondaryWindowUsage.estimatedCostUsd.toFixed(2)} / ${formatCompactNumber(
+        secondaryWindowUsage.totalTokens,
+        "0",
+        1,
+      )} tokens`
+    : undefined;
   return [
     {
       id: `${account.id}-primary`,
@@ -720,6 +738,7 @@ export function buildQuotaSummaryItems(
       icon: RefreshCw,
       tone: "blue",
       caption: t("长周期窗口"),
+      usageText: secondaryUsageText,
       emptyText: primaryWindowOnly ? t("未提供") : "--",
       emptyResetText: primaryWindowOnly ? t("未提供") : t("未知"),
     },

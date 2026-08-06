@@ -16,6 +16,8 @@ pub(crate) mod refresh;
 pub(crate) mod reset_credits;
 #[path = "usage_scheduler.rs"]
 pub(crate) mod scheduler;
+#[path = "usage_secondary_window_summary.rs"]
+pub(crate) mod secondary_window_summary;
 #[path = "usage_snapshot_store.rs"]
 pub(crate) mod snapshot_store;
 #[path = "usage_token_refresh.rs"]
