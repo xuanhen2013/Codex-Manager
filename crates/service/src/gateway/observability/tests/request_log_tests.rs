@@ -77,6 +77,47 @@ fn successful_request_log_touches_key_and_records_v2_snapshot() {
 }
 
 #[test]
+fn legacy_responses_path_records_v2_snapshot() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    super::write_request_log(
+        &storage,
+        super::RequestLogTraceContext {
+            trace_id: Some("trace-legacy-responses"),
+            original_path: Some("/responses?stream=true"),
+            adapted_path: Some("/responses?stream=true"),
+            request_type: Some("http"),
+            ..Default::default()
+        },
+        None,
+        None,
+        "/responses?stream=true",
+        "POST",
+        Some("gpt-5.4"),
+        None,
+        Some("https://example.test/responses"),
+        Some(200),
+        super::RequestLogUsage {
+            input_tokens: Some(2),
+            output_tokens: Some(3),
+            total_tokens: Some(5),
+            ..Default::default()
+        },
+        None,
+        Some(10),
+    );
+
+    let snapshot = storage
+        .get_charge_snapshot_v2(1)
+        .expect("read snapshot")
+        .expect("snapshot");
+    assert_eq!(snapshot.usage_source, "actual");
+    assert_eq!(snapshot.input_tokens, 2);
+    assert_eq!(snapshot.output_tokens, 3);
+}
+
+#[test]
 fn missing_usage_is_not_estimated_or_billed() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -104,7 +145,9 @@ fn missing_usage_is_not_estimated_or_billed() {
         Some(10),
     );
 
-    let logs = storage.list_request_logs(None, 10).expect("read request logs");
+    let logs = storage
+        .list_request_logs(None, 10)
+        .expect("read request logs");
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0].estimated_cost_usd, None);
     assert!(storage

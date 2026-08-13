@@ -138,7 +138,8 @@ fn normalize_duration_ms(value: Option<u128>) -> Option<i64> {
 /// 返回函数执行结果
 fn is_inference_path(path: &str) -> bool {
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
-    path.starts_with("/v1/responses")
+    (path == "/responses" || path.starts_with("/responses/"))
+        || path.starts_with("/v1/responses")
         || path.starts_with("/v1/chat/completions")
         || (path.starts_with("/v1/messages") && !path.starts_with("/v1/messages/count_tokens"))
 }

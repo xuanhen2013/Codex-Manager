@@ -671,6 +671,9 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         .has_column("api_key_profiles", "service_tier")
         .expect("check api_key_profiles.service_tier"));
     assert!(storage
+        .has_column("models", "fast_policy")
+        .expect("check models.fast_policy"));
+    assert!(storage
         .has_table("api_key_quota_limits")
         .expect("check api_key_quota_limits table"));
     assert!(storage
@@ -872,6 +875,133 @@ fn sql_migration_can_fallback_to_compat_when_schema_already_exists() {
         )
         .expect("count 004 migration");
     assert_eq!(applied_004, 1);
+}
+
+#[test]
+fn actual_usage_billing_repair_is_idempotent_without_wallet_charge() {
+    let path = temp_db_path("actual-usage-billing-repair");
+    let storage = Storage::open(&path).expect("open storage");
+    storage.init().expect("initial init");
+
+    storage
+        .conn
+        .execute(
+            "INSERT INTO request_logs(request_path, method, model, status_code, created_at)
+             VALUES('/responses', 'POST', 'gpt-5.6-sol', 502, 1700000000)",
+            [],
+        )
+        .expect("insert request log");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO request_token_stats(
+                request_log_id, model, input_tokens, cached_input_tokens,
+                output_tokens, total_tokens, usage_included, created_at
+             ) VALUES(1, 'gpt-5.6-sol', 100, 20, 40, 140, 1, 1700000000)",
+            [],
+        )
+        .expect("insert actual usage");
+    storage
+        .conn
+        .execute(
+            "DELETE FROM schema_migrations
+             WHERE version = 'custom_actual_usage_billing_repair_20260813'",
+            [],
+        )
+        .expect("reset repair marker");
+    drop(storage);
+
+    let storage = Storage::open(&path).expect("reopen storage");
+    storage.init().expect("run repair migration");
+    let snapshot = storage
+        .get_charge_snapshot_v2(1)
+        .expect("read snapshot")
+        .expect("snapshot exists");
+    assert_eq!(snapshot.usage_source, "actual");
+    assert_eq!(snapshot.input_tokens, 100);
+    assert_eq!(snapshot.cached_input_tokens, 20);
+    assert_eq!(snapshot.output_tokens, 40);
+    assert!(snapshot.base_cost_microusd > 0);
+
+    let estimated_cost: f64 = storage
+        .conn
+        .query_row(
+            "SELECT estimated_cost_usd FROM request_token_stats WHERE request_log_id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read repaired cost");
+    assert!(estimated_cost > 0.0);
+
+    let ledger_count: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM app_wallet_ledger_entries WHERE request_log_id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count wallet entries");
+    assert_eq!(ledger_count, 0);
+
+    storage.init().expect("idempotent init");
+    let snapshot_count: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM request_charge_snapshots WHERE request_log_id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count snapshots");
+    assert_eq!(snapshot_count, 1);
+
+    drop(storage);
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(path.with_extension("db-wal"));
+    let _ = fs::remove_file(path.with_extension("db-shm"));
+}
+
+#[test]
+fn account_subject_identity_migration_backfills_legacy_account_ids() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage
+        .conn
+        .execute_batch(
+            "CREATE TABLE accounts (
+                id TEXT PRIMARY KEY,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO accounts (id, updated_at) VALUES
+                ('user-a::cgpt=team|ws=team', 1),
+                ('legacy-user', 2);",
+        )
+        .expect("create legacy accounts");
+
+    storage
+        .conn
+        .execute_batch(include_str!(
+            "../../migrations/130_accounts_subject_identity.sql"
+        ))
+        .expect("apply subject identity migration");
+
+    let compound: String = storage
+        .conn
+        .query_row(
+            "SELECT subject_account_id FROM accounts WHERE id = 'user-a::cgpt=team|ws=team'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read compound subject");
+    let plain: String = storage
+        .conn
+        .query_row(
+            "SELECT subject_account_id FROM accounts WHERE id = 'legacy-user'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read plain subject");
+
+    assert_eq!(compound, "user-a");
+    assert_eq!(plain, "legacy-user");
 }
 
 #[test]
