@@ -80,6 +80,7 @@ pub(in super::super) enum CandidateExecutionResult {
         attempted_account_ids: Vec<String>,
         skipped_cooldown: usize,
         skipped_inflight: usize,
+        skipped_rate_limit: usize,
         last_attempt_url: Option<String>,
         last_attempt_error: Option<String>,
     },
@@ -254,6 +255,7 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut attempted_account_ids = Vec::new();
     let mut skipped_cooldown = 0usize;
     let mut skipped_inflight = 0usize;
+    let mut skipped_rate_limit = 0usize;
     let mut last_attempt_url = None;
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
@@ -292,8 +294,10 @@ pub(in super::super) fn execute_candidate_sequence(
             return Ok(CandidateExecutionResult::Handled);
         }
 
-        let strip_session_affinity = force_strip_session_affinity_after_challenge
-            || state.strip_session_affinity(&account, idx, setup.anthropic_has_thread_anchor);
+        let rebase_account_affinity =
+            state.strip_session_affinity(&account, idx, setup.anthropic_has_thread_anchor);
+        let strip_session_affinity =
+            force_strip_session_affinity_after_challenge || rebase_account_affinity;
         let attempt_thread = super::super::super::conversation_binding::resolve_attempt_thread(
             setup.conversation_routing.as_ref(),
             &account,
@@ -307,6 +311,11 @@ pub(in super::super) fn execute_candidate_sequence(
                 )
             })
             .unwrap_or_else(|| incoming_headers.clone());
+        let attempt_headers = if rebase_account_affinity {
+            attempt_headers.without_account_affinity()
+        } else {
+            attempt_headers
+        };
         let attempt_model_override = account_model_override.as_deref();
         let attempt_allow_openai_fallback = allow_openai_fallback
             && allow_openai_fallback_for_account_with_snapshot(
@@ -322,10 +331,11 @@ pub(in super::super) fn execute_candidate_sequence(
             } else {
                 None
             };
-        let body_for_attempt = state.body_for_attempt(
+        let body_for_attempt = state.body_for_account_attempt(
             path,
             body,
             strip_session_affinity,
+            rebase_account_affinity,
             setup,
             attempt_model_override,
             attempt_prompt_cache_key,
@@ -339,6 +349,9 @@ pub(in super::super) fn execute_candidate_sequence(
                 }
                 super::super::support::candidates::CandidateSkipReason::Inflight => {
                     skipped_inflight += 1;
+                }
+                super::super::support::candidates::CandidateSkipReason::RateLimit => {
+                    skipped_rate_limit += 1;
                 }
             }
             continue;
@@ -694,6 +707,7 @@ pub(in super::super) fn execute_candidate_sequence(
         attempted_account_ids,
         skipped_cooldown,
         skipped_inflight,
+        skipped_rate_limit,
         last_attempt_url,
         last_attempt_error,
     })

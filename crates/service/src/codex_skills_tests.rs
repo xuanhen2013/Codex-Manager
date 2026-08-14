@@ -508,8 +508,9 @@ fn directory_import_detects_same_size_file_replacement_and_fifo_entries() {
         .iter()
         .find(|entry| entry.relative_path == Path::new("payload.txt"))
         .expect("payload entry");
-    fs::remove_file(&payload).expect("remove original payload");
-    fs::write(&payload, "after!").expect("replace payload at same size");
+    let replacement = source.join("replacement.tmp");
+    fs::write(&replacement, "after!").expect("write same-size replacement payload");
+    fs::rename(&replacement, &payload).expect("atomically replace payload at same size");
     let replacement_error =
         open_validated_source_file(payload_entry).expect_err("reject same-size replacement");
     assert!(replacement_error.contains("changed"), "{replacement_error}");

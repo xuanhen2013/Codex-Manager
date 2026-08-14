@@ -306,6 +306,36 @@ function normalizeAccountUsageWindowSummary(
       0,
       toNullableNumber(source.estimatedCostUsd ?? source.estimated_cost_usd) ?? 0
     ),
+    observedTokenCapacity: toNullableNumber(
+      source.observedTokenCapacity ?? source.observed_token_capacity
+    ),
+    observedCostCapacityUsd: toNullableNumber(
+      source.observedCostCapacityUsd ?? source.observed_cost_capacity_usd
+    ),
+    previousObservedTokenCapacity: toNullableNumber(
+      source.previousObservedTokenCapacity ?? source.previous_observed_token_capacity
+    ),
+    previousObservedCostCapacityUsd: toNullableNumber(
+      source.previousObservedCostCapacityUsd ?? source.previous_observed_cost_capacity_usd
+    ),
+    observedCapacityChangeRatio: toNullableNumber(
+      source.observedCapacityChangeRatio ?? source.observed_capacity_change_ratio
+    ),
+    observedCapacityTrend: ["up", "down", "stable"].includes(
+      asString(source.observedCapacityTrend ?? source.observed_capacity_trend)
+    )
+      ? (asString(
+          source.observedCapacityTrend ?? source.observed_capacity_trend
+        ) as "up" | "down" | "stable")
+      : null,
+    observedCapacityConfidence: ["low", "medium"].includes(
+      asString(source.observedCapacityConfidence ?? source.observed_capacity_confidence)
+    )
+      ? (asString(
+          source.observedCapacityConfidence ?? source.observed_capacity_confidence
+        ) as "low" | "medium")
+      : null,
+    observedAt: toNullableNumber(source.observedAt ?? source.observed_at),
   };
 }
 

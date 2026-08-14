@@ -2,31 +2,6 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const MAX_CACHED_WS_TOOL_CALLS: usize = 256;
-const WS_ACCOUNT_AFFINITY_KEYS: &[&str] = &[
-    "session-id",
-    "session_id",
-    "conversation-id",
-    "conversation_id",
-    "thread-id",
-    "thread_id",
-    "client-request-id",
-    "client_request_id",
-    "window-id",
-    "window_id",
-    "turn-state",
-    "turn_state",
-    "parent-thread-id",
-    "parent_thread_id",
-    "turn-metadata",
-    "turn_metadata",
-    "x-client-request-id",
-    "x-codex-conversation-id",
-    "x-codex-window-id",
-    "x-codex-turn-state",
-    "x-codex-parent-thread-id",
-    "x-codex-turn-metadata",
-];
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum WsToolCallKind {
     Function,
@@ -176,21 +151,6 @@ fn ws_tool_output_key(item: &Value) -> Result<Option<WsToolCallKey>, String> {
     }))
 }
 
-fn remove_ws_account_affinity_fields(object: &mut serde_json::Map<String, Value>) {
-    let keys = object
-        .keys()
-        .filter(|key| {
-            WS_ACCOUNT_AFFINITY_KEYS
-                .iter()
-                .any(|candidate| key.eq_ignore_ascii_case(candidate))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in keys {
-        object.remove(&key);
-    }
-}
-
 pub(super) fn rebase_response_create_for_account_change(
     text: &str,
     completed_tool_calls: &CompletedWsToolCallCache,
@@ -205,11 +165,11 @@ pub(super) fn rebase_response_create_for_account_change(
     }
 
     object.remove("previous_response_id");
-    remove_ws_account_affinity_fields(object);
+    crate::gateway::remove_account_affinity_fields(object);
     let mut remove_empty_client_metadata = false;
     if let Some(client_metadata) = object.get_mut("client_metadata") {
         if let Some(client_metadata) = client_metadata.as_object_mut() {
-            remove_ws_account_affinity_fields(client_metadata);
+            crate::gateway::remove_account_affinity_fields(client_metadata);
             remove_empty_client_metadata = client_metadata.is_empty();
         }
     }

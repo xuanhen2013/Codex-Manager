@@ -5,6 +5,14 @@ export interface AccountUsageWindowSummary {
   resetsAt: number;
   totalTokens: number;
   estimatedCostUsd: number;
+  observedTokenCapacity: number | null;
+  observedCostCapacityUsd: number | null;
+  previousObservedTokenCapacity: number | null;
+  previousObservedCostCapacityUsd: number | null;
+  observedCapacityChangeRatio: number | null;
+  observedCapacityTrend: "up" | "down" | "stable" | null;
+  observedCapacityConfidence: "low" | "medium" | null;
+  observedAt: number | null;
 }
 
 export interface AccountUsage {

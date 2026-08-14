@@ -825,15 +825,13 @@ fn gateway_claude_failover_cross_workspace_strips_session_affinity_headers() {
     });
     let err_body = serde_json::to_string(&first_response).expect("serialize first response");
     let ok_body = serde_json::to_string(&second_response).expect("serialize second response");
-    // A 404 can trigger alternate-path + stateless retries before failover. Force those retries to
-    // also 404 so the gateway actually fails over to wsB.
-    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_sequence(vec![
-        (404, err_body.clone()),
-        (404, err_body.clone()),
-        (404, err_body.clone()),
+    // All retries for wsA must fail regardless of retry count; wsB is the only successful account.
+    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_account_failover(
+        "access_token_ws_a",
         (404, err_body),
+        "access_token_ws_b",
         (200, ok_body),
-    ]);
+    );
     let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
     let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &upstream_base);
 
@@ -940,15 +938,8 @@ fn gateway_claude_failover_cross_workspace_strips_session_affinity_headers() {
     server.join();
     assert_eq!(status, 200, "gateway response: {response_body}");
 
-    let mut captured = Vec::new();
-    for idx in 0..5 {
-        captured.push(
-            upstream_rx
-                .recv_timeout(Duration::from_secs(2))
-                .unwrap_or_else(|_| panic!("receive upstream request {idx}")),
-        );
-    }
     upstream_join.join().expect("join upstream");
+    let captured = upstream_rx.try_iter().collect::<Vec<_>>();
     let captured_debug = format!("{captured:#?}");
 
     let ws_a_stateful = captured
@@ -969,7 +960,7 @@ fn gateway_claude_failover_cross_workspace_strips_session_affinity_headers() {
                 .map(|v| v.contains("access_token_ws_b"))
                 .unwrap_or(false)
         })
-        .expect("expected wsB upstream request");
+        .unwrap_or_else(|| panic!("expected wsB upstream request: {captured_debug}"));
 
     assert_eq!(
         ws_a_stateful
@@ -1042,15 +1033,13 @@ fn gateway_claude_failover_same_workspace_preserves_session_affinity_headers() {
     });
     let err_body = serde_json::to_string(&first_response).expect("serialize first response");
     let ok_body = serde_json::to_string(&second_response).expect("serialize second response");
-    // A 404 can trigger alternate-path + stateless retries before failover. Force those retries to
-    // also 404 so the gateway actually fails over to the 2nd account (same workspace scope).
-    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_sequence(vec![
-        (404, err_body.clone()),
-        (404, err_body.clone()),
-        (404, err_body.clone()),
+    // All retries for account 1 must fail regardless of retry count; account 2 is the only success.
+    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_account_failover(
+        "access_token_ws_same_1",
         (404, err_body),
+        "access_token_ws_same_2",
         (200, ok_body),
-    ]);
+    );
     let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
     let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &upstream_base);
 
@@ -1134,15 +1123,8 @@ fn gateway_claude_failover_same_workspace_preserves_session_affinity_headers() {
     server.join();
     assert_eq!(status, 200, "gateway response: {response_body}");
 
-    let mut captured = Vec::new();
-    for idx in 0..5 {
-        captured.push(
-            upstream_rx
-                .recv_timeout(Duration::from_secs(2))
-                .unwrap_or_else(|_| panic!("receive upstream request {idx}")),
-        );
-    }
     upstream_join.join().expect("join upstream");
+    let captured = upstream_rx.try_iter().collect::<Vec<_>>();
     let captured_debug = format!("{captured:#?}");
 
     let account_2 = captured
@@ -1153,7 +1135,7 @@ fn gateway_claude_failover_same_workspace_preserves_session_affinity_headers() {
                 .map(|v| v.contains("access_token_ws_same_2"))
                 .unwrap_or(false)
         })
-        .expect("expected upstream request for account 2");
+        .unwrap_or_else(|| panic!("expected upstream request for account 2: {captured_debug}"));
 
     assert_eq!(
         account_2

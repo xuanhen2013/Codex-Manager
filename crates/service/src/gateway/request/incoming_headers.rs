@@ -30,6 +30,19 @@ pub(crate) struct IncomingHeaderSnapshot {
 }
 
 impl IncomingHeaderSnapshot {
+    pub(crate) fn without_account_affinity(&self) -> Self {
+        let mut snapshot = self.clone();
+        snapshot.session_id = None;
+        snapshot.session_affinity = None;
+        snapshot.client_request_id = None;
+        snapshot.window_id = None;
+        snapshot.turn_metadata = None;
+        snapshot.turn_state = None;
+        snapshot.parent_thread_id = None;
+        snapshot.conversation_id = None;
+        snapshot
+    }
+
     /// 函数 `from_http_headers`
     ///
     /// 作者: gaohongshun

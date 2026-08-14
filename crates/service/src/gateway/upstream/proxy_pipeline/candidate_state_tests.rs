@@ -255,6 +255,40 @@ fn stripped_candidate_removes_account_scoped_items_without_leaving_invalid_shell
 }
 
 #[test]
+fn stripped_candidate_rebases_http_identity_without_encrypted_content() {
+    let mut state = CandidateExecutionState::default();
+    let body = Bytes::from_static(
+        br#"{
+            "model":"gpt-5.6",
+            "input":"hello",
+            "previous_response_id":"resp-old",
+            "client_metadata":{
+                "x-codex-installation-id":"install-keep",
+                "session_id":"session-old",
+                "x-codex-turn-metadata":"metadata-old"
+            }
+        }"#,
+    );
+    let setup = sample_setup();
+
+    let actual =
+        state.body_for_account_attempt("/v1/responses", &body, true, true, &setup, None, None);
+    let value: serde_json::Value = serde_json::from_slice(actual.as_ref()).expect("parse body");
+
+    assert!(value.get("previous_response_id").is_none());
+    assert!(value.pointer("/client_metadata/session_id").is_none());
+    assert!(value
+        .pointer("/client_metadata/x-codex-turn-metadata")
+        .is_none());
+    assert_eq!(
+        value
+            .pointer("/client_metadata/x-codex-installation-id")
+            .and_then(serde_json::Value::as_str),
+        Some("install-keep")
+    );
+}
+
+#[test]
 fn strip_session_affinity_preserves_same_workspace_when_thread_anchor_exists() {
     let mut state = CandidateExecutionState::default();
     let first = Account {

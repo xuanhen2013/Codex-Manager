@@ -222,13 +222,14 @@ fn exhausted_gateway_error_includes_attempts_skips_and_last_error() {
         &["acc-a".to_string(), "acc-b".to_string()],
         2,
         1,
+        0,
         Some("upstream challenge blocked"),
     );
 
     assert!(message.contains("no available account"));
     assert!(message.contains("kind=no_available_account_exhausted"));
     assert!(message.contains("attempted=acc-a,acc-b"));
-    assert!(message.contains("skipped(cooldown=2, inflight=1)"));
+    assert!(message.contains("skipped(cooldown=2, inflight=1, rate_limit=0)"));
     assert!(message.contains("last_attempt=upstream challenge blocked"));
 }
 
@@ -245,9 +246,16 @@ fn exhausted_gateway_error_includes_attempts_skips_and_last_error() {
 /// 无
 #[test]
 fn exhausted_gateway_error_marks_cooldown_only_skip_kind() {
-    let message = exhausted_gateway_error_for_log(&[], 2, 0, None);
+    let message = exhausted_gateway_error_for_log(&[], 2, 0, 0, None);
 
     assert!(message.contains("kind=no_available_account_cooldown"));
+}
+
+#[test]
+fn exhausted_gateway_error_marks_rate_limit_skip_kind() {
+    let message = exhausted_gateway_error_for_log(&[], 0, 0, 2, None);
+
+    assert!(message.contains("kind=no_available_account_rate_limit"));
 }
 
 #[test]

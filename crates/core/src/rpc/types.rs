@@ -277,6 +277,22 @@ pub struct UsageWindowUsageSummaryResult {
     pub resets_at: i64,
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_token_capacity: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_cost_capacity_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_observed_token_capacity: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_observed_cost_capacity_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_capacity_change_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_capacity_trend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_capacity_confidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

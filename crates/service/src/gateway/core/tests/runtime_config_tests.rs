@@ -149,6 +149,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     let _timeout_guard = EnvGuard::set(ENV_UPSTREAM_TOTAL_TIMEOUT_MS, "777");
     let _stream_timeout_guard = EnvGuard::set(ENV_UPSTREAM_STREAM_TIMEOUT_MS, "888");
     let _inflight_guard = EnvGuard::set(ENV_ACCOUNT_MAX_INFLIGHT, "4");
+    let _rpm_guard = EnvGuard::set(ENV_ACCOUNT_REQUESTS_PER_MINUTE, "18");
     let _strict_allowlist_guard = EnvGuard::set(ENV_STRICT_REQUEST_PARAM_ALLOWLIST, "0");
     let _request_compression_guard = EnvGuard::set(ENV_ENABLE_REQUEST_COMPRESSION, "0");
     let _image_enabled_guard = EnvGuard::set(ENV_CODEX_IMAGE_GENERATION_ENABLED, "0");
@@ -163,6 +164,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
     assert_eq!(upstream_total_timeout(), Some(Duration::from_millis(777)));
     assert_eq!(upstream_stream_timeout(), Some(Duration::from_millis(888)));
     assert_eq!(account_max_inflight_limit(), 4);
+    assert_eq!(account_requests_per_minute_limit(), 18);
     assert!(!strict_request_param_allowlist_enabled());
     assert!(!request_compression_enabled());
     assert!(!codex_image_generation_enabled());
@@ -177,6 +179,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
         upstream_proxy_url().as_deref(),
         Some("socks5h://127.0.0.1:7890")
     );
+    ACCOUNT_REQUESTS_PER_MINUTE.store(DEFAULT_ACCOUNT_REQUESTS_PER_MINUTE, Ordering::Relaxed);
 }
 
 /// 函数 `reload_from_env_defaults_keep_request_gate_legacy_unbounded`
@@ -194,6 +197,7 @@ fn reload_from_env_updates_timeout_and_proxy() {
 fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
     let _guard = crate::test_env_guard();
     let _account_guard = EnvGuard::clear(ENV_ACCOUNT_MAX_INFLIGHT);
+    let _rpm_guard = EnvGuard::clear(ENV_ACCOUNT_REQUESTS_PER_MINUTE);
     let _strict_guard = EnvGuard::clear(ENV_STRICT_REQUEST_PARAM_ALLOWLIST);
     let _gate_guard = EnvGuard::clear(ENV_REQUEST_GATE_WAIT_TIMEOUT_MS);
     let _front_proxy_guard = EnvGuard::clear(ENV_FRONT_PROXY_MAX_BODY_BYTES);
@@ -206,6 +210,7 @@ fn reload_from_env_defaults_keep_request_gate_legacy_unbounded() {
     reload_from_env();
 
     assert_eq!(account_max_inflight_limit(), 0);
+    assert_eq!(account_requests_per_minute_limit(), 0);
     assert!(!strict_request_param_allowlist_enabled());
     assert_eq!(request_gate_wait_timeout(), None);
     assert_eq!(front_proxy_max_body_bytes(), 0);

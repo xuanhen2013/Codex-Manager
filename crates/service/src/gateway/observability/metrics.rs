@@ -12,6 +12,7 @@ static GATEWAY_FAILOVER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_CANDIDATE_SKIPS_TOTAL: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_CANDIDATE_SKIP_COOLDOWN_TOTAL: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_CANDIDATE_SKIP_INFLIGHT_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static GATEWAY_CANDIDATE_SKIP_RATE_LIMIT_TOTAL: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_COOLDOWN_MARKS: AtomicUsize = AtomicUsize::new(0);
 static RPC_TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static RPC_FAILED_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -42,6 +43,7 @@ struct GatewayRequestLabelKey {
 pub(crate) enum GatewayCandidateSkipReason {
     Cooldown,
     Inflight,
+    RateLimit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +55,7 @@ pub(crate) struct GatewayMetricsSnapshot {
     pub candidate_skips_total: usize,
     pub candidate_skip_cooldown_total: usize,
     pub candidate_skip_inflight_total: usize,
+    pub candidate_skip_rate_limit_total: usize,
     pub cooldown_marks: usize,
     pub rpc_total_requests: usize,
     pub rpc_failed_requests: usize,
@@ -204,6 +207,9 @@ pub(crate) fn record_gateway_candidate_skip(reason: GatewayCandidateSkipReason) 
         }
         GatewayCandidateSkipReason::Inflight => {
             GATEWAY_CANDIDATE_SKIP_INFLIGHT_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        GatewayCandidateSkipReason::RateLimit => {
+            GATEWAY_CANDIDATE_SKIP_RATE_LIMIT_TOTAL.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -431,6 +437,8 @@ pub(crate) fn gateway_metrics_snapshot() -> GatewayMetricsSnapshot {
             .load(Ordering::Relaxed),
         candidate_skip_inflight_total: GATEWAY_CANDIDATE_SKIP_INFLIGHT_TOTAL
             .load(Ordering::Relaxed),
+        candidate_skip_rate_limit_total: GATEWAY_CANDIDATE_SKIP_RATE_LIMIT_TOTAL
+            .load(Ordering::Relaxed),
         cooldown_marks: GATEWAY_COOLDOWN_MARKS.load(Ordering::Relaxed),
         rpc_total_requests: RPC_TOTAL_REQUESTS.load(Ordering::Relaxed),
         rpc_failed_requests: RPC_FAILED_REQUESTS.load(Ordering::Relaxed),
@@ -467,7 +475,7 @@ pub(crate) fn gateway_metrics_snapshot() -> GatewayMetricsSnapshot {
 pub(crate) fn gateway_metrics_prometheus() -> String {
     let m = gateway_metrics_snapshot();
     let labeled = gateway_labeled_metrics_prometheus();
-    format!(
+    let mut output = format!(
         "codexmanager_gateway_requests_total {}\n\
 codexmanager_gateway_requests_active {}\n\
 codexmanager_gateway_account_inflight_total {}\n\
@@ -524,7 +532,15 @@ codexmanager_gateway_upstream_attempt_errors_total {}\n\
         m.gateway_upstream_attempts,
         m.gateway_upstream_attempt_errors,
         labeled,
-    )
+    );
+    output.push_str(
+        format!(
+            "codexmanager_gateway_candidate_skips_by_reason_total{{reason=\"rate_limit\"}} {}\n",
+            m.candidate_skip_rate_limit_total
+        )
+        .as_str(),
+    );
+    output
 }
 
 /// 函数 `gateway_labeled_metrics_prometheus`

@@ -3,6 +3,12 @@
 import type { MessageCatalog } from "../types";
 
 export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
+  "观察容量约": "Observed capacity approx.",
+  "上升": "Rising",
+  "下降": "Falling",
+  "稳定": "Stable",
+  "中置信": "Medium confidence",
+  "低置信": "Low confidence",
   "边缘中继": "Edge relay",
   "代理设置": "Proxy settings",
   "分": "min",

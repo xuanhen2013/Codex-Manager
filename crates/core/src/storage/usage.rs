@@ -6,7 +6,7 @@ use super::{
     UsageSnapshotSummaryRow,
 };
 
-const DEFAULT_USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT: usize = 1;
+const DEFAULT_USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT: usize = 32;
 const LONG_USAGE_WINDOW_MINUTES: i64 = 24 * 60 + 3;
 const USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT_ENV: &str =
     "CODEXMANAGER_USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT";
@@ -230,6 +230,29 @@ impl Storage {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn recent_usage_snapshots_for_account(
+        &self,
+        account_id: &str,
+        limit: usize,
+    ) -> Result<Vec<UsageSnapshotRecord>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT account_id, used_percent, window_minutes, resets_at, secondary_used_percent, secondary_window_minutes, secondary_resets_at, credits_json, captured_at
+             FROM usage_snapshots
+             WHERE account_id = ?1
+             ORDER BY captured_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let mut rows = stmt.query((account_id, limit as i64))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(map_usage_snapshot_row(row)?);
+        }
+        Ok(out)
     }
 
     /// 函数 `latest_usage_snapshots_by_account`

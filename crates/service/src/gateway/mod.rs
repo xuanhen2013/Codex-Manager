@@ -62,7 +62,11 @@ pub(crate) fn error_message_for_client(
     message
 }
 
+#[path = "routing/account_rate_gate.rs"]
+mod account_rate_gate;
 mod anchor_fingerprint;
+#[path = "request/codex_identity.rs"]
+mod codex_identity;
 mod concurrency;
 #[path = "routing/conversation_binding.rs"]
 mod conversation_binding;
@@ -117,11 +121,16 @@ mod token_exchange;
 mod trace_log;
 mod upstream;
 
+use account_rate_gate::try_acquire_account_request_slot;
+pub(crate) use codex_identity::{
+    rebase_http_body_for_account_change, remove_account_affinity_fields,
+};
 pub(crate) use concurrency::current_gateway_concurrency_recommendation;
+pub(crate) use metrics::AccountInFlightGuard;
 use metrics::{
     account_inflight_count, acquire_account_inflight, begin_gateway_request,
     record_gateway_candidate_skip, record_gateway_cooldown_mark, record_gateway_failover_attempt,
-    record_gateway_request_outcome, AccountInFlightGuard,
+    record_gateway_request_outcome,
 };
 pub(crate) use metrics::{
     begin_rpc_request, duration_to_millis, gateway_metrics_prometheus,
@@ -436,6 +445,7 @@ pub(crate) fn reload_runtime_config_from_env() {
     runtime_config::reload_from_env();
     selection::reload_from_env();
     request_gate::clear_runtime_state();
+    account_rate_gate::clear_runtime_state();
     cooldown::clear_runtime_state();
     route_quality::clear_runtime_state();
     route_hint::reload_from_env();
@@ -1127,6 +1137,36 @@ pub(crate) fn gateway_record_failover_attempt() {
 /// 无
 pub(crate) fn gateway_mark_account_cooldown_for_status(account_id: &str, status: u16) {
     mark_account_cooldown_for_status(account_id, status);
+}
+
+pub(crate) fn gateway_try_begin_account_request(
+    account_id: &str,
+    candidate_index: usize,
+    candidate_count: usize,
+    skip_last_cooldown: bool,
+) -> Result<AccountInFlightGuard, GatewayCandidateSkipReason> {
+    let skip_reason = upstream::support::candidates::candidate_skip_reason_for_proxy(
+        account_id,
+        candidate_index,
+        candidate_count,
+        account_max_inflight_limit(),
+        runtime_config::account_requests_per_minute_limit(),
+        skip_last_cooldown,
+    );
+    if let Some(reason) = skip_reason {
+        return Err(match reason {
+            upstream::support::candidates::CandidateSkipReason::Cooldown => {
+                GatewayCandidateSkipReason::Cooldown
+            }
+            upstream::support::candidates::CandidateSkipReason::Inflight => {
+                GatewayCandidateSkipReason::Inflight
+            }
+            upstream::support::candidates::CandidateSkipReason::RateLimit => {
+                GatewayCandidateSkipReason::RateLimit
+            }
+        });
+    }
+    Ok(acquire_account_inflight(account_id))
 }
 
 /// 函数 `gateway_resolve_openai_bearer_token`

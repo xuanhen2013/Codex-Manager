@@ -261,6 +261,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "5000",
     ),
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_ACCOUNT_REQUESTS_PER_MINUTE",
+        "单账号每分钟请求上限（0 为关闭）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "0",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_ROUTE_HEALTH_P2C_BALANCED_WINDOW",
         "均衡模式 P2C 窗口",
         ENV_OVERRIDE_SCOPE_SERVICE,
@@ -433,7 +440,7 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "每账号保留用量快照数",
         ENV_OVERRIDE_SCOPE_SERVICE,
         ENV_OVERRIDE_APPLY_MODE_RUNTIME,
-        "1",
+        "32",
     ),
     EnvOverrideCatalogItem::new(
         "CODEXMANAGER_WEB_ADDR",

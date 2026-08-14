@@ -43,6 +43,8 @@ static UPSTREAM_STREAM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_S
 static SSE_KEEPALIVE_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_SSE_KEEPALIVE_ENABLED);
 static SSE_KEEPALIVE_INTERVAL_MS: AtomicU64 = AtomicU64::new(DEFAULT_SSE_KEEPALIVE_INTERVAL_MS);
 static ACCOUNT_MAX_INFLIGHT: AtomicUsize = AtomicUsize::new(DEFAULT_ACCOUNT_MAX_INFLIGHT);
+static ACCOUNT_REQUESTS_PER_MINUTE: AtomicUsize =
+    AtomicUsize::new(DEFAULT_ACCOUNT_REQUESTS_PER_MINUTE);
 static THREAD_AWARE_ACCOUNT_DISTRIBUTION: AtomicBool =
     AtomicBool::new(DEFAULT_THREAD_AWARE_ACCOUNT_DISTRIBUTION);
 static STRICT_REQUEST_PARAM_ALLOWLIST: AtomicBool =
@@ -73,6 +75,7 @@ const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_SSE_KEEPALIVE_ENABLED: bool = true;
 const DEFAULT_SSE_KEEPALIVE_INTERVAL_MS: u64 = 15_000;
 const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
+const DEFAULT_ACCOUNT_REQUESTS_PER_MINUTE: usize = 0;
 const DEFAULT_THREAD_AWARE_ACCOUNT_DISTRIBUTION: bool = true;
 const DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST: bool = false;
 const DEFAULT_ENABLE_REQUEST_COMPRESSION: bool = true;
@@ -103,6 +106,7 @@ const ENV_UPSTREAM_STREAM_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_STREAM_TIMEO
 const ENV_SSE_KEEPALIVE_ENABLED: &str = "CODEXMANAGER_SSE_KEEPALIVE_ENABLED";
 const ENV_SSE_KEEPALIVE_INTERVAL_MS: &str = "CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS";
 const ENV_ACCOUNT_MAX_INFLIGHT: &str = "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT";
+const ENV_ACCOUNT_REQUESTS_PER_MINUTE: &str = "CODEXMANAGER_ACCOUNT_REQUESTS_PER_MINUTE";
 const ENV_STRICT_REQUEST_PARAM_ALLOWLIST: &str = "CODEXMANAGER_STRICT_REQUEST_PARAM_ALLOWLIST";
 const ENV_ENABLE_REQUEST_COMPRESSION: &str = "CODEXMANAGER_ENABLE_REQUEST_COMPRESSION";
 const ENV_USE_WEBSOCKET_UPSTREAM: &str = "CODEXMANAGER_USE_WEBSOCKET_UPSTREAM";
@@ -974,6 +978,11 @@ pub(crate) fn set_account_max_inflight_limit(limit: usize) -> usize {
     limit
 }
 
+pub(crate) fn account_requests_per_minute_limit() -> usize {
+    ensure_runtime_config_loaded();
+    ACCOUNT_REQUESTS_PER_MINUTE.load(Ordering::Relaxed)
+}
+
 pub(crate) fn thread_aware_account_distribution_enabled() -> bool {
     ensure_runtime_config_loaded();
     THREAD_AWARE_ACCOUNT_DISTRIBUTION.load(Ordering::Relaxed)
@@ -1665,6 +1674,13 @@ pub(super) fn reload_from_env() {
     );
     ACCOUNT_MAX_INFLIGHT.store(
         env_usize_or(ENV_ACCOUNT_MAX_INFLIGHT, DEFAULT_ACCOUNT_MAX_INFLIGHT),
+        Ordering::Relaxed,
+    );
+    ACCOUNT_REQUESTS_PER_MINUTE.store(
+        env_usize_or(
+            ENV_ACCOUNT_REQUESTS_PER_MINUTE,
+            DEFAULT_ACCOUNT_REQUESTS_PER_MINUTE,
+        ),
         Ordering::Relaxed,
     );
     STRICT_REQUEST_PARAM_ALLOWLIST.store(

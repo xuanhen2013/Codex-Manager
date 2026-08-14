@@ -1102,12 +1102,12 @@ pub(crate) fn log_candidate_skip(
     reason: &str,
 ) {
     let line = format!(
-        "ts={} event=CANDIDATE_SKIP trace_id={} candidate={}/{} account_id={} reason={}",
+        "ts={} event=CANDIDATE_SKIP trace_id={} candidate={}/{} account_fp={} reason={}",
         current_trace_ts(),
         sanitize_text(trace_id),
         idx + 1,
         total,
-        sanitize_text(account_id),
+        crate::gateway::anchor_fingerprint::fingerprint_anchor(account_id),
         sanitize_text(reason),
     );
     buffer_trace_line(trace_id, line);

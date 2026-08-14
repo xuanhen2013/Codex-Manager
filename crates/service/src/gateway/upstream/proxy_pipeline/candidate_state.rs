@@ -10,10 +10,24 @@ pub(in super::super) struct CandidateExecutionState {
     stripped_body: Option<Bytes>,
     rewritten_bodies: HashMap<String, Bytes>,
     stripped_rewritten_bodies: HashMap<String, Bytes>,
+    rebased_body: Option<Bytes>,
+    rebased_rewritten_bodies: HashMap<String, Bytes>,
     first_candidate_account_scope: Option<String>,
 }
 
 impl CandidateExecutionState {
+    fn rebase_body_for_account_change(body: &Bytes, strip_encrypted_content: bool) -> Bytes {
+        let rebased = crate::gateway::rebase_http_body_for_account_change(body.as_ref())
+            .map(Bytes::from)
+            .unwrap_or_else(|| body.clone());
+        if !strip_encrypted_content {
+            return rebased;
+        }
+        strip_encrypted_content_from_body(rebased.as_ref())
+            .map(Bytes::from)
+            .unwrap_or(rebased)
+    }
+
     fn existing_prompt_cache_key(body: &Bytes) -> Option<String> {
         serde_json::from_slice::<serde_json::Value>(body.as_ref())
             .ok()
@@ -184,17 +198,43 @@ impl CandidateExecutionState {
     ///
     /// # 返回
     /// 返回函数执行结果
-    pub(in super::super) fn body_for_attempt(
+    fn body_for_attempt_internal(
         &mut self,
         path: &str,
         body: &Bytes,
         strip_session_affinity: bool,
+        rebase_account_affinity: bool,
         setup: &UpstreamRequestSetup,
         model_override: Option<&str>,
         prompt_cache_key: Option<&str>,
     ) -> Bytes {
         let rewritten =
             self.rewrite_body_for_model(path, body, setup, model_override, prompt_cache_key);
+        if rebase_account_affinity {
+            if let Some(cache_key) = Self::rewrite_cache_key(model_override, prompt_cache_key) {
+                return self
+                    .rebased_rewritten_bodies
+                    .entry(cache_key)
+                    .or_insert_with(|| {
+                        Self::rebase_body_for_account_change(
+                            &rewritten,
+                            strip_session_affinity && setup.has_body_encrypted_content,
+                        )
+                    })
+                    .clone();
+            }
+            if self.rebased_body.is_none() {
+                self.rebased_body = Some(Self::rebase_body_for_account_change(
+                    &rewritten,
+                    strip_session_affinity && setup.has_body_encrypted_content,
+                ));
+            }
+            return self
+                .rebased_body
+                .as_ref()
+                .expect("rebased body should be initialized")
+                .clone();
+        }
         if strip_session_affinity && setup.has_body_encrypted_content {
             if let Some(cache_key) = Self::rewrite_cache_key(model_override, prompt_cache_key) {
                 return self
@@ -219,6 +259,48 @@ impl CandidateExecutionState {
         } else {
             rewritten
         }
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn body_for_attempt(
+        &mut self,
+        path: &str,
+        body: &Bytes,
+        strip_session_affinity: bool,
+        setup: &UpstreamRequestSetup,
+        model_override: Option<&str>,
+        prompt_cache_key: Option<&str>,
+    ) -> Bytes {
+        self.body_for_attempt_internal(
+            path,
+            body,
+            strip_session_affinity,
+            false,
+            setup,
+            model_override,
+            prompt_cache_key,
+        )
+    }
+
+    pub(in super::super) fn body_for_account_attempt(
+        &mut self,
+        path: &str,
+        body: &Bytes,
+        strip_session_affinity: bool,
+        rebase_account_affinity: bool,
+        setup: &UpstreamRequestSetup,
+        model_override: Option<&str>,
+        prompt_cache_key: Option<&str>,
+    ) -> Bytes {
+        self.body_for_attempt_internal(
+            path,
+            body,
+            strip_session_affinity,
+            rebase_account_affinity,
+            setup,
+            model_override,
+            prompt_cache_key,
+        )
     }
 
     /// 函数 `retry_body`

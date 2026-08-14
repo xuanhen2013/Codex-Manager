@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils";
 import {
   formatAccountSubscriptionPlanLabel,
   formatAccountSubscriptionStatusLabel,
+  formatSecondaryWindowUsageText,
 } from "@/app/accounts/accounts-page-helpers";
 import {
   formatTsFromSeconds,
@@ -61,6 +62,7 @@ interface UsageDetailRowProps {
   icon: LucideIcon;
   tone: "green" | "blue" | "amber";
   caption?: string;
+  usageText?: string;
   emptyText?: string;
   emptyResetText?: string;
 }
@@ -85,6 +87,7 @@ function UsageDetailRow({
   icon: Icon,
   tone,
   caption,
+  usageText,
   emptyText = "--",
   emptyResetText = "未知",
 }: UsageDetailRowProps) {
@@ -149,6 +152,11 @@ function UsageDetailRow({
           {t("重置时间:")} {formatTsFromSeconds(resetsAt, t(emptyResetText))}
         </span>
       </div>
+      {usageText ? (
+        <div className="break-words text-[10px] leading-4 text-muted-foreground">
+          {usageText}
+        </div>
+      ) : null}
       </CardContent>
     </Card>
   );
@@ -171,6 +179,9 @@ export default function UsageModal({
   const secondaryWindowOnly = isSecondaryWindowOnlyUsage(account.usage);
   const usageBuckets = getUsageDisplayBuckets(account.usage);
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
+  const secondaryUsageText = account.usage?.secondaryWindowUsage
+    ? formatSecondaryWindowUsageText(account.usage.secondaryWindowUsage, t)
+    : undefined;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -279,6 +290,7 @@ export default function UsageModal({
                 icon={Calendar}
                 tone="blue"
                 caption={t("长周期窗口")}
+                usageText={secondaryUsageText}
                 emptyText={primaryWindowOnly ? t("未提供") : "--"}
                 emptyResetText={primaryWindowOnly ? t("未提供") : t("未知")}
               />

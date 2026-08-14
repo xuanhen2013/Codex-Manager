@@ -630,7 +630,13 @@ pub(super) fn start_mock_upstream_sequence_lenient_with_content_types(
                 .to_string();
         let fallback_ct = "application/json".to_string();
         loop {
-            let Some((mut stream, captured)) = accept_http_request(&listener, idle_timeout) else {
+            let accept_timeout = if idx == 0 {
+                idle_timeout.max(Duration::from_secs(3))
+            } else {
+                idle_timeout
+            };
+            let Some((mut stream, captured)) = accept_http_request(&listener, accept_timeout)
+            else {
                 break;
             };
             let _ = tx.send(captured);
@@ -654,6 +660,66 @@ pub(super) fn start_mock_upstream_sequence_lenient_with_content_types(
                 .expect("write upstream response body");
             let _ = stream.flush();
             idx = idx.saturating_add(1);
+        }
+    });
+
+    (addr.to_string(), rx, join)
+}
+
+pub(super) fn start_mock_upstream_account_failover(
+    primary_auth_marker: &str,
+    primary_response: (u16, String),
+    secondary_auth_marker: &str,
+    secondary_response: (u16, String),
+) -> (
+    String,
+    Receiver<CapturedUpstreamRequest>,
+    thread::JoinHandle<()>,
+) {
+    let listener = bind_test_listener("mock account failover upstream");
+    let addr = listener.local_addr().expect("mock upstream addr");
+    let primary_auth_marker = primary_auth_marker.to_string();
+    let secondary_auth_marker = secondary_auth_marker.to_string();
+    let (tx, rx) = mpsc::channel();
+
+    let join = thread::spawn(move || {
+        for _ in 0..16 {
+            let Some((mut stream, captured)) =
+                accept_http_request(&listener, Duration::from_secs(3))
+            else {
+                break;
+            };
+            let authorization = captured
+                .headers
+                .get("authorization")
+                .map(String::as_str)
+                .unwrap_or_default();
+            let (status, body, complete) = if authorization.contains(&secondary_auth_marker) {
+                (secondary_response.0, secondary_response.1.as_str(), true)
+            } else if authorization.contains(&primary_auth_marker) {
+                (primary_response.0, primary_response.1.as_str(), false)
+            } else {
+                (
+                    500,
+                    "{\"error\":{\"message\":\"unexpected upstream authorization\"}}",
+                    true,
+                )
+            };
+            let _ = tx.send(captured);
+            let header = format!(
+                "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(header.as_bytes())
+                .expect("write upstream status");
+            stream
+                .write_all(body.as_bytes())
+                .expect("write upstream response body");
+            let _ = stream.flush();
+            if complete {
+                break;
+            }
         }
     });
 

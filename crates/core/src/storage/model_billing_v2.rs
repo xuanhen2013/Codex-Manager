@@ -670,7 +670,10 @@ mod tests {
             })
             .expect_err("estimated usage must not be billed");
         assert!(error.to_string().contains("usage_source must be actual"));
-        assert!(storage.get_charge_snapshot_v2(request_log_id).unwrap().is_none());
+        assert!(storage
+            .get_charge_snapshot_v2(request_log_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -685,7 +688,11 @@ mod tests {
                         key_id,account_id,model,actual_source_kind,actual_source_id,
                         request_path,method,status_code,created_at
                      ) VALUES(?1,?2,'gpt-5.4','openai_account',?2,'/v1/responses','POST',502,?3)",
-                    params![format!("key-{suffix}"), format!("account-{suffix}"), created_at],
+                    params![
+                        format!("key-{suffix}"),
+                        format!("account-{suffix}"),
+                        created_at
+                    ],
                 )
                 .unwrap();
             let request_log_id = storage.conn.last_insert_rowid();
@@ -773,12 +780,16 @@ mod tests {
 
         storage
             .conn
-            .execute_batch(include_str!("../../migrations/125_authoritative_usage_billing.sql"))
+            .execute_batch(include_str!(
+                "../../migrations/125_authoritative_usage_billing.sql"
+            ))
             .unwrap();
 
         let raw_stat_count: i64 = storage
             .conn
-            .query_row("SELECT COUNT(*) FROM request_token_stats", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM request_token_stats", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(raw_stat_count, 0);
         let snapshot_ids = storage
@@ -797,7 +808,17 @@ mod tests {
                         estimated_cost_usd,request_count,error_count
                  FROM request_token_stat_hourly_rollups WHERE key_id='key-hourly'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(hourly, (0, 0, 0, 0, 0.0, 0, 0));
@@ -808,7 +829,16 @@ mod tests {
                         estimated_cost_usd,source_rows
                  FROM request_token_stat_rollups WHERE key_id='key-legacy'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(legacy, (0, 0, 0, 0, 0.0, 0));

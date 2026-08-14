@@ -21,6 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { Account } from "@/types";
+import type { AccountUsageWindowSummary } from "@/types/account";
 
 export type StatusFilter = "all" | "available" | "low_quota" | "limited" | "banned";
 export type AccountExportMode = "single" | "multiple";
@@ -715,11 +716,7 @@ export function buildQuotaSummaryItems(
   const extraUsageRows = getExtraUsageDisplayRows(account.usage);
   const secondaryWindowUsage = account.usage?.secondaryWindowUsage;
   const secondaryUsageText = secondaryWindowUsage
-    ? `约 $${secondaryWindowUsage.estimatedCostUsd.toFixed(2)} / ${formatCompactNumber(
-        secondaryWindowUsage.totalTokens,
-        "0",
-        1,
-      )} tokens`
+    ? formatSecondaryWindowUsageText(secondaryWindowUsage, t)
     : undefined;
   return [
     {
@@ -757,6 +754,42 @@ export function buildQuotaSummaryItems(
       emptyResetText: t("未知"),
     })),
   ];
+}
+
+export function formatSecondaryWindowUsageText(
+  usage: AccountUsageWindowSummary,
+  t: TranslateFn,
+): string {
+  const parts = [
+    `约 $${usage.estimatedCostUsd.toFixed(2)} / ${formatCompactNumber(
+      usage.totalTokens,
+      "0",
+      1,
+    )} tokens`,
+  ];
+  const capacity = [
+    usage.observedCostCapacityUsd != null
+      ? `$${usage.observedCostCapacityUsd.toFixed(2)}`
+      : null,
+    usage.observedTokenCapacity != null
+      ? `${formatCompactNumber(usage.observedTokenCapacity, "0", 1)} tokens`
+      : null,
+  ].filter(Boolean);
+  if (capacity.length > 0) {
+    parts.push(`${t("观察容量约")} ${capacity.join(" / ")}`);
+  }
+  if (usage.observedCapacityTrend) {
+    const trendLabel = {
+      up: t("上升"),
+      down: t("下降"),
+      stable: t("稳定"),
+    }[usage.observedCapacityTrend];
+    const confidenceLabel = usage.observedCapacityConfidence === "medium"
+      ? t("中置信")
+      : t("低置信");
+    parts.push(`${trendLabel} · ${confidenceLabel}`);
+  }
+  return parts.join(" · ");
 }
 
 export function AccountInfoCell({

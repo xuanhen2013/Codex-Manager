@@ -1517,9 +1517,7 @@ impl Storage {
         };
         let raw = raw_token_rollup_select(
             "",
-            &format!(
-                "t.created_at >= ?1 AND t.created_at < ?2 AND {source_id_expr} = ?3"
-            ),
+            &format!("t.created_at >= ?1 AND t.created_at < ?2 AND {source_id_expr} = ?3"),
             "",
             false,
         );

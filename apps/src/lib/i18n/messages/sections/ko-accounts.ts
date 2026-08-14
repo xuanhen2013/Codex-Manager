@@ -3,6 +3,12 @@
 import type { MessageCatalog } from "../types";
 
 export const KO_ACCOUNTS_MESSAGES: MessageCatalog = {
+  "观察容量约": "관측 용량 약",
+  "上升": "상승",
+  "下降": "하락",
+  "稳定": "안정",
+  "中置信": "중간 신뢰도",
+  "低置信": "낮은 신뢰도",
   "为当前账号选择独立代理配置": "이 계정에 사용할 전용 프록시 프로필 선택",
   "代理": "프록시",
   "代理配置": "프록시 프로필",

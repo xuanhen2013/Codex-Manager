@@ -132,6 +132,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
             idx,
             self.candidate_count,
             self.account_max_inflight,
+            super::super::super::runtime_config::account_requests_per_minute_limit(),
             self.protocol_type == crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
         )
     }
@@ -182,6 +183,7 @@ impl<'a> GatewayUpstreamExecutionContext<'a> {
         let reason_text = match reason {
             candidates::CandidateSkipReason::Cooldown => "cooldown",
             candidates::CandidateSkipReason::Inflight => "inflight",
+            candidates::CandidateSkipReason::RateLimit => "rate_limit",
         };
         super::super::super::trace_log::log_candidate_skip(
             self.trace_id,

@@ -2,9 +2,10 @@ use codexmanager_core::storage::{Account, Storage, Token, UsageSnapshotRecord};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in super::super) enum CandidateSkipReason {
+pub(crate) enum CandidateSkipReason {
     Cooldown,
     Inflight,
+    RateLimit,
 }
 
 /// 函数 `prepare_gateway_candidates`
@@ -181,11 +182,12 @@ pub(in super::super) fn allow_openai_fallback_for_account_with_snapshot(
 ///
 /// # 返回
 /// 返回函数执行结果
-pub(in super::super) fn candidate_skip_reason_for_proxy(
+pub(crate) fn candidate_skip_reason_for_proxy(
     account_id: &str,
     idx: usize,
     candidate_count: usize,
     account_max_inflight: usize,
+    account_requests_per_minute: usize,
     skip_last_cooldown: bool,
 ) -> Option<CandidateSkipReason> {
     let has_more_candidates = idx + 1 < candidate_count;
@@ -207,6 +209,18 @@ pub(in super::super) fn candidate_skip_reason_for_proxy(
             super::super::super::GatewayCandidateSkipReason::Inflight,
         );
         return Some(CandidateSkipReason::Inflight);
+    }
+
+    if account_requests_per_minute > 0
+        && !super::super::super::try_acquire_account_request_slot(
+            account_id,
+            account_requests_per_minute,
+        )
+    {
+        super::super::super::record_gateway_candidate_skip(
+            super::super::super::GatewayCandidateSkipReason::RateLimit,
+        );
+        return Some(CandidateSkipReason::RateLimit);
     }
 
     None

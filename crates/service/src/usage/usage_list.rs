@@ -15,16 +15,14 @@ pub(crate) fn read_usage_snapshots_limited(
     let items = storage
         .latest_usage_snapshots_by_account_limited(limit)
         .map_err(|err| format!("list usage snapshots failed: {err}"))?;
-    let secondary_window_usage = match super::secondary_window_summary::summaries_for_snapshots(
-        &storage,
-        &items,
-    ) {
-        Ok(items) => items,
-        Err(err) => {
-            log::warn!("list secondary-window usage summaries failed: {err}");
-            HashMap::new()
-        }
-    };
+    let secondary_window_usage =
+        match super::secondary_window_summary::summaries_for_snapshots(&storage, &items) {
+            Ok(items) => items,
+            Err(err) => {
+                log::warn!("list secondary-window usage summaries failed: {err}");
+                HashMap::new()
+            }
+        };
 
     Ok(items
         .into_iter()

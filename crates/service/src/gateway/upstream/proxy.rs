@@ -36,10 +36,13 @@ fn exhausted_gateway_error_for_log(
     attempted_account_ids: &[String],
     skipped_cooldown: usize,
     skipped_inflight: usize,
+    skipped_rate_limit: usize,
     last_attempt_error: Option<&str>,
 ) -> String {
     let kind = if !attempted_account_ids.is_empty() {
         "no_available_account_exhausted"
+    } else if skipped_rate_limit > 0 {
+        "no_available_account_rate_limit"
     } else if skipped_cooldown > 0 && skipped_inflight > 0 {
         "no_available_account_skipped"
     } else if skipped_cooldown > 0 {
@@ -56,10 +59,10 @@ fn exhausted_gateway_error_for_log(
     if !attempted_account_ids.is_empty() {
         parts.push(format!("attempted={}", attempted_account_ids.join(",")));
     }
-    if skipped_cooldown > 0 || skipped_inflight > 0 {
+    if skipped_cooldown > 0 || skipped_inflight > 0 || skipped_rate_limit > 0 {
         parts.push(format!(
-            "skipped(cooldown={}, inflight={})",
-            skipped_cooldown, skipped_inflight
+            "skipped(cooldown={}, inflight={}, rate_limit={})",
+            skipped_cooldown, skipped_inflight, skipped_rate_limit
         ));
     }
     if let Some(last_attempt_error) = last_attempt_error
@@ -1126,6 +1129,7 @@ pub(in super::super) fn proxy_validated_request(
             attempted_account_ids,
             skipped_cooldown,
             skipped_inflight,
+            skipped_rate_limit,
             last_attempt_url,
             last_attempt_error,
         } => (
@@ -1133,6 +1137,7 @@ pub(in super::super) fn proxy_validated_request(
             attempted_account_ids,
             skipped_cooldown,
             skipped_inflight,
+            skipped_rate_limit,
             last_attempt_url,
             last_attempt_error,
         ),
@@ -1142,6 +1147,7 @@ pub(in super::super) fn proxy_validated_request(
         attempted_account_ids,
         skipped_cooldown,
         skipped_inflight,
+        skipped_rate_limit,
         last_attempt_url,
         last_attempt_error,
     ) = exhausted;
@@ -1149,6 +1155,7 @@ pub(in super::super) fn proxy_validated_request(
         attempted_account_ids.as_slice(),
         skipped_cooldown,
         skipped_inflight,
+        skipped_rate_limit,
         last_attempt_error.as_deref(),
     );
     if should_fallback_to_aggregate_after_account_exhaustion(

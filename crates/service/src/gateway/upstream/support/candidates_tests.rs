@@ -705,7 +705,7 @@ fn allow_openai_fallback_for_account_rejects_workspace_plans() {
 #[test]
 fn candidate_skip_reason_for_proxy_allows_failover_when_head_account_is_inflight_limited() {
     let _guard = crate::gateway::acquire_account_inflight("acc-preferred");
-    let actual = candidate_skip_reason_for_proxy("acc-preferred", 0, 2, 1, false);
+    let actual = candidate_skip_reason_for_proxy("acc-preferred", 0, 2, 1, 0, false);
     assert_eq!(actual, Some(CandidateSkipReason::Inflight));
 }
 
@@ -714,9 +714,19 @@ fn candidate_skip_reason_for_proxy_can_skip_last_cooldown_candidate() {
     let account_id = "acc-cooldown-last-skip-test";
     crate::gateway::gateway_mark_account_cooldown_for_status(account_id, 403);
 
-    let default_last = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, false);
-    let strict_last = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, true);
+    let default_last = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, 0, false);
+    let strict_last = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, 0, true);
 
     assert_eq!(default_last, None);
     assert_eq!(strict_last, Some(CandidateSkipReason::Cooldown));
+}
+
+#[test]
+fn candidate_skip_reason_for_proxy_enforces_rate_limit_for_last_candidate() {
+    let account_id = "acc-rate-limit-last-skip-test";
+    let first = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, 1, false);
+    let second = candidate_skip_reason_for_proxy(account_id, 0, 1, 0, 1, false);
+
+    assert_eq!(first, None);
+    assert_eq!(second, Some(CandidateSkipReason::RateLimit));
 }
