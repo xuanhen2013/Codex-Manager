@@ -104,7 +104,8 @@ export function AccountProxyCell({ account }: { account: Account }) {
 	}
 
 	const displayIp = ip || formatProxyUrlHost(account.proxyUrl);
-	const displayName = account.proxyProfileName || displayIp;
+	const concreteName = account.proxyProfileName || displayIp;
+	const displayName = account.proxyPoolName || concreteName;
 
 	if (!displayName) {
 		return <span className="text-muted-foreground">–</span>;
@@ -120,8 +121,13 @@ export function AccountProxyCell({ account }: { account: Account }) {
 						flagImgUrl={flagImgUrl}
 						className="mt-0.5 shrink-0 text-base leading-none"
 					/>
-					<span className="min-w-0 break-words text-left text-[13px] font-medium leading-5" title={displayIp}>
-						{displayName}
+					<span className="min-w-0 text-left leading-5" title={displayIp}>
+						<span className="block break-words text-[13px] font-medium leading-5">{displayName}</span>
+						{account.proxyPoolName && concreteName ? (
+							<span className="block truncate text-[11px] text-muted-foreground">
+								{concreteName}
+							</span>
+						) : null}
 					</span>
 				</div>
 			</TooltipTrigger>

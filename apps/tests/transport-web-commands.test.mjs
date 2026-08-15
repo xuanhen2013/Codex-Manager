@@ -322,6 +322,36 @@ test("createWebCommandMap 为 system proxy profiles 提供 Web RPC 映射", () =
   assert.deepEqual(commandMap.service_system_proxy_cloudflare_speed_test, {
     rpcMethod: "system/proxy/cloudflare-speed-test",
   });
+  assert.deepEqual(commandMap.service_system_proxy_import_batch, {
+    rpcMethod: "system/proxy/import-batch",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_list, {
+    rpcMethod: "system/proxy-pool/list",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_create, {
+    rpcMethod: "system/proxy-pool/create",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_update, {
+    rpcMethod: "system/proxy-pool/update",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_delete, {
+    rpcMethod: "system/proxy-pool/delete",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_members_add, {
+    rpcMethod: "system/proxy-pool/members/add",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_members_remove, {
+    rpcMethod: "system/proxy-pool/members/remove",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_members_set_enabled, {
+    rpcMethod: "system/proxy-pool/members/set-enabled",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_health_check, {
+    rpcMethod: "system/proxy-pool/health-check",
+  });
+  assert.deepEqual(commandMap.service_system_proxy_pool_switch_logs, {
+    rpcMethod: "system/proxy-pool/switch-logs",
+  });
 });
 
 test("createWebCommandMap 为 account proxy cloudflare speed test 提供 Web RPC 映射", () => {

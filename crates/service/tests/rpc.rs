@@ -3941,6 +3941,160 @@ fn rpc_requestlog_list_and_summary_support_pagination() {
 }
 
 #[test]
+fn rpc_proxy_pool_batch_import_balances_accounts_and_manual_binding_unbinds_pool() {
+    let ctx = RpcTestContext::new("rpc-proxy-pool-binding");
+    ctx.seed_accounts(2);
+
+    let create_pool_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let create_pool = post_rpc_method(
+        &create_pool_server.addr,
+        900,
+        "system/proxy-pool/create",
+        Some(serde_json::json!({
+            "name": "User maintained US pool",
+            "description": "The service must not infer or change the region",
+            "failureThreshold": 3,
+            "recoveryThreshold": 2,
+            "heartbeatIntervalSecs": 60,
+            "cooldownSecs": 300
+        })),
+    );
+    let pool_id = create_pool["result"]["id"]
+        .as_str()
+        .expect("pool id")
+        .to_string();
+
+    let import_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let imported = post_rpc_method(
+        &import_server.addr,
+        901,
+        "system/proxy/import-batch",
+        Some(serde_json::json!({
+            "poolId": pool_id,
+            "defaultScheme": "socks5",
+            "namePrefix": "US",
+            "text": "127.0.0.1:7101\nSecond,127.0.0.1:7102\n127.0.0.1:7101"
+        })),
+    );
+    assert_eq!(imported["result"]["total"].as_u64(), Some(3));
+    assert_eq!(imported["result"]["created"].as_u64(), Some(2));
+    assert_eq!(imported["result"]["duplicates"].as_u64(), Some(1));
+
+    let list_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let listed = post_rpc_method(&list_server.addr, 902, "system/proxy-pool/list", None);
+    let members = listed["result"][0]["members"]
+        .as_array()
+        .expect("pool members");
+    assert_eq!(members.len(), 2);
+    let first_profile_id = members[0]["proxyProfileId"]
+        .as_str()
+        .expect("first profile id")
+        .to_string();
+
+    let bind_first_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let first_binding = post_rpc_method(
+        &bind_first_server.addr,
+        903,
+        "account/proxy/set",
+        Some(serde_json::json!({
+            "accountId": "acc-0",
+            "enabled": true,
+            "source": "pool",
+            "proxyPoolId": pool_id
+        })),
+    );
+    assert_eq!(first_binding["result"]["source"].as_str(), Some("pool"));
+    assert_eq!(
+        first_binding["result"]["proxyPoolId"].as_str(),
+        Some(pool_id.as_str())
+    );
+    let first_selected = first_binding["result"]["proxyProfileId"]
+        .as_str()
+        .expect("first selected proxy")
+        .to_string();
+
+    let bind_second_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let second_binding = post_rpc_method(
+        &bind_second_server.addr,
+        904,
+        "account/proxy/set",
+        Some(serde_json::json!({
+            "accountId": "acc-1",
+            "enabled": true,
+            "source": "pool",
+            "proxyPoolId": pool_id
+        })),
+    );
+    let second_selected = second_binding["result"]["proxyProfileId"]
+        .as_str()
+        .expect("second selected proxy");
+    assert_ne!(first_selected, second_selected);
+
+    let account_list_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let account_list = post_rpc_method(&account_list_server.addr, 906, "account/list", None);
+    let pooled_account = account_list["result"]["items"]
+        .as_array()
+        .expect("account list items")
+        .iter()
+        .find(|item| item["id"].as_str() == Some("acc-1"))
+        .expect("pooled account summary");
+    assert_eq!(pooled_account["proxySource"].as_str(), Some("pool"));
+    assert_eq!(
+        pooled_account["proxyPoolId"].as_str(),
+        Some(pool_id.as_str())
+    );
+    assert_eq!(
+        pooled_account["proxyProfileId"].as_str(),
+        Some(second_selected)
+    );
+
+    let manual_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let manual = post_rpc_method(
+        &manual_server.addr,
+        905,
+        "account/proxy/set",
+        Some(serde_json::json!({
+            "accountId": "acc-0",
+            "enabled": true,
+            "source": "profile",
+            "proxyProfileId": first_profile_id,
+            "status": "unchecked"
+        })),
+    );
+    assert_eq!(manual["result"]["source"].as_str(), Some("profile"));
+    assert!(manual["result"]["proxyPoolId"].is_null());
+
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    assert!(storage
+        .find_account_proxy_pool_binding("acc-0")
+        .expect("find first account binding")
+        .is_none());
+    assert!(storage
+        .find_account_proxy_pool_binding("acc-1")
+        .expect("find second account binding")
+        .is_some());
+
+    let disable_server = codexmanager_service::start_one_shot_server().expect("start server");
+    let disabled = post_rpc_method(
+        &disable_server.addr,
+        907,
+        "account/proxy/set",
+        Some(serde_json::json!({
+            "accountId": "acc-1",
+            "enabled": false,
+            "source": "pool",
+            "proxyPoolId": pool_id
+        })),
+    );
+    assert_eq!(disabled["result"]["enabled"].as_bool(), Some(false));
+    assert!(disabled["result"]["proxyPoolId"].is_null());
+    assert!(storage
+        .find_account_proxy_pool_binding("acc-1")
+        .expect("find disabled account binding")
+        .is_none());
+}
+
+#[test]
 fn rpc_apikey_create_accepts_custom_key_and_rejects_duplicate() {
     let _ctx = RpcTestContext::new("rpc-apikey-create-custom-key");
     let custom_key = "sk-codexmanager-custom-fixed";

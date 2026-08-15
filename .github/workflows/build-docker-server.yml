@@ -1,0 +1,90 @@
+name: build-docker-server
+run-name: Docker server ${{ github.ref_name }} @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "ci/docker-server/**"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target-shared
+  RUST_TARGET: x86_64-unknown-linux-gnu
+
+concurrency:
+  group: docker-server-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-release-env
+        with:
+          rust-target: ${{ env.RUST_TARGET }}
+
+      - name: Install frontend dependencies
+        working-directory: apps
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Docker Web frontend
+        shell: bash
+        run: |
+          pnpm --dir apps exec eslint .
+          pnpm --dir apps exec tsc --noEmit
+          find apps/tests -name '*.test.mjs' ! -name 'tauri-command-registry.test.mjs' -print0 \
+            | xargs -0 node --test --test-concurrency=2
+
+      - name: Build embedded frontend
+        working-directory: apps
+        run: pnpm run build:desktop
+
+      - name: Validate Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test proxy pool storage
+        run: cargo test -p codexmanager-core proxy_pool_storage_tracks_members_health_bindings_and_switches
+
+      - name: Test proxy pool service logic
+        run: cargo test -p codexmanager-service --lib proxy_pool::tests
+
+      - name: Test proxy pool RPC flow
+        run: cargo test -p codexmanager-service --test rpc rpc_proxy_pool_batch_import_balances_accounts_and_manual_binding_unbinds_pool
+
+      - name: Build Linux service binaries
+        shell: bash
+        run: bash scripts/release/build-service-binaries.sh "${RUST_TARGET}"
+
+      - name: Stage Docker release package
+        shell: bash
+        run: bash scripts/release/stage-linux-docker.sh "${CARGO_TARGET_DIR}/${RUST_TARGET}/release"
+
+      - name: Write release checksums
+        shell: bash
+        run: |
+          assets="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/release-assets"
+          git rev-parse HEAD > "${assets}/source-commit.txt"
+          cd "${assets}"
+          sha256sum codexmanager-docker-images.tar.gz docker-compose.release.yml source-commit.txt > SHA256SUMS
+
+      - name: Upload Docker server artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: codexmanager-docker-${{ github.sha }}
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/${{ env.RUST_TARGET }}/release/release-assets/codexmanager-docker-images.tar.gz
+            ${{ env.CARGO_TARGET_DIR }}/${{ env.RUST_TARGET }}/release/release-assets/docker-compose.release.yml
+            ${{ env.CARGO_TARGET_DIR }}/${{ env.RUST_TARGET }}/release/release-assets/source-commit.txt
+            ${{ env.CARGO_TARGET_DIR }}/${{ env.RUST_TARGET }}/release/release-assets/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

@@ -86,6 +86,8 @@ export interface Account {
   proxySource?: string | null;
   proxyProfileId?: string | null;
   proxyProfileName?: string | null;
+  proxyPoolId?: string | null;
+  proxyPoolName?: string | null;
   proxyStatus?: string | null;
   proxyUrl?: string | null;
   proxyIp?: string | null;

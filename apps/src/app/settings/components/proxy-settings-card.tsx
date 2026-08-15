@@ -84,6 +84,7 @@ import { useI18n } from "@/lib/i18n/provider";
 import { ProxyFlag } from "@/components/accounts/account-proxy-cell";
 import { AccountProxyGeoStatusGrid } from "@/components/accounts/account-proxy-status-grid";
 import { AccountProxyStatusHeader } from "@/components/accounts/account-proxy-status-header";
+import { ProxyPoolsPanel } from "@/components/proxy-pools/proxy-pools-panel";
 
 type ProxyFilter =
   | "all"
@@ -1138,6 +1139,8 @@ export function ProxySettingsCard({
           )}
         </CardContent>
       </Card>
+
+      <ProxyPoolsPanel canManage={canManage} />
 
       <ProxyProfileModal
         open={modalOpen}

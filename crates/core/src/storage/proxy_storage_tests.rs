@@ -303,6 +303,7 @@ fn proxy_migrations_use_current_versions_and_pass_foreign_key_check() {
         "118_proxy_profiles",
         "119_proxy_profile_url_tests",
         "120_proxy_history",
+        "custom_proxy_pools_20260815",
     ] {
         let applied: i64 = storage
             .conn
@@ -322,4 +323,160 @@ fn proxy_migrations_use_current_versions_and_pass_foreign_key_check() {
         })
         .expect("foreign key check");
     assert_eq!(violations, 0);
+}
+
+#[test]
+fn proxy_pool_storage_tracks_members_health_bindings_and_switches() {
+    let mut storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    storage
+        .insert_account(&account("account-pool-1"))
+        .expect("insert first account");
+    storage
+        .insert_account(&account("account-pool-2"))
+        .expect("insert second account");
+    let first = create_profile(&storage, "proxy-pool-1");
+    let second = create_profile(&storage, "proxy-pool-2");
+
+    let pool = storage
+        .create_proxy_pool(
+            "pool-us",
+            "US pool",
+            Some("region is maintained by the user"),
+            true,
+            3,
+            2,
+            60,
+            300,
+        )
+        .expect("create proxy pool");
+    assert_eq!(pool.name, "US pool");
+    assert_eq!(pool.failure_threshold, 3);
+
+    storage
+        .add_proxy_pool_member(&pool.id, &first.id, 0)
+        .expect("add first member");
+    storage
+        .add_proxy_pool_member(&pool.id, &second.id, 1)
+        .expect("add second member");
+    let members = storage
+        .list_proxy_pool_members(&pool.id)
+        .expect("list members");
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0].proxy_profile_id, first.id);
+
+    storage
+        .update_proxy_pool_member_health(
+            &pool.id,
+            &first.id,
+            "unhealthy",
+            3,
+            0,
+            Some(500),
+            200,
+            Some("TLS failed"),
+        )
+        .expect("update member health");
+    let unhealthy = storage
+        .find_proxy_pool_member(&pool.id, &first.id)
+        .expect("find member")
+        .expect("member exists");
+    assert_eq!(unhealthy.health_status, "unhealthy");
+    assert_eq!(unhealthy.consecutive_failures, 3);
+    assert_eq!(unhealthy.cooldown_until, Some(500));
+    assert_eq!(
+        storage
+            .list_due_proxy_pool_members(201)
+            .expect("list due members")
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .list_due_proxy_pool_members(300)
+            .expect("skip unhealthy member during cooldown")
+            .len(),
+        1
+    );
+    assert_eq!(
+        storage
+            .list_due_proxy_pool_members(500)
+            .expect("include unhealthy member after cooldown")
+            .len(),
+        2
+    );
+    assert_eq!(
+        storage
+            .list_active_proxy_pool_members()
+            .expect("list all active members")
+            .len(),
+        2
+    );
+
+    storage
+        .upsert_account_proxy_pool_binding(
+            "account-pool-1",
+            &pool.id,
+            Some(&first.id),
+            Some("initial_assignment"),
+        )
+        .expect("bind account");
+    storage
+        .switch_account_proxy_pool_binding(
+            "account-pool-1",
+            Some(&second.id),
+            "health_check_failed",
+        )
+        .expect("switch account");
+    let binding = storage
+        .find_account_proxy_pool_binding("account-pool-1")
+        .expect("find binding")
+        .expect("binding exists");
+    assert_eq!(binding.pool_id, pool.id);
+    assert_eq!(
+        binding.current_proxy_profile_id.as_deref(),
+        Some(second.id.as_str())
+    );
+    assert_eq!(
+        binding.last_switch_reason.as_deref(),
+        Some("health_check_failed")
+    );
+    assert_eq!(
+        storage
+            .count_proxy_pool_current_bindings(&second.id)
+            .expect("count bindings"),
+        1
+    );
+    let logs = storage
+        .list_proxy_pool_switch_logs(Some("account-pool-1"), 10)
+        .expect("list switch logs");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(
+        logs[0].from_proxy_profile_id.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert_eq!(
+        logs[0].to_proxy_profile_id.as_deref(),
+        Some(second.id.as_str())
+    );
+
+    storage
+        .delete_account("account-pool-1")
+        .expect("delete bound account");
+    assert!(storage
+        .find_account_proxy_pool_binding("account-pool-1")
+        .expect("find deleted binding")
+        .is_none());
+    assert!(storage
+        .list_proxy_pool_switch_logs(Some("account-pool-1"), 10)
+        .expect("list deleted account logs")
+        .is_empty());
+
+    storage
+        .delete_proxy_profile(&first.id)
+        .expect("delete unused member profile");
+    assert!(storage
+        .find_proxy_pool_member(&pool.id, &first.id)
+        .expect("find deleted member")
+        .is_none());
 }

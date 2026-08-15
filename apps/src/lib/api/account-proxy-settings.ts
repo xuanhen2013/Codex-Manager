@@ -1,6 +1,6 @@
 import type { ProxyGeoLike } from "@/lib/utils/proxy-geo";
 
-export type AccountProxySource = "custom" | "profile";
+export type AccountProxySource = "custom" | "profile" | "pool";
 
 export interface AccountProxySettings extends ProxyGeoLike {
   accountId: string;
@@ -9,6 +9,11 @@ export interface AccountProxySettings extends ProxyGeoLike {
   proxyProfileId: string | null;
   proxyProfileName: string | null;
   proxyProfileEnabled: boolean | null;
+  proxyPoolId: string | null;
+  proxyPoolName: string | null;
+  proxyPoolAssignedAt: number | null;
+  proxyPoolLastSwitchedAt: number | null;
+  proxyPoolLastSwitchReason: string | null;
   proxyUrl: string;
   proxyUrlRedacted: string;
   status: string;
@@ -24,6 +29,7 @@ export interface AccountProxySetPayload {
   enabled: boolean;
   source?: AccountProxySource | null;
   proxyProfileId?: string | null;
+  proxyPoolId?: string | null;
   proxyUrl?: string | null;
   status?: string | null;
   latencyMs?: number | null;
@@ -87,8 +93,9 @@ export function readAccountProxySettings(payload: unknown): AccountProxySettings
   return {
     accountId: readString(source.accountId ?? source.account_id),
     enabled: Boolean(source.enabled),
-    source:
-      readString(source.source).toLowerCase() === "profile" ? "profile" : "custom",
+    source: ["profile", "pool"].includes(readString(source.source).toLowerCase())
+      ? (readString(source.source).toLowerCase() as AccountProxySource)
+      : "custom",
     proxyProfileId: readNullableString(
       source.proxyProfileId ?? source.proxy_profile_id,
     ),
@@ -97,6 +104,19 @@ export function readAccountProxySettings(payload: unknown): AccountProxySettings
     ),
     proxyProfileEnabled: readNullableBoolean(
       source.proxyProfileEnabled ?? source.proxy_profile_enabled,
+    ),
+    proxyPoolId: readNullableString(source.proxyPoolId ?? source.proxy_pool_id),
+    proxyPoolName: readNullableString(
+      source.proxyPoolName ?? source.proxy_pool_name,
+    ),
+    proxyPoolAssignedAt: readNumber(
+      source.proxyPoolAssignedAt ?? source.proxy_pool_assigned_at,
+    ),
+    proxyPoolLastSwitchedAt: readNumber(
+      source.proxyPoolLastSwitchedAt ?? source.proxy_pool_last_switched_at,
+    ),
+    proxyPoolLastSwitchReason: readNullableString(
+      source.proxyPoolLastSwitchReason ?? source.proxy_pool_last_switch_reason,
     ),
     proxyUrl: readString(source.proxyUrl ?? source.proxy_url),
     proxyUrlRedacted:

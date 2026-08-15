@@ -7,6 +7,7 @@ import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { proxyProfilesClient } from "@/lib/api/proxy-profiles";
+import { proxyPoolsClient } from "@/lib/api/proxy-pools";
 import {
   type AccountProxySettings,
   type AccountProxySource,
@@ -27,7 +28,7 @@ import {
 } from "@/app/accounts/accounts-page-helpers";
 import { AccountsPageView } from "@/app/accounts/accounts-page-view";
 import { isBannedAccount, isLimitedAccount } from "@/lib/utils/usage";
-import type { Account, ProxyProfile } from "@/types";
+import type { Account, ProxyPool, ProxyProfile } from "@/types";
 
 type CleanupStatus =
   | "unavailable"
@@ -135,11 +136,13 @@ export default function AccountsPage() {
   const [proxyDialogAccount, setProxyDialogAccount] = useState<Account | null>(null);
   const [proxySettings, setProxySettings] = useState<AccountProxySettings | null>(null);
   const [proxyProfiles, setProxyProfiles] = useState<ProxyProfile[]>([]);
+  const [proxyPools, setProxyPools] = useState<ProxyPool[]>([]);
   const [isProxySettingsLoading, setIsProxySettingsLoading] = useState(false);
   const [proxyEnabledDraft, setProxyEnabledDraft] = useState(false);
   const [proxySourceDraft, setProxySourceDraft] =
     useState<AccountProxySource>("custom");
   const [proxyProfileIdDraft, setProxyProfileIdDraft] = useState("");
+  const [proxyPoolIdDraft, setProxyPoolIdDraft] = useState("");
   const [proxyUrlDraft, setProxyUrlDraft] = useState("");
 
   const [accountEditorState, setAccountEditorState] =
@@ -518,21 +521,26 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setProxyDialogAccount(account);
     setProxySettings(null);
     setProxyProfiles([]);
+    setProxyPools([]);
     setProxyEnabledDraft(false);
     setProxySourceDraft("profile");
     setProxyProfileIdDraft("");
+    setProxyPoolIdDraft("");
     setProxyUrlDraft("");
     setIsProxySettingsLoading(true);
     try {
-      const [settings, profiles] = await Promise.all([
+      const [settings, profiles, pools] = await Promise.all([
         getAccountProxySettings(account.id),
         proxyProfilesClient.listProxyProfiles(),
+        proxyPoolsClient.list(),
       ]);
       setProxySettings(settings);
       setProxyProfiles(profiles.items);
+      setProxyPools(pools);
       setProxyEnabledDraft(settings.enabled);
       setProxySourceDraft(settings.source);
       setProxyProfileIdDraft(settings.proxyProfileId || "");
+      setProxyPoolIdDraft(settings.proxyPoolId || "");
       setProxyUrlDraft(settings.proxyUrl || "");
     } catch (error) {
       toast.error(`${t("读取账号代理失败")}: ${error instanceof Error ? error.message : String(error)}`);
@@ -550,27 +558,38 @@ const toggleCleanupStatus = (rawStatus: string) => {
     setProxyDialogAccount(null);
     setProxySettings(null);
     setProxyProfiles([]);
+    setProxyPools([]);
     setProxyEnabledDraft(false);
     setProxySourceDraft("custom");
     setProxyProfileIdDraft("");
+    setProxyPoolIdDraft("");
     setProxyUrlDraft("");
   };
 
   const handleTestProxySettings = async () => {
     if (!proxyDialogAccount) return;
     try {
-      const settings = await testAccountProxySettings({
-        accountId: proxyDialogAccount.id,
-        enabled: proxyEnabledDraft,
-        source: "profile",
-        proxyProfileId: proxyProfileIdDraft || null,
-        proxyUrl: "",
-      });
+      const testingSavedPool =
+        proxySourceDraft === "pool" &&
+        proxySettings?.source === "pool" &&
+        proxySettings.proxyPoolId === proxyPoolIdDraft;
+      const settings = await testAccountProxySettings(
+        testingSavedPool
+          ? { accountId: proxyDialogAccount.id }
+          : {
+              accountId: proxyDialogAccount.id,
+              enabled: proxyEnabledDraft,
+              source: "profile",
+              proxyProfileId: proxyProfileIdDraft || null,
+              proxyUrl: "",
+            },
+      );
       if (settings) {
         setProxySettings(settings);
         setProxyEnabledDraft(settings.enabled);
         setProxySourceDraft(settings.source);
         setProxyProfileIdDraft(settings.proxyProfileId || "");
+        setProxyPoolIdDraft(settings.proxyPoolId || "");
         setProxyUrlDraft(settings.proxyUrl || "");
       }
     } catch {
@@ -581,15 +600,30 @@ const toggleCleanupStatus = (rawStatus: string) => {
   const handleSaveProxySettings = async () => {
     if (!proxyDialogAccount) return;
     try {
+      if (!proxyEnabledDraft) {
+        const settings = await clearAccountProxySettings(proxyDialogAccount.id);
+        if (settings) {
+          setProxySettings(settings);
+          setProxyEnabledDraft(false);
+          setProxySourceDraft("profile");
+          setProxyProfileIdDraft("");
+          setProxyPoolIdDraft("");
+        }
+        return;
+      }
       const isTested =
+        proxySourceDraft === "profile" &&
         proxySettings &&
         proxySettings.source === "profile" &&
         proxySettings.proxyProfileId === (proxyProfileIdDraft || null);
       const settings = await setAccountProxySettings({
         accountId: proxyDialogAccount.id,
         enabled: proxyEnabledDraft,
-        source: "profile",
-        proxyProfileId: proxyProfileIdDraft || null,
+        source: proxySourceDraft === "pool" ? "pool" : "profile",
+        proxyProfileId:
+          proxySourceDraft === "profile" ? proxyProfileIdDraft || null : null,
+        proxyPoolId:
+          proxySourceDraft === "pool" ? proxyPoolIdDraft || null : null,
         proxyUrl: "",
         ...(isTested
           ? {
@@ -611,6 +645,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
         setProxyEnabledDraft(settings.enabled);
         setProxySourceDraft(settings.source);
         setProxyProfileIdDraft(settings.proxyProfileId || "");
+        setProxyPoolIdDraft(settings.proxyPoolId || "");
         setProxyUrlDraft(settings.proxyUrl || "");
       }
     } catch {
@@ -627,6 +662,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
         setProxyEnabledDraft(settings.enabled);
         setProxySourceDraft(settings.source);
         setProxyProfileIdDraft(settings.proxyProfileId || "");
+        setProxyPoolIdDraft(settings.proxyPoolId || "");
         setProxyUrlDraft(settings.proxyUrl || "");
       }
     } catch {
@@ -877,10 +913,12 @@ const toggleCleanupStatus = (rawStatus: string) => {
       proxyDialogAccount={proxyDialogAccount}
       proxySettings={proxySettings}
       proxyProfiles={proxyProfiles}
+      proxyPools={proxyPools}
       isProxySettingsLoading={isProxySettingsLoading}
       proxyEnabledDraft={proxyEnabledDraft}
       proxySourceDraft={proxySourceDraft}
       proxyProfileIdDraft={proxyProfileIdDraft}
+      proxyPoolIdDraft={proxyPoolIdDraft}
       proxyUrlDraft={proxyUrlDraft}
       currentEditingAccount={currentEditingAccount}
       labelDraft={labelDraft}
@@ -919,6 +957,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       setProxyEnabledDraft={setProxyEnabledDraft}
       setProxySourceDraft={setProxySourceDraft}
       setProxyProfileIdDraft={setProxyProfileIdDraft}
+      setProxyPoolIdDraft={setProxyPoolIdDraft}
       setProxyUrlDraft={setProxyUrlDraft}
       setAccountEditorState={setAccountEditorState}
       setLabelDraft={setLabelDraft}

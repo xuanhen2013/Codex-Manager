@@ -27,6 +27,63 @@ export interface ProxyProfileListResult {
   items: ProxyProfile[];
 }
 
+export interface ProxyPoolMember {
+  proxyProfileId: string;
+  proxyProfileName: string;
+  proxyUrlRedacted: string;
+  sortOrder: number;
+  enabled: boolean;
+  profileEnabled: boolean;
+  healthStatus: string;
+  consecutiveFailures: number;
+  consecutiveSuccesses: number;
+  cooldownUntil: number | null;
+  lastCheckAt: number | null;
+  lastError: string | null;
+  latencyMs: number | null;
+  currentAccountsCount: number;
+}
+
+export interface ProxyPool {
+  id: string;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  failureThreshold: number;
+  recoveryThreshold: number;
+  heartbeatIntervalSecs: number;
+  cooldownSecs: number;
+  accountsCount: number;
+  healthyMembersCount: number;
+  members: ProxyPoolMember[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProxyBatchImportItemResult {
+  line: number;
+  status: "created" | "duplicate" | "failed";
+  name: string;
+  proxyProfileId: string | null;
+  proxyUrlRedacted: string | null;
+  error: string | null;
+}
+
+export interface ProxyBatchImportResult {
+  total: number;
+  created: number;
+  duplicates: number;
+  failed: number;
+  items: ProxyBatchImportItemResult[];
+}
+
+export interface ProxyPoolHealthCycleResult {
+  checked: number;
+  healthy: number;
+  failed: number;
+  switchedAccounts: number;
+}
+
 export interface ProxyProfileUrlTestResult {
   id: number;
   proxyProfileId: string;

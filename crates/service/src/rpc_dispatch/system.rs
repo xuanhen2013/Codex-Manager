@@ -1,11 +1,14 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse, ProxyProfileListResult};
 
 use crate::{
-    cancel_proxy_test_job, create_proxy_profile, delete_proxy_profile,
-    get_proxy_profile_diagnostics_history, get_proxy_profile_latency_test_history,
-    get_proxy_profile_speed_test_history, get_proxy_test_job, list_proxy_profiles,
-    proxy_test_presets, test_proxy_profile, test_proxy_profile_cloudflare_style_speed,
-    test_proxy_profile_latency, test_proxy_profile_speed, update_proxy_profile,
+    add_proxy_pool_members, cancel_proxy_test_job, create_proxy_pool, create_proxy_profile,
+    delete_proxy_pool, delete_proxy_profile, get_proxy_profile_diagnostics_history,
+    get_proxy_profile_latency_test_history, get_proxy_profile_speed_test_history,
+    get_proxy_test_job, import_proxy_profiles_batch, list_proxy_pool_switch_logs, list_proxy_pools,
+    list_proxy_profiles, proxy_test_presets, remove_proxy_pool_member,
+    run_proxy_pool_health_cycle_now, set_proxy_pool_member_enabled, test_proxy_profile,
+    test_proxy_profile_cloudflare_style_speed, test_proxy_profile_latency,
+    test_proxy_profile_speed, update_proxy_pool, update_proxy_profile,
 };
 
 pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -94,6 +97,65 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 super::i64_param(req, "limit").map(|v| v as usize),
             ))
         }
+        "system/proxy/import-batch" => {
+            let parsed = req
+                .params
+                .clone()
+                .ok_or_else(|| "params are required".to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<crate::proxy_pool::ProxyBatchImportRequest>(value)
+                        .map_err(|err| format!("invalid batch import params: {err}"))
+                });
+            match parsed {
+                Ok(request) => super::value_or_error(import_proxy_profiles_batch(request)),
+                Err(err) => super::value_or_error(Err::<serde_json::Value, String>(err)),
+            }
+        }
+        "system/proxy-pool/list" => super::value_or_error(list_proxy_pools()),
+        "system/proxy-pool/create" => super::value_or_error(create_proxy_pool(
+            super::string_param(req, "name"),
+            super::string_param(req, "description"),
+            super::bool_param(req, "enabled"),
+            super::i64_param(req, "failureThreshold"),
+            super::i64_param(req, "recoveryThreshold"),
+            super::i64_param(req, "heartbeatIntervalSecs"),
+            super::i64_param(req, "cooldownSecs"),
+        )),
+        "system/proxy-pool/update" => super::value_or_error(update_proxy_pool(
+            pool_id_param(req).unwrap_or(""),
+            super::string_param(req, "name"),
+            super::string_param(req, "description"),
+            super::bool_param(req, "enabled"),
+            super::i64_param(req, "failureThreshold"),
+            super::i64_param(req, "recoveryThreshold"),
+            super::i64_param(req, "heartbeatIntervalSecs"),
+            super::i64_param(req, "cooldownSecs"),
+        )),
+        "system/proxy-pool/delete" => {
+            super::ok_or_error(delete_proxy_pool(pool_id_param(req).unwrap_or("")))
+        }
+        "system/proxy-pool/members/add" => super::value_or_error(add_proxy_pool_members(
+            pool_id_param(req).unwrap_or(""),
+            string_array_param(req, "proxyProfileIds"),
+        )),
+        "system/proxy-pool/members/remove" => super::value_or_error(remove_proxy_pool_member(
+            pool_id_param(req).unwrap_or(""),
+            proxy_profile_id_param(req).unwrap_or(""),
+        )),
+        "system/proxy-pool/members/set-enabled" => {
+            super::value_or_error(set_proxy_pool_member_enabled(
+                pool_id_param(req).unwrap_or(""),
+                proxy_profile_id_param(req).unwrap_or(""),
+                super::bool_param(req, "enabled").unwrap_or(true),
+            ))
+        }
+        "system/proxy-pool/health-check" => {
+            super::value_or_error(run_proxy_pool_health_cycle_now())
+        }
+        "system/proxy-pool/switch-logs" => super::value_or_error(list_proxy_pool_switch_logs(
+            super::str_param(req, "accountId"),
+            super::i64_param(req, "limit").map(|value| value as usize),
+        )),
         _ => return None,
     };
 
@@ -102,6 +164,25 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
 
 fn proxy_profile_id_param<'a>(req: &'a JsonRpcRequest) -> Option<&'a str> {
     super::str_param(req, "id").or_else(|| super::str_param(req, "proxyId"))
+}
+
+fn pool_id_param<'a>(req: &'a JsonRpcRequest) -> Option<&'a str> {
+    super::str_param(req, "poolId").or_else(|| super::str_param(req, "pool_id"))
+}
+
+fn string_array_param(req: &JsonRpcRequest, key: &str) -> Vec<String> {
+    req.params
+        .as_ref()
+        .and_then(|params| params.get(key))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn job_id_param<'a>(req: &'a JsonRpcRequest) -> Option<&'a str> {

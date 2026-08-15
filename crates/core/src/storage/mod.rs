@@ -27,6 +27,7 @@ mod model_options;
 mod model_price_rules;
 mod model_sources;
 mod plugins;
+mod proxy_pools;
 mod proxy_profiles;
 mod proxy_tests;
 mod quota_pools;
@@ -364,6 +365,58 @@ pub struct ProxyProfileUpdateInput {
     pub timezone_utc: Option<String>,
     pub tags_json: Option<String>,
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyPool {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    pub failure_threshold: i64,
+    pub recovery_threshold: i64,
+    pub heartbeat_interval_secs: i64,
+    pub cooldown_secs: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyPoolMember {
+    pub pool_id: String,
+    pub proxy_profile_id: String,
+    pub sort_order: i64,
+    pub enabled: bool,
+    pub health_status: String,
+    pub consecutive_failures: i64,
+    pub consecutive_successes: i64,
+    pub cooldown_until: Option<i64>,
+    pub last_check_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountProxyPoolBinding {
+    pub account_id: String,
+    pub pool_id: String,
+    pub current_proxy_profile_id: Option<String>,
+    pub assigned_at: i64,
+    pub last_switched_at: Option<i64>,
+    pub last_switch_reason: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyPoolSwitchLog {
+    pub id: i64,
+    pub account_id: String,
+    pub pool_id: String,
+    pub from_proxy_profile_id: Option<String>,
+    pub to_proxy_profile_id: Option<String>,
+    pub reason: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -2292,6 +2345,11 @@ impl Storage {
             "130_accounts_subject_identity",
             include_str!("../../migrations/130_accounts_subject_identity.sql"),
         )?;
+        self.apply_sql_or_compat_migration(
+            "custom_proxy_pools_20260815",
+            include_str!("../../migrations/custom_proxy_pools_20260815.sql"),
+            |s| s.ensure_proxy_pool_tables(),
+        )?;
         self.apply_sql_migration(
             "custom_actual_usage_billing_repair_20260813",
             include_str!("../../migrations/custom_actual_usage_billing_repair_20260813.sql"),
@@ -2314,6 +2372,7 @@ impl Storage {
         self.ensure_account_subscriptions_table()?;
         self.ensure_account_proxy_settings_table()?;
         self.ensure_proxy_profiles_table()?;
+        self.ensure_proxy_pool_tables()?;
         self.ensure_proxy_profile_url_tests_table()?;
         self.ensure_proxy_history_tables()?;
         self.ensure_quota_pool_tables()?;

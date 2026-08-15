@@ -24,6 +24,7 @@ mod logging;
 mod model_groups;
 mod models_v2;
 mod plugin;
+mod proxy_pool;
 mod proxy_registry;
 mod quota;
 mod requestlog;
@@ -73,6 +74,12 @@ pub(crate) use model_groups::{
     allowed_model_slugs_for_api_key, delete_model_group, read_model_groups,
     resolve_api_key_model_group_access, set_model_group_models, set_model_group_users,
     upsert_model_group,
+};
+pub(crate) use proxy_pool::{
+    add_proxy_pool_members, bind_account_to_proxy_pool, create_proxy_pool, delete_proxy_pool,
+    ensure_proxy_pool_health_monitor, import_proxy_profiles_batch, list_proxy_pool_switch_logs,
+    list_proxy_pools, remove_proxy_pool_member, run_proxy_pool_health_cycle,
+    run_proxy_pool_health_cycle_now, set_proxy_pool_member_enabled, update_proxy_pool,
 };
 pub(crate) use proxy_registry::{
     cancel_proxy_test_job, create_proxy_profile, delete_proxy_profile,

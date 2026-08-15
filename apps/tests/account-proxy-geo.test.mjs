@@ -47,6 +47,9 @@ test("normalizeAccountProxySummaryFields 映射 snake_case 字段到 camelCase",
 		proxy_ip: "1.1.1.1",
 		proxy_country_code: "us",
 		proxy_country_name: "United States",
+		proxy_source: "pool",
+		proxy_pool_id: "pool-us",
+		proxy_pool_name: "US pool",
 		proxy_region_name: "California",
 		proxy_city_name: "Los Angeles",
 		proxy_geo_checked_at: 123456789,
@@ -59,6 +62,9 @@ test("normalizeAccountProxySummaryFields 映射 snake_case 字段到 camelCase",
 	assert.equal(result.proxyIp, "1.1.1.1");
 	assert.equal(result.proxyCountryCode, "US"); // Should be normalized to upper
 	assert.equal(result.proxyCountryName, "United States");
+	assert.equal(result.proxySource, "pool");
+	assert.equal(result.proxyPoolId, "pool-us");
+	assert.equal(result.proxyPoolName, "US pool");
 	assert.equal(result.proxyRegionName, "California");
 	assert.equal(result.proxyCityName, "Los Angeles");
 	assert.equal(result.proxyGeoCheckedAt, 123456789);

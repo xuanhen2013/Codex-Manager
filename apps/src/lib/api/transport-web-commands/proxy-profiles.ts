@@ -15,5 +15,15 @@ export function createProxyProfilesWebCommands(): Record<string, WebCommandDescr
     service_system_proxy_speed_test_history: { rpcMethod: "system/proxy/speed-test-history" },
     service_system_proxy_latency_test_history: { rpcMethod: "system/proxy/latency-test-history" },
     service_system_proxy_diagnostics_history: { rpcMethod: "system/proxy/diagnostics-history" },
+    service_system_proxy_import_batch: { rpcMethod: "system/proxy/import-batch" },
+    service_system_proxy_pool_list: { rpcMethod: "system/proxy-pool/list" },
+    service_system_proxy_pool_create: { rpcMethod: "system/proxy-pool/create" },
+    service_system_proxy_pool_update: { rpcMethod: "system/proxy-pool/update" },
+    service_system_proxy_pool_delete: { rpcMethod: "system/proxy-pool/delete" },
+    service_system_proxy_pool_members_add: { rpcMethod: "system/proxy-pool/members/add" },
+    service_system_proxy_pool_members_remove: { rpcMethod: "system/proxy-pool/members/remove" },
+    service_system_proxy_pool_members_set_enabled: { rpcMethod: "system/proxy-pool/members/set-enabled" },
+    service_system_proxy_pool_health_check: { rpcMethod: "system/proxy-pool/health-check" },
+    service_system_proxy_pool_switch_logs: { rpcMethod: "system/proxy-pool/switch-logs" },
   };
 }

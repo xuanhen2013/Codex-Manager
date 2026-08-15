@@ -64,6 +64,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -85,7 +86,7 @@ import type {
   AccountProxySettings,
   AccountProxySource,
 } from "@/lib/api/account-client";
-import type { Account, ProxyProfile } from "@/types";
+import type { Account, ProxyPool, ProxyProfile } from "@/types";
 import { AccountProxyCell } from "@/components/accounts/account-proxy-cell";
 import { AccountProxyGeoStatusGrid } from "@/components/accounts/account-proxy-status-grid";
 import { AccountProxyStatusHeader } from "@/components/accounts/account-proxy-status-header";
@@ -155,10 +156,12 @@ export interface AccountsPageViewProps {
   proxyDialogAccount: Account | null;
   proxySettings: AccountProxySettings | null;
   proxyProfiles: ProxyProfile[];
+  proxyPools: ProxyPool[];
   isProxySettingsLoading: boolean;
   proxyEnabledDraft: boolean;
   proxySourceDraft: AccountProxySource;
   proxyProfileIdDraft: string;
+  proxyPoolIdDraft: string;
   proxyUrlDraft: string;
   selectedAccount: Account | null;
   accountEditorState: AccountEditorState | null;
@@ -200,6 +203,7 @@ export interface AccountsPageViewProps {
   setProxyEnabledDraft: Dispatch<SetStateAction<boolean>>;
   setProxySourceDraft: Dispatch<SetStateAction<AccountProxySource>>;
   setProxyProfileIdDraft: Dispatch<SetStateAction<string>>;
+  setProxyPoolIdDraft: Dispatch<SetStateAction<string>>;
   setProxyUrlDraft: Dispatch<SetStateAction<string>>;
   setAccountEditorState: Dispatch<SetStateAction<AccountEditorState | null>>;
   setLabelDraft: Dispatch<SetStateAction<string>>;
@@ -289,9 +293,12 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     proxyDialogAccount,
     proxySettings,
     proxyProfiles,
+    proxyPools,
     isProxySettingsLoading,
     proxyEnabledDraft,
+    proxySourceDraft,
     proxyProfileIdDraft,
+    proxyPoolIdDraft,
     selectedAccount,
     accountEditorState,
     deleteDialogState,
@@ -330,7 +337,9 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     setDeleteDialogState,
     setCleanupDialogOpen,
     setProxyEnabledDraft,
+    setProxySourceDraft,
     setProxyProfileIdDraft,
+    setProxyPoolIdDraft,
     setAccountEditorState,
     setLabelDraft,
     setGroupNameDraft,
@@ -384,6 +393,11 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isProxySettingsLoading || isSavingAccountProxy || isClearingAccountProxy;
   const selectedProxyProfile =
     proxyProfiles.find((profile) => profile.id === proxyProfileIdDraft) || null;
+  const selectedProxyPool =
+    proxyPools.find((pool) => pool.id === proxyPoolIdDraft) || null;
+  const savedPoolSelection =
+    proxySettings?.source === "pool" &&
+    proxySettings.proxyPoolId === proxyPoolIdDraft;
   const needsMissingProxyProfileOption =
     Boolean(proxyProfileIdDraft) && !selectedProxyProfile;
   const cleanupSelectedCount = cleanupStatusOptions.reduce(
@@ -1426,8 +1440,23 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               />
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="account-proxy-profile">{t("代理配置")}</Label>
+            {proxyEnabledDraft ? (
+              <Tabs
+                value={proxySourceDraft === "pool" ? "pool" : "profile"}
+                onValueChange={(value) =>
+                  setProxySourceDraft(value === "pool" ? "pool" : "profile")
+                }
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="profile">{t("固定代理")}</TabsTrigger>
+                  <TabsTrigger value="pool">{t("代理池")}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            ) : null}
+
+            {proxyEnabledDraft && proxySourceDraft !== "pool" ? (
+              <div className="grid gap-2">
+                <Label htmlFor="account-proxy-profile">{t("代理配置")}</Label>
               <Select
                 value={proxyProfileIdDraft || "__empty__"}
                 disabled={accountProxyBusy || proxyProfiles.length === 0}
@@ -1487,7 +1516,69 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     : t("未选择代理配置")}
                 </div>
               </div>
-            </div>
+              </div>
+            ) : null}
+
+            {proxyEnabledDraft && proxySourceDraft === "pool" ? (
+              <div className="grid gap-2">
+                <Label htmlFor="account-proxy-pool">{t("代理池")}</Label>
+                <Select
+                  value={proxyPoolIdDraft || "__empty__"}
+                  disabled={accountProxyBusy || proxyPools.length === 0}
+                  onValueChange={(value) =>
+                    setProxyPoolIdDraft(
+                      !value || value === "__empty__" ? "" : value,
+                    )
+                  }
+                >
+                  <SelectTrigger id="account-proxy-pool" className="rounded-xl bg-card/50">
+                    <SelectValue
+                      placeholder={
+                        proxyPools.length === 0
+                          ? t("暂无可用代理池")
+                          : t("选择代理池")
+                      }
+                    >
+                      {selectedProxyPool?.name || proxySettings?.proxyPoolName || undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {proxyPools.length === 0 ? (
+                      <SelectItem value="__empty__" disabled>
+                        {t("暂无可用代理池")}
+                      </SelectItem>
+                    ) : null}
+                    {proxyPools
+                      .filter((pool) => pool.enabled || pool.id === proxyPoolIdDraft)
+                      .map((pool) => (
+                        <SelectItem key={pool.id} value={pool.id}>
+                          {pool.name} · {pool.members.length} {t("个代理")}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-3 text-sm leading-5 text-muted-foreground">
+                  <div>
+                    {selectedProxyPool
+                      ? t("池内 {total} 条代理，{healthy} 条健康", {
+                          total: selectedProxyPool.members.length,
+                          healthy: selectedProxyPool.healthyMembersCount,
+                        })
+                      : t("未选择代理池")}
+                  </div>
+                  <div className="mt-1 break-all">
+                    {savedPoolSelection
+                      ? `${t("当前代理")}: ${proxySettings?.proxyProfileName || proxySettings?.proxyUrlRedacted || "-"}`
+                      : t("保存后由代理池分配具体代理")}
+                  </div>
+                  {savedPoolSelection && proxySettings?.proxyPoolLastSwitchReason ? (
+                    <div className="mt-1 text-xs">
+                      {t("上次切换原因")}: {proxySettings.proxyPoolLastSwitchReason}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             {isProxySettingsLoading ? (
               <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
@@ -1519,7 +1610,10 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             <Button
               type="button"
               variant="destructive"
-              disabled={accountProxyBusy || isTestingAccountProxy}
+              disabled={
+                accountProxyBusy ||
+                isTestingAccountProxy
+              }
               onClick={() => void handleClearProxySettings()}
             >
               {isClearingAccountProxy ? (
@@ -1530,7 +1624,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             <Button
               type="button"
               variant="outline"
-              disabled={accountProxyBusy || isTestingAccountProxy}
+              disabled={
+                accountProxyBusy ||
+                isTestingAccountProxy ||
+                (proxyEnabledDraft &&
+                  (proxySourceDraft === "pool"
+                    ? !proxyPoolIdDraft || !savedPoolSelection
+                    : !proxyProfileIdDraft))
+              }
               onClick={() => void handleTestProxySettings()}
             >
               <RefreshCw
@@ -1549,7 +1650,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             </DialogClose>
             <Button
               type="button"
-              disabled={accountProxyBusy || isTestingAccountProxy}
+              disabled={
+                accountProxyBusy ||
+                isTestingAccountProxy ||
+                (proxyEnabledDraft &&
+                  (proxySourceDraft === "pool"
+                    ? !proxyPoolIdDraft
+                    : !proxyProfileIdDraft))
+              }
               onClick={() => void handleSaveProxySettings()}
             >
               {isSavingAccountProxy ? (

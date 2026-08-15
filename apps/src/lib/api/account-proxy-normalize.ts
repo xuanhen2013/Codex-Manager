@@ -7,6 +7,8 @@ export type AccountProxySummaryFields = Pick<
   | "proxySource"
   | "proxyProfileId"
   | "proxyProfileName"
+  | "proxyPoolId"
+  | "proxyPoolName"
   | "proxyStatus"
   | "proxyUrl"
   | "proxyIp"
@@ -59,6 +61,8 @@ export function normalizeAccountProxySummaryFields(
       asString(source.proxyProfileId ?? source.proxy_profile_id) || null,
     proxyProfileName:
       asString(source.proxyProfileName ?? source.proxy_profile_name) || null,
+    proxyPoolId: asString(source.proxyPoolId ?? source.proxy_pool_id) || null,
+    proxyPoolName: asString(source.proxyPoolName ?? source.proxy_pool_name) || null,
     proxyStatus: asString(source.proxyStatus ?? source.proxy_status) || null,
     proxyUrl: asString(source.proxyUrl ?? source.proxy_url) || null,
     proxyIp: asString(source.proxyIp ?? source.proxy_ip) || null,

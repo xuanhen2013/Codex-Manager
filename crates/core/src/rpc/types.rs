@@ -200,6 +200,8 @@ pub struct AccountSummary {
     pub proxy_source: Option<String>,
     pub proxy_profile_id: Option<String>,
     pub proxy_profile_name: Option<String>,
+    pub proxy_pool_id: Option<String>,
+    pub proxy_pool_name: Option<String>,
     pub proxy_status: Option<String>,
     pub proxy_url: Option<String>,
     pub proxy_ip: Option<String>,

@@ -150,23 +150,33 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
             let geo_error =
                 super::str_param(req, "geoError").or_else(|| super::str_param(req, "geo_error"));
 
-            super::value_or_error(account_proxy::set_account_proxy_settings(
-                account_id,
-                enabled,
-                source,
-                proxy_profile_id,
-                proxy_url,
-                status,
-                latency_ms,
-                last_error,
-                ip,
-                country_code,
-                country_name,
-                region_name,
-                city_name,
-                geo_checked_at,
-                geo_error,
-            ))
+            if source == Some("pool") && !enabled {
+                super::value_or_error(account_proxy::clear_account_proxy_settings(account_id))
+            } else if source == Some("pool") {
+                let pool_id = first_str_param(req, &["proxyPoolId", "proxy_pool_id"]).unwrap_or("");
+                super::value_or_error(
+                    crate::bind_account_to_proxy_pool(account_id, pool_id)
+                        .and_then(|_| account_proxy::get_account_proxy_settings(account_id)),
+                )
+            } else {
+                super::value_or_error(account_proxy::set_account_proxy_settings(
+                    account_id,
+                    enabled,
+                    source,
+                    proxy_profile_id,
+                    proxy_url,
+                    status,
+                    latency_ms,
+                    last_error,
+                    ip,
+                    country_code,
+                    country_name,
+                    region_name,
+                    city_name,
+                    geo_checked_at,
+                    geo_error,
+                ))
+            }
         }
         "account/proxy/clear" => {
             let account_id = first_str_param(req, &["accountId", "account_id"]).unwrap_or("");

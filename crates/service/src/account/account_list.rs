@@ -2,9 +2,9 @@ use codexmanager_core::{
     rpc::types::{AccountListResult, AccountSummary},
     storage::{
         derive_proxy_profile_url_metadata, Account, AccountListSummaryRow, AccountMetadata,
-        AccountProxySettings, AccountQuotaCapacityOverride, AccountSubscription,
-        AccountSummaryStorageSnapshot, AccountSummaryStorageSnapshotOptions, AccountTokenPlan,
-        ProxyProfile, UsageSnapshotRecord,
+        AccountProxyPoolBinding, AccountProxySettings, AccountQuotaCapacityOverride,
+        AccountSubscription, AccountSummaryStorageSnapshot, AccountSummaryStorageSnapshotOptions,
+        AccountTokenPlan, ProxyPool, ProxyProfile, UsageSnapshotRecord,
     },
 };
 use std::collections::HashMap;
@@ -64,6 +64,8 @@ struct AccountSummarySetup {
     quota_overrides: HashMap<String, AccountQuotaCapacityOverride>,
     proxy_settings: HashMap<String, AccountProxySettings>,
     proxy_profiles: HashMap<String, ProxyProfile>,
+    proxy_pool_bindings: HashMap<String, AccountProxyPoolBinding>,
+    proxy_pools: HashMap<String, ProxyPool>,
 }
 
 impl From<&Account> for AccountSummaryParts {
@@ -205,6 +207,8 @@ fn to_account_summary_with_reason(
         proxy_source: None,
         proxy_profile_id: None,
         proxy_profile_name: None,
+        proxy_pool_id: None,
+        proxy_pool_name: None,
         proxy_status: None,
         proxy_url: None,
         proxy_ip: None,
@@ -329,6 +333,28 @@ fn load_account_summary_setup(
         .map(|item| (item.account_id.clone(), item))
         .collect();
     setup.proxy_profiles = proxy_profiles;
+    let account_id_set = account_ids.iter().collect::<std::collections::HashSet<_>>();
+    let proxy_pool_bindings = storage
+        .list_account_proxy_pool_bindings()
+        .map_err(|err| format!("load account proxy pool bindings failed: {err}"))?
+        .into_iter()
+        .filter(|binding| account_id_set.contains(&binding.account_id))
+        .collect::<Vec<_>>();
+    let proxy_pool_ids = proxy_pool_bindings
+        .iter()
+        .map(|binding| binding.pool_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    setup.proxy_pool_bindings = proxy_pool_bindings
+        .into_iter()
+        .map(|binding| (binding.account_id.clone(), binding))
+        .collect();
+    setup.proxy_pools = storage
+        .list_proxy_pools()
+        .map_err(|err| format!("load proxy pools failed: {err}"))?
+        .into_iter()
+        .filter(|pool| proxy_pool_ids.contains(&pool.id))
+        .map(|pool| (pool.id.clone(), pool))
+        .collect();
     Ok(setup)
 }
 
@@ -365,6 +391,8 @@ fn account_summary_setup_from_snapshot(
         quota_overrides,
         proxy_settings: HashMap::new(),
         proxy_profiles: HashMap::new(),
+        proxy_pool_bindings: HashMap::new(),
+        proxy_pools: HashMap::new(),
     }
 }
 
@@ -395,6 +423,8 @@ where
                 &setup.quota_overrides,
                 &setup.proxy_settings,
                 &setup.proxy_profiles,
+                &setup.proxy_pool_bindings,
+                &setup.proxy_pools,
             )
         })
         .collect()
@@ -426,6 +456,8 @@ fn map_account_summary<A>(
     quota_overrides: &HashMap<String, AccountQuotaCapacityOverride>,
     proxy_settings: &HashMap<String, AccountProxySettings>,
     proxy_profiles: &HashMap<String, ProxyProfile>,
+    proxy_pool_bindings: &HashMap<String, AccountProxyPoolBinding>,
+    proxy_pools: &HashMap<String, ProxyPool>,
 ) -> AccountSummary
 where
     A: Into<AccountSummaryParts>,
@@ -450,6 +482,7 @@ where
     let account_metadata = metadata.get(&account_id);
     let quota_override = quota_overrides.get(&account_id);
     let proxy_setting = proxy_settings.get(&account_id);
+    let proxy_pool_binding = proxy_pool_bindings.get(&account_id);
     let (fallback_plan_type, plan_type_raw) = match plan {
         Some(value) => (Some(value.normalized), value.raw),
         None => (None, None),
@@ -497,9 +530,19 @@ where
             .as_ref()
             .and_then(|id| proxy_profiles.get(id));
         summary.proxy_enabled = Some(proxy.enabled);
-        summary.proxy_source = Some(proxy_source.clone());
+        summary.proxy_source = Some(if proxy_pool_binding.is_some() {
+            "pool".to_string()
+        } else {
+            proxy_source.clone()
+        });
         summary.proxy_profile_id = proxy.proxy_profile_id.clone();
         summary.proxy_profile_name = proxy_profile.map(|profile| profile.name.clone());
+        if let Some(binding) = proxy_pool_binding {
+            summary.proxy_pool_id = Some(binding.pool_id.clone());
+            summary.proxy_pool_name = proxy_pools
+                .get(&binding.pool_id)
+                .map(|pool| pool.name.clone());
+        }
         summary.proxy_url = Some(match proxy_source.as_str() {
             "profile" => proxy_profile
                 .map(|profile| profile.proxy_url_redacted.clone())

@@ -550,6 +550,7 @@ export const accountClient = {
           enabled: params.enabled,
           source: params.source ?? null,
           proxyProfileId: params.proxyProfileId ?? null,
+          proxyPoolId: params.proxyPoolId ?? null,
           proxyUrl: params.proxyUrl ?? null,
           status: params.status ?? null,
           latencyMs: params.latencyMs ?? null,

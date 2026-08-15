@@ -1,0 +1,61 @@
+"use client";
+
+import type { MessageCatalog } from "../types";
+
+export const EN_PROXY_POOLS_MESSAGES: MessageCatalog = {
+  "上次切换原因": "Last switch reason",
+  "个代理": "proxies",
+  "代理池": "Proxy pool",
+  "保存后由代理池分配具体代理": "The pool will assign a proxy after saving",
+  "固定代理": "Fixed proxy",
+  "当前代理": "Current proxy",
+  "暂无可用代理池": "No available proxy pools",
+  "未选择代理池": "No proxy pool selected",
+  "池内 {total} 条代理，{healthy} 条健康":
+    "{total} proxies in the pool, {healthy} healthy",
+  "选择代理池": "Select proxy pool",
+  "仅创建代理": "Create proxies only",
+  "例如：US": "For example: US",
+  "名称前缀": "Name prefix",
+  "已创建": "Created",
+  "已创建 {count} 条代理": "Created {count} proxies",
+  "总计": "Total",
+  "批量导入代理": "Import proxies in bulk",
+  "每行一条，支持完整 URL、host:port 和 host:port:user:password。":
+    "One proxy per line. Supports full URLs, host:port, and host:port:user:password.",
+  "目标代理池": "Target proxy pool",
+  "重复": "Duplicates",
+  "默认协议": "Default scheme",
+  "代理池名称不能为空": "Proxy pool name is required",
+  "代理池已创建": "Proxy pool created",
+  "代理池已更新": "Proxy pool updated",
+  "代理池的地区和用途由你维护，账号只会在当前池内切换。":
+    "You maintain each pool's region and purpose. Accounts only switch within their current pool.",
+  "例如：美国住宅代理池": "For example: US residential proxy pool",
+  "启用代理池": "Enable proxy pool",
+  "已属于其他代理池": "Already belongs to another proxy pool",
+  "心跳间隔（秒）": "Heartbeat interval (seconds)",
+  "故障冷却（秒）": "Failure cooldown (seconds)",
+  "新建代理池": "New proxy pool",
+  "池内代理": "Pool proxies",
+  "编辑代理池": "Edit proxy pool",
+  "连续失败次数": "Consecutive failure threshold",
+  "代理池已删除": "Proxy pool deleted",
+  "删除代理池": "Delete proxy pool",
+  "导入代理": "Import proxies",
+  "展开": "Expand",
+  "已检查 {checked} 条代理，切换 {switched} 个账号":
+    "Checked {checked} proxies and switched {switched} accounts",
+  "心跳策略": "Heartbeat policy",
+  "收起": "Collapse",
+  "无备注": "No notes",
+  "暂无代理池": "No proxy pools",
+  "次失败": "failures",
+  "池内暂无代理": "No proxies in this pool",
+  "确定删除 {name} 吗？": "Delete {name}?",
+  "移出代理池": "Remove from proxy pool",
+  "立即检测": "Check now",
+  "绑定账号": "Bound accounts",
+  "账号只在绑定的代理池内自动切换。":
+    "Accounts automatically switch only within their bound proxy pool.",
+};

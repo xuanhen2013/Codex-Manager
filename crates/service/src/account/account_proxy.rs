@@ -54,6 +54,11 @@ pub(crate) struct AccountProxySettingsResponse {
     pub proxy_profile_id: Option<String>,
     pub proxy_profile_name: Option<String>,
     pub proxy_profile_enabled: Option<bool>,
+    pub proxy_pool_id: Option<String>,
+    pub proxy_pool_name: Option<String>,
+    pub proxy_pool_assigned_at: Option<i64>,
+    pub proxy_pool_last_switched_at: Option<i64>,
+    pub proxy_pool_last_switch_reason: Option<String>,
     pub proxy_url: String,
     pub proxy_url_redacted: String,
     pub status: String,
@@ -126,6 +131,45 @@ pub(crate) fn set_account_proxy_settings(
     city_name: Option<&str>,
     geo_checked_at: Option<i64>,
     geo_error: Option<&str>,
+) -> Result<AccountProxySettingsResponse, String> {
+    set_account_proxy_settings_internal(
+        account_id,
+        enabled,
+        source,
+        proxy_profile_id,
+        proxy_url,
+        status,
+        latency_ms,
+        last_error,
+        ip,
+        country_code,
+        country_name,
+        region_name,
+        city_name,
+        geo_checked_at,
+        geo_error,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_account_proxy_settings_internal(
+    account_id: &str,
+    enabled: bool,
+    source: Option<&str>,
+    proxy_profile_id: Option<&str>,
+    proxy_url: Option<&str>,
+    status: Option<&str>,
+    latency_ms: Option<i64>,
+    last_error: Option<&str>,
+    ip: Option<&str>,
+    country_code: Option<&str>,
+    country_name: Option<&str>,
+    region_name: Option<&str>,
+    city_name: Option<&str>,
+    geo_checked_at: Option<i64>,
+    geo_error: Option<&str>,
+    preserve_pool_binding: bool,
 ) -> Result<AccountProxySettingsResponse, String> {
     let storage = open_storage_for_account(account_id)?;
     let account_id = normalize_account_id(account_id)?;
@@ -296,6 +340,11 @@ pub(crate) fn set_account_proxy_settings(
             final_flag_emoji,
         )
         .map_err(|err| format!("store account proxy settings failed: {err}"))?;
+    if !preserve_pool_binding {
+        storage
+            .delete_account_proxy_pool_binding(account_id)
+            .map_err(|err| format!("clear account proxy pool binding failed: {err}"))?;
+    }
     crate::gateway::invalidate_account_proxy_cache(account_id);
 
     if enabled && status.is_none() {
@@ -315,6 +364,30 @@ pub(crate) fn set_account_proxy_settings(
     read_or_default_response(&storage, account_id)
 }
 
+pub(crate) fn set_account_proxy_profile_for_pool(
+    account_id: &str,
+    proxy_profile_id: &str,
+) -> Result<AccountProxySettingsResponse, String> {
+    set_account_proxy_settings_internal(
+        account_id,
+        true,
+        Some("profile"),
+        Some(proxy_profile_id),
+        None,
+        Some(STATUS_UNCHECKED),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        true,
+    )
+}
+
 pub(crate) fn clear_account_proxy_settings(
     account_id: &str,
 ) -> Result<AccountProxySettingsResponse, String> {
@@ -324,6 +397,9 @@ pub(crate) fn clear_account_proxy_settings(
     storage
         .clear_account_proxy_settings(account_id)
         .map_err(|err| format!("clear account proxy settings failed: {err}"))?;
+    storage
+        .delete_account_proxy_pool_binding(account_id)
+        .map_err(|err| format!("clear account proxy pool binding failed: {err}"))?;
     crate::gateway::invalidate_account_proxy_cache(account_id);
     Ok(default_response(account_id))
 }
@@ -1094,10 +1170,25 @@ fn read_or_default_response(
     let settings = storage
         .find_account_proxy_settings(account_id)
         .map_err(|err| format!("read account proxy settings failed: {err}"))?;
-    match settings {
+    let mut response = match settings {
         Some(settings) => account_proxy_settings_response(storage, settings),
         None => Ok(default_response(account_id)),
+    }?;
+    if let Some(binding) = storage
+        .find_account_proxy_pool_binding(account_id)
+        .map_err(|err| format!("read account proxy pool binding failed: {err}"))?
+    {
+        let pool = storage
+            .find_proxy_pool(&binding.pool_id)
+            .map_err(|err| format!("read proxy pool failed: {err}"))?;
+        response.source = "pool".to_string();
+        response.proxy_pool_id = Some(binding.pool_id);
+        response.proxy_pool_name = pool.map(|value| value.name);
+        response.proxy_pool_assigned_at = Some(binding.assigned_at);
+        response.proxy_pool_last_switched_at = binding.last_switched_at;
+        response.proxy_pool_last_switch_reason = binding.last_switch_reason;
     }
+    Ok(response)
 }
 
 fn default_response(account_id: &str) -> AccountProxySettingsResponse {
@@ -1235,6 +1326,11 @@ fn response_from_parts(
         proxy_profile_id,
         proxy_profile_name: proxy_profile.map(|profile| profile.name.clone()),
         proxy_profile_enabled: proxy_profile.map(|profile| profile.enabled),
+        proxy_pool_id: None,
+        proxy_pool_name: None,
+        proxy_pool_assigned_at: None,
+        proxy_pool_last_switched_at: None,
+        proxy_pool_last_switch_reason: None,
         proxy_url,
         proxy_url_redacted,
         status: status.to_string(),

@@ -13,6 +13,7 @@ import { RU_MODEL_CATALOG_MESSAGES } from "./sections/ru-model-catalog";
 import { RU_MODEL_GROUPS_MESSAGES } from "./sections/ru-model-groups";
 import { RU_MODELS_MESSAGES } from "./sections/ru-models";
 import { RU_PLATFORM_MODE_MESSAGES } from "./sections/ru-platform-mode";
+import { RU_PROXY_POOLS_MESSAGES } from "./sections/ru-proxy-pools";
 import { RU_PROJECTS_MESSAGES } from "./sections/ru-projects";
 import { RU_RUNTIME_UI_MESSAGES } from "./sections/ru-runtime-ui";
 import { RU_SKILLS_MESSAGES } from "./sections/ru-skills";
@@ -60,6 +61,7 @@ export const RU_MESSAGES: MessageCatalog = {
   ...RU_ACCESS_CONTROL_MESSAGES,
   ...RU_ACCOUNT_MANAGER_MESSAGES,
   ...RU_ACCOUNTS_MESSAGES,
+  ...RU_PROXY_POOLS_MESSAGES,
   ...RU_API_KEYS_MESSAGES,
   ...RU_AGGREGATE_API_MESSAGES,
   ...RU_DASHBOARD_MESSAGES,
